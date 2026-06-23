@@ -10,6 +10,10 @@ if not port then error("No induction port on " .. INDUCTION_SIDE) end
 
 local displayId = nil
 local ticks = 0
+local previousEnergy = nil
+local previousTime = nil
+local lastNonzeroInput = 0
+local lastNonzeroOutput = 0
 
 local function call(name)
   if port[name] then
@@ -43,6 +47,25 @@ local function findDisplay()
   end
 end
 
+local function nowMs()
+  if os.epoch then return os.epoch("utc") end
+  return math.floor(os.clock() * 1000)
+end
+
+local function estimateNet(energy)
+  local t = nowMs()
+  local estimated = 0
+
+  if previousEnergy and previousTime and t > previousTime then
+    local elapsedSeconds = (t - previousTime) / 1000
+    estimated = (energy - previousEnergy) / elapsedSeconds / 20
+  end
+
+  previousEnergy = energy
+  previousTime = t
+  return estimated
+end
+
 while true do
   ticks = ticks + 1
 
@@ -50,11 +73,15 @@ while true do
     findDisplay()
   end
 
-  local energy = call("getEnergy")
-  local maxEnergy = call("getMaxEnergy")
-  local input = call("getLastInput")
-  local output = call("getLastOutput")
-  local transferCap = call("getTransferCap")
+  local energy = tonumber(call("getEnergy")) or 0
+  local maxEnergy = tonumber(call("getMaxEnergy")) or 0
+  local input = tonumber(call("getLastInput")) or 0
+  local output = tonumber(call("getLastOutput")) or 0
+  local transferCap = tonumber(call("getTransferCap")) or 0
+  local estimatedNet = estimateNet(energy)
+
+  if input and input > 0 then lastNonzeroInput = input end
+  if output and output > 0 then lastNonzeroOutput = output end
 
   local msg = {
     kind = "power_sample",
@@ -63,6 +90,10 @@ while true do
     percent = getPercent(energy, maxEnergy),
     input = input,
     output = output,
+    reportedNet = input - output,
+    estimatedNet = estimatedNet,
+    lastNonzeroInput = lastNonzeroInput,
+    lastNonzeroOutput = lastNonzeroOutput,
     transferCap = transferCap,
     computer = os.getComputerID(),
   }

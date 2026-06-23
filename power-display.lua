@@ -47,6 +47,8 @@ local history = {}
 local netHistory = {}
 local last = nil
 local lastSeen = nil
+local lastNonzeroInput = 0
+local lastNonzeroOutput = 0
 
 local function now()
   if os.epoch then return math.floor(os.epoch("utc") / 1000) end
@@ -83,6 +85,19 @@ local function estimateTime(energy, maxEnergy, net)
   end
 
   return "Full in  " .. fmtDuration((maxEnergy - energy) / net / 20), colors.lime
+end
+
+local function effectiveNet(sample)
+  local input = tonumber(sample.input) or 0
+  local output = tonumber(sample.output) or 0
+  local reported = tonumber(sample.reportedNet) or (input - output)
+  local estimated = tonumber(sample.estimatedNet) or 0
+
+  if input == 0 and output == 0 and math.abs(estimated) > 1 then
+    return estimated, "estimated"
+  end
+
+  return reported, "reported"
 end
 
 local function colorForPercent(p)
@@ -253,7 +268,7 @@ local function draw()
   end
 
   local pct = last.percent or 0
-  local net = (last.input or 0) - (last.output or 0)
+  local net, netSource = effectiveNet(last)
   local age = now() - (lastSeen or now())
   local timeText, timeColor = estimateTime(last.energy, last.maxEnergy, net)
 
@@ -266,8 +281,13 @@ local function draw()
 
   local netColor = colors.white
   if net > 0 then netColor = colors.lime elseif net < 0 then netColor = colors.red end
-  line(9, "Net:    " .. fmt(net) .. "/t", netColor)
-  line(10, timeText, timeColor)
+  line(9, "Net:    " .. fmt(net) .. "/t " .. netSource, netColor)
+
+  if (last.input or 0) == 0 and (last.output or 0) == 0 and (lastNonzeroInput > 0 or lastNonzeroOutput > 0) then
+    line(10, "Last IO: " .. fmt(lastNonzeroInput) .. "/t in  " .. fmt(lastNonzeroOutput) .. "/t out", colors.gray)
+  else
+    line(10, timeText, timeColor)
+  end
 
   local status = "OK"
   local statusColor = colors.lime
@@ -275,6 +295,10 @@ local function draw()
   elseif pct < CRITICAL_PERCENT then status, statusColor = "CRITICAL", colors.red
   elseif pct < LOW_PERCENT then status, statusColor = "LOW", colors.orange
   elseif net < 0 then status, statusColor = "DRAINING", colors.yellow end
+
+  if (last.input or 0) == 0 and (last.output or 0) == 0 and (lastNonzeroInput > 0 or lastNonzeroOutput > 0) then
+    line(11, timeText, timeColor)
+  end
 
   line(12, "Status: " .. status .. "   age " .. math.floor(age) .. "s", statusColor)
 
@@ -306,9 +330,12 @@ while true do
   if type(msg) == "table" and msg.kind == "power_sample" then
     last = msg
     lastSeen = now()
+    if msg.lastNonzeroInput and msg.lastNonzeroInput > 0 then lastNonzeroInput = msg.lastNonzeroInput end
+    if msg.lastNonzeroOutput and msg.lastNonzeroOutput > 0 then lastNonzeroOutput = msg.lastNonzeroOutput end
 
     history[#history + 1] = msg.percent or 0
-    netHistory[#netHistory + 1] = (msg.input or 0) - (msg.output or 0)
+    local net = effectiveNet(msg)
+    netHistory[#netHistory + 1] = net
 
     while #history > HISTORY_LIMIT do table.remove(history, 1) end
     while #netHistory > HISTORY_LIMIT do table.remove(netHistory, 1) end
