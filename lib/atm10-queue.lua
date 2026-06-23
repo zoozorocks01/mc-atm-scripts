@@ -6,7 +6,8 @@
 -- gates ship, so this queue is the staging area that proves the manual flow.
 local queue = {}
 
-queue.APPROVED = "APPROVED" -- operator approved; awaiting the future craft step
+queue.APPROVED = "APPROVED" -- operator approved; awaiting the craft request
+queue.CRAFTING = "CRAFTING" -- craft request accepted by RS; awaiting completion
 
 function queue.new()
   return { entries = {} }
@@ -39,6 +40,29 @@ end
 function queue.cancel(q, name)
   q = queue.normalize(q)
   q.entries[name] = nil
+  return q
+end
+
+-- Mark an entry as in-flight (craft request accepted). Clears any prior error.
+-- No-op if the entry is absent.
+function queue.markCrafting(q, name, now)
+  q = queue.normalize(q)
+  local e = q.entries[name]
+  if not e then return q end
+  e.state = queue.CRAFTING
+  e.craftingAt = tonumber(now) or 0
+  e.error = nil
+  return q
+end
+
+-- Record a failed craft attempt. The entry stays APPROVED (so it retries after
+-- the runner's backoff); triedAt stamps the backoff start. No-op if absent.
+function queue.markError(q, name, now, reason)
+  q = queue.normalize(q)
+  local e = q.entries[name]
+  if not e then return q end
+  e.triedAt = tonumber(now) or 0
+  e.error = reason and tostring(reason) or "craft failed"
   return q
 end
 

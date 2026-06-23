@@ -20,6 +20,7 @@ local uiDraw = require("atm10-draw")
 local uiPalette = require("atm10-palette")
 local stockplan = require("atm10-stockplan")
 local cqueue = require("atm10-queue")
+local craftrunner = require("atm10-craftrunner")
 local console = require("atm10-console")
 
 local DEFAULT_CONFIG = {
@@ -510,12 +511,32 @@ local function planStockActions(items)
   })
 end
 
--- The single craft chokepoint. Stage A wires and DISPLAYS the safety gate but
--- this body is intentionally EMPTY: it performs no craftItem call, so crafting
--- is impossible regardless of mode/config. Stage B fills this in-game (call
--- bridge.craftItem, record the ledger, transition the queue entry).
-local function requestCraft(_action)
-  return false, "crafting executor not implemented (Stage B)"
+-- The single craft chokepoint. Reached ONLY through control.execute (every
+-- safety gate has passed) via the craft runner. Drives the RS Bridge and
+-- returns true iff the bridge accepted the craft request.
+local function requestCraft(name, count)
+  if not bridge then return false, "no bridge" end
+  count = tonumber(count) or 0
+  if not name or count <= 0 then return false, "nothing to craft" end
+
+  local result = call(bridge, "craftItem", { name = name, count = count })
+  -- Advanced Peripherals' craftItem returns a boolean on most builds (a table on
+  -- some). call() returns nil if the method is missing or pcall errored. Treat an
+  -- explicit false / nil as rejected. EXACT return shape to confirm in-game.
+  if result == nil or result == false then return false, "bridge rejected craft" end
+  if type(result) == "table" and result.success == false then
+    return false, tostring(result.error or "bridge rejected craft")
+  end
+  return true
+end
+
+-- Persist a craft request into the ledger so the planner's cooldown engages and
+-- a reboot does not immediately re-request the same item.
+local function recordCraftRequest(name, amount, now)
+  local ledger = readLedger() or { requests = {} }
+  if type(ledger.requests) ~= "table" then ledger.requests = {} end
+  ledger.requests[name] = { requestedAt = now, request = tonumber(amount) or 0 }
+  writeLedger(ledger)
 end
 
 -- Execution policy derived from config: the global mode + capability flags that
@@ -525,6 +546,30 @@ local function buildPolicy()
     mode = config.mode,
     allowAutocraft = config.allowAutocraft == true,
   })
+end
+
+-- Run the approved craft queue through the gated runner. The runner performs at
+-- most one bridge request per approval; nothing crafts unless mode + capability
+-- + approval all pass. Returns nothing; prints a short line per request/failure.
+local function processCraftQueue(now)
+  if not craftQueue then return end
+  local stock = config.stockKeeper or {}
+  local summary = craftrunner.run(craftQueue, {
+    policy = buildPolicy(),
+    mode = config.mode,
+    now = now,
+    cooldownMs = (tonumber(stock.cooldownSeconds) or 300) * 1000,
+    isCrafting = function(name) return isItemCrafting(name) end,
+    craft = function(name, amount) return requestCraft(name, amount) end,
+    recordRequest = recordCraftRequest,
+  })
+  if summary.changed then saveQueue(craftQueue) end
+  for _, r in ipairs(summary.requested) do
+    print("Craft requested: " .. tostring(r.name) .. " x" .. tostring(r.amount))
+  end
+  for _, f in ipairs(summary.failed) do
+    print("Craft failed (" .. tostring(f.reason) .. "): " .. tostring(f.name))
+  end
 end
 
 local function scan()
@@ -728,8 +773,7 @@ local function drawQueuePage(data)
   local q = data.craftQueue or {}
   local policy = buildPolicy()
 
-  line(6, "Craft Queue   " .. #q .. " approved   mode:" .. tostring(config.mode) ..
-    "   [executor: Stage B]", colors.cyan)
+  line(6, "Craft Queue   " .. #q .. " approved   mode:" .. tostring(config.mode), colors.cyan)
 
   if #q == 0 then
     line(8, "No approved crafts yet.", colors.lime)
@@ -749,10 +793,17 @@ local function drawQueuePage(data)
   for i = 1, rows do
     local e = q[i]
     local ageS = math.max(0, math.floor((now - (e.approvedAt or now)) / 1000))
-    -- Run the entry through the real safety gate to show whether it WOULD craft
-    -- once the Stage B executor ships. requestCraft satisfies the executor gate.
-    local action = control.craftAction(e, { mode = config.mode, execute = requestCraft })
-    local gateState = control.executionState(action, policy)
+    -- In-flight and failed entries show their lifecycle state; entries still
+    -- awaiting a request show the live safety-gate verdict (would it craft now?).
+    local gateState
+    if e.state == cqueue.CRAFTING then
+      gateState = uiStatus.CRAFTING
+    elseif e.error then
+      gateState = uiStatus.BLOCKED -- bridge rejected; retries after backoff
+    else
+      local action = control.craftAction(e, { mode = config.mode, execute = requestCraft })
+      gateState = control.executionState(action, policy)
+    end
     local text
     if wide then
       text = uiDraw.fit(tostring(e.label or e.name), math.max(16, w - 28)) ..
@@ -813,7 +864,10 @@ local function draw(data)
   if data.configError then
     line(4, data.configError, colors.orange)
   else
-    line(4, "Mode: " .. tostring(data.configMode or "manual") .. "   crafting executor: pending (Stage B)", colors.gray)
+    local craftLive = (config.allowAutocraft == true)
+      and (config.mode == control.MODE_MANUAL or config.mode == control.MODE_AUTO)
+    line(4, "Mode: " .. tostring(data.configMode or "manual") ..
+      "   autocraft: " .. (craftLive and "ON" or "off"), craftLive and colors.lime or colors.gray)
   end
 
   if pageName == "QUEUE" then
@@ -912,6 +966,10 @@ local function refreshAndDraw()
   local ok, data = pcall(scan)
   if ok then
     lastData = data
+    -- drive the gated craft runner, then refresh the queue snapshot so the page
+    -- reflects this cycle's state transitions (APPROVED -> CRAFTING) immediately
+    processCraftQueue(nowMs())
+    data.craftQueue = cqueue.list(craftQueue)
     broadcast(data)
   else
     lastData = nil

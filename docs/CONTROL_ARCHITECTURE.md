@@ -13,8 +13,9 @@ perform actions.
 
 - `power-probe` reads Mekanism induction data and broadcasts power state.
 - `power-display` renders the power dashboard.
-- `inventory-info` reads the RS Bridge, shows inventory, and builds dry-run
-  stock keeper plans.
+- `inventory-info` reads the RS Bridge, shows inventory, builds stock keeper
+  plans, and (in `manual`/`auto` mode, capability permitting) executes approved
+  crafts through the control gate via `atm10-craftrunner`.
 - `inventory-remote` renders inventory snapshots from the source computer.
 
 ## Baseline Modules
@@ -139,5 +140,7 @@ Only items under `stockKeeper.categories[].items` enter the stock planner.
    attached actuators.
 5. Add a control-room monitor host after the old displays are stable.
 
-Real autocrafting, exports, redstone control, and security outputs come after
-the controller gates are proven in-game.
+Inventory autocrafting is now wired behind the control gate (manual mode,
+operator-approved via the console queue), pending in-game verification of the
+RS `craftItem` call. Exports, redstone control, and security outputs come after
+the inventory craft path is proven in-game.

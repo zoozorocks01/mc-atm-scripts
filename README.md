@@ -38,6 +38,7 @@ pass:
 - `lib/atm10-palette.lua`: shared monitor palettes
 - `lib/atm10-draw.lua`: bars, gauges, panel boxes, and diff-buffer rendering
 - `lib/atm10-control.lua`: proposed-action records and execution-mode gates
+- `lib/atm10-craftrunner.lua`: runs approved craft-queue entries through the gate
 
 These modules are installed locally as `atm10-status.lua`,
 `atm10-palette.lua`, `atm10-draw.lua`, and `atm10-control.lua`. Scripts should
@@ -123,8 +124,20 @@ stock actions from `inventory-config`, and broadcasts a compact snapshot to
 remote display computers over the `atm10-inventory-v1` rednet protocol.
 Remote displays are read-only mirrors.
 
-This build does not trigger autocrafting. `WOULD CRAFT` means the planner found
-a deficit and craftable pattern, but no `craftItem` call is made.
+### Crafting (manual mode)
+
+The manager ships in `manual` mode with the autocraft capability on. It plans
+deficits but never crafts on its own: a `WOULD CRAFT` row on the console Plan
+page is tappable, and tapping it **approves** that craft into the queue. A gated
+runner then issues exactly one RS `craftItem` request per approval and moves the
+entry to `CRAFTING`; it is dropped once stock recovers. Cancel a pending
+approval by tapping its row on the Queue page.
+
+Modes (config `mode`): `monitor` and `dry-run` never craft; `manual` requires
+your approval per item; `auto` crafts approved deficits unattended. Setting
+`allowAutocraft = false` hard-disables crafting regardless of mode. Every craft
+passes the shared safety gate in `lib/atm10-control.lua` before the runner in
+`lib/atm10-craftrunner.lua` touches the bridge.
 
 The computer needs access to:
 

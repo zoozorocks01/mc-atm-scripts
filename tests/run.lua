@@ -13,6 +13,7 @@ local palette = require("atm10-palette")
 local draw = require("atm10-draw")
 local stockplan = require("atm10-stockplan")
 local cqueue = require("atm10-queue")
+local craftrunner = require("atm10-craftrunner")
 local console = require("atm10-console")
 
 -- ---------------------------------------------------------------------------
@@ -294,6 +295,89 @@ t.eq(noPrune, 0, "maxAge<=0 disables pruning")
 
 t.eq(cqueue.count(cqueue.normalize("garbage")), 0, "normalize coerces garbage to empty")
 
+-- state transitions used by the craft runner
+local sq = cqueue.approve(cqueue.new(), { name = "s", request = 4 }, 10)
+cqueue.markCrafting(sq, "s", 20)
+t.eq(sq.entries.s.state, cqueue.CRAFTING, "markCrafting sets CRAFTING state")
+t.eq(sq.entries.s.craftingAt, 20, "markCrafting stamps craftingAt")
+cqueue.markError(sq, "s", 30, "boom")
+t.eq(sq.entries.s.error, "boom", "markError records the reason")
+t.eq(sq.entries.s.triedAt, 30, "markError stamps triedAt for backoff")
+cqueue.markCrafting(sq, "absent", 40) -- no-op on a missing entry
+t.check(cqueue.has(sq, "absent") == false, "markCrafting on a missing entry is a no-op")
+
+-- ---------------------------------------------------------------------------
+print("craft runner (gated execution)")
+local function mkQ(items)
+  local q = cqueue.new()
+  for i, e in ipairs(items) do q = cqueue.approve(q, e, i) end
+  return q
+end
+local pManualCraft = control.policy({ mode = "manual", allowAutocraft = true })
+
+-- manual + approved + capability: crafts once, transitions to CRAFTING, records
+-- the ledger, and is NOT re-requested on the next pass
+local crafted, recorded = {}, {}
+local q = mkQ({ { name = "x", label = "X", request = 64 } })
+local deps = {
+  policy = pManualCraft, mode = "manual", now = 1000, cooldownMs = 300000,
+  isCrafting = function() return false end,
+  craft = function(name, amt) crafted[#crafted + 1] = { name, amt }; return true end,
+  recordRequest = function(name, amt, now) recorded[#recorded + 1] = { name, amt, now } end,
+}
+craftrunner.run(q, deps)
+t.eq(#crafted, 1, "approved entry crafts exactly once")
+t.eq(crafted[1][1], "x", "crafted the right item")
+t.eq(crafted[1][2], 64, "crafted the requested amount")
+t.eq(#recorded, 1, "ledger recorded on a successful request")
+t.eq(q.entries.x.state, cqueue.CRAFTING, "entry transitions APPROVED -> CRAFTING")
+deps.now = 2000
+craftrunner.run(q, deps)
+t.eq(#crafted, 1, "a CRAFTING entry is never re-requested")
+
+-- dry-run: gate closed -> bridge never called, entry stays APPROVED
+local c2 = {}
+local qd = mkQ({ { name = "y", request = 16 } })
+craftrunner.run(qd, { policy = control.policy({ mode = "dry-run", allowAutocraft = true }),
+  mode = "dry-run", now = 1, isCrafting = function() return false end,
+  craft = function() c2[#c2 + 1] = true; return true end })
+t.eq(#c2, 0, "dry-run never calls the bridge")
+t.eq(qd.entries.y.state, cqueue.APPROVED, "dry-run leaves the entry APPROVED")
+
+-- capability off: blocked, no craft
+local c3 = {}
+craftrunner.run(mkQ({ { name = "z", request = 8 } }),
+  { policy = control.policy({ mode = "manual", allowAutocraft = false }),
+    mode = "manual", now = 1, isCrafting = function() return false end,
+    craft = function() c3[#c3 + 1] = true; return true end })
+t.eq(#c3, 0, "allowAutocraft=false blocks the bridge call")
+
+-- RS already crafting it: adopt CRAFTING with no bridge call
+local c4 = {}
+local qa = mkQ({ { name = "w", request = 4 } })
+craftrunner.run(qa, { policy = pManualCraft, mode = "manual", now = 5,
+  isCrafting = function() return true end,
+  craft = function() c4[#c4 + 1] = true; return true end })
+t.eq(#c4, 0, "no craft request when RS is already crafting the item")
+t.eq(qa.entries.w.state, cqueue.CRAFTING, "adopts CRAFTING for an in-flight item")
+
+-- bridge rejects: stays APPROVED, records error, backs off one cooldown, then retries
+local tries = 0
+local qf = mkQ({ { name = "f", request = 32 } })
+local depsF = { policy = pManualCraft, mode = "manual", now = 1000, cooldownMs = 300000,
+  isCrafting = function() return false end,
+  craft = function() tries = tries + 1; return false, "missing ingredients" end }
+craftrunner.run(qf, depsF)
+t.eq(tries, 1, "failed craft is attempted once")
+t.eq(qf.entries.f.state, cqueue.APPROVED, "a failed craft stays APPROVED for retry")
+t.eq(qf.entries.f.error, "missing ingredients", "failure reason is recorded")
+depsF.now = 1000 + 100000
+craftrunner.run(qf, depsF)
+t.eq(tries, 1, "no retry within the backoff cooldown")
+depsF.now = 1000 + 400000
+craftrunner.run(qf, depsF)
+t.eq(tries, 2, "retries after the backoff cooldown elapses")
+
 -- ---------------------------------------------------------------------------
 print("console hit-testing")
 local strip = console.tabs({ "PLAN", "QUEUE" }, 2)
@@ -313,7 +397,7 @@ print("all scripts compile")
 local luaFiles = {
   "lib/atm10-status.lua", "lib/atm10-draw.lua", "lib/atm10-palette.lua",
   "lib/atm10-control.lua", "lib/atm10-stockplan.lua", "lib/atm10-queue.lua",
-  "lib/atm10-console.lua", "atm10-console.lua",
+  "lib/atm10-craftrunner.lua", "lib/atm10-console.lua", "atm10-console.lua",
   "inventory/manager.lua", "inventory/remote.lua",
   "inventory/config.lua", "inventory/config-example.lua",
   "power/display.lua", "power/probe.lua",
@@ -321,6 +405,7 @@ local luaFiles = {
   "inventory-info.lua", "inventory-remote.lua", "power-display.lua",
   "atm10-status.lua", "atm10-palette.lua", "atm10-control.lua",
   "atm10-draw.lua", "atm10-stockplan.lua", "atm10-queue.lua",
+  "atm10-craftrunner.lua",
 }
 for _, f in ipairs(luaFiles) do
   local chunk, err = loadfile(f)
