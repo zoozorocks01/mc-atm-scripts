@@ -209,4 +209,24 @@ t.eq(cyc[1].action, "WOULD CRAFT", "1st within cycle cap")
 t.eq(cyc[2].action, "WOULD CRAFT", "2nd within cycle cap")
 t.eq(cyc[3].action, "CYCLE CAP", "3rd exceeds cycle cap")
 
+-- ---------------------------------------------------------------------------
+print("all scripts compile")
+-- loadfile parses without executing, so the display while-loops and peripheral
+-- wraps never run. This guards every shipped Lua file against syntax errors.
+local luaFiles = {
+  "lib/atm10-status.lua", "lib/atm10-draw.lua", "lib/atm10-palette.lua",
+  "lib/atm10-control.lua", "lib/atm10-stockplan.lua",
+  "inventory/manager.lua", "inventory/remote.lua",
+  "inventory/config.lua", "inventory/config-example.lua",
+  "power/display.lua", "power/probe.lua",
+  "atm10-update.lua",
+  "inventory-info.lua", "inventory-remote.lua", "power-display.lua",
+  "atm10-status.lua", "atm10-palette.lua", "atm10-control.lua",
+  "atm10-draw.lua", "atm10-stockplan.lua",
+}
+for _, f in ipairs(luaFiles) do
+  local chunk, err = loadfile(f)
+  t.check(chunk ~= nil, "compiles: " .. f .. (chunk and "" or "  (" .. tostring(err) .. ")"))
+end
+
 os.exit(t.summary() and 0 or 1)
