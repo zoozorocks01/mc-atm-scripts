@@ -12,12 +12,15 @@ local LEDGER_FILE = ".atm10-stock-ledger"
 local QUEUE_FILE = ".atm10-craft-queue"
 local PAGE_SECONDS = 10
 local PAGES = { "PLAN", "QUEUE" }
+local QUEUE_MAX_AGE_MS = 30 * 60 * 1000 -- prune approvals older than 30 minutes
+local PAGE_BUTTON_SIDE = "back"          -- a redstone pulse here flips to the next page ("none" disables)
 
 local uiStatus = require("atm10-status")
 local uiDraw = require("atm10-draw")
 local uiPalette = require("atm10-palette")
 local stockplan = require("atm10-stockplan")
 local cqueue = require("atm10-queue")
+local console = require("atm10-console")
 
 local DEFAULT_CONFIG = {
   mode = "dry-run",
@@ -52,6 +55,11 @@ local ledgerError = nil
 local paletteApplied = false
 local pageIndex = 1
 local pageShownAt = nil
+local craftQueue = nil
+local lastData = nil
+local tabStrip = nil
+local planRowRegions = {}
+local rsLevels = {}
 
 local function peripheralTypeMatches(actual, expected)
   if actual == expected then return true end
@@ -213,6 +221,18 @@ local function loadQueue()
   local ok, data = pcall(textutils.unserialize, text)
   if not ok then return cqueue.new() end
   return cqueue.normalize(data)
+end
+
+-- Persist the craft queue atomically (tmp + move), like the ledger.
+local function saveQueue(q)
+  local tmp = QUEUE_FILE .. ".tmp"
+  local file = fs.open(tmp, "w")
+  if not file then return false end
+  file.write(textutils.serialize(q))
+  file.close()
+  if fs.exists(QUEUE_FILE) then fs.delete(QUEUE_FILE) end
+  fs.move(tmp, QUEUE_FILE)
+  return true
 end
 
 local function openBroadcastModems()
@@ -541,6 +561,17 @@ local function scan()
   local stockPlans = planStockActions(items)
   local stockTally = uiStatus.tally(stockPlans)
 
+  -- keep the in-memory queue tidy: drop now-satisfied items, age out stale ones
+  if not craftQueue then craftQueue = loadQueue() end
+  local satisfied = {}
+  for _, p in ipairs(stockPlans) do
+    if p.action == "OK" and p.name then satisfied[p.name] = true end
+  end
+  local beforeCount = cqueue.count(craftQueue)
+  cqueue.reconcile(craftQueue, satisfied)
+  cqueue.prune(craftQueue, nowMs(), QUEUE_MAX_AGE_MS)
+  if cqueue.count(craftQueue) ~= beforeCount then saveQueue(craftQueue) end
+
   return {
     connected = connected,
     online = online,
@@ -566,7 +597,7 @@ local function scan()
     stockPlans = stockPlans,
     stockTally = stockTally,
     categorySummaries = summarizeCategories(stockPlans),
-    craftQueue = cqueue.list(loadQueue()),
+    craftQueue = cqueue.list(craftQueue),
   }
 end
 
@@ -649,7 +680,13 @@ local function drawPlanPage(data)
   local plans = data.stockPlans or {}
   local planRows = math.max(0, math.min(#plans, h - planStart - 1))
   for i = 1, planRows do
-    line(planStart + i - 1, formatPlanRow(plans[i], w), uiStatus.color(plans[i].action))
+    local p = plans[i]
+    local y = planStart + i - 1
+    line(y, formatPlanRow(p, w), uiStatus.color(p.action))
+    -- only WOULD CRAFT rows are tappable (tap = approve into the queue)
+    if p.action == "WOULD CRAFT" and p.name then
+      planRowRegions[#planRowRegions + 1] = { y = y, entry = p }
+    end
   end
 
   local tally = data.stockTally or {}
@@ -701,7 +738,7 @@ local function drawQueuePage(data)
   end
 end
 
-local function draw(data, pageName, pageNumber)
+local function draw(data)
   if not monitor then return end
 
   if not data then
@@ -711,16 +748,27 @@ local function draw(data, pageName, pageNumber)
 
   monitor.setBackgroundColor(colors.black)
   monitor.clear()
+  planRowRegions = {} -- rebuilt each render for touch hit-testing
 
-  -- shared header (both pages)
+  local pageName = PAGES[pageIndex]
+
   line(1, TITLE, colors.cyan)
-  line(2, "Page " .. tostring(pageNumber) .. "/" .. #PAGES .. ": " .. tostring(pageName) ..
-    "   Bridge: " .. tostring(bridgeName or "?"), colors.gray)
+
+  -- tappable tab strip (right-click a tab to switch pages)
+  tabStrip = console.tabs(PAGES, 2)
+  monitor.setCursorPos(1, 2)
+  monitor.setBackgroundColor(colors.black)
+  monitor.clearLine()
+  for _, tab in ipairs(tabStrip.tabs) do
+    uiDraw.write(monitor, tab.x1, tabStrip.y, "[" .. tab.label .. "]",
+      tab.page == pageIndex and colors.cyan or colors.gray, colors.black)
+  end
 
   local onlineText, onlineColor = "unknown", colors.yellow
   if data.online == true then onlineText, onlineColor = "ONLINE", colors.lime
   elseif data.online == false then onlineText, onlineColor = "OFFLINE", colors.red end
-  line(3, "Grid: " .. onlineText .. "   Managed: " .. fmt(data.managedItemCount), onlineColor)
+  line(3, "Grid: " .. onlineText .. "   Managed: " .. fmt(data.managedItemCount) ..
+    "   Bridge: " .. tostring(bridgeName or "?"), onlineColor)
 
   if data.configError then
     line(4, data.configError, colors.orange)
@@ -735,32 +783,103 @@ local function draw(data, pageName, pageNumber)
   end
 end
 
-while true do
-  openBroadcastModems()
+local function setPage(i)
+  pageIndex = ((i - 1) % #PAGES) + 1
+  pageShownAt = nowMs() -- a manual page change resets the auto-rotate timer
+end
 
+local function advancePageIfDue()
+  local nowT = nowMs()
+  if not pageShownAt then pageShownAt = nowT end
+  if nowT - pageShownAt >= PAGE_SECONDS * 1000 then
+    pageIndex = pageIndex % #PAGES + 1
+    pageShownAt = nowT
+  end
+end
+
+local function renderCurrent()
+  draw(lastData)
+end
+
+-- Approve a planned craft into the queue. INERT: this only records intent;
+-- there is no craftItem call anywhere in this build.
+local function approve(entry)
+  if not entry or not entry.name then return end
+  craftQueue = cqueue.approve(craftQueue or loadQueue(),
+    { name = entry.name, label = entry.label, request = entry.request }, nowMs())
+  saveQueue(craftQueue)
+  pageShownAt = nowMs()
+  print("Approved (queued, crafting disabled): " .. tostring(entry.label or entry.name))
+end
+
+local function handleTouch(x, y)
+  local page = console.tabHit(tabStrip, x, y)
+  if page then
+    setPage(page)
+    renderCurrent()
+    return
+  end
+
+  local entry = console.rowHit(planRowRegions, y)
+  if entry then
+    approve(entry)
+    renderCurrent()
+  end
+end
+
+-- A rising edge on the configured side flips to the next page.
+local function handleRedstone()
+  if PAGE_BUTTON_SIDE == "none" then return end
+  local level = rs.getInput(PAGE_BUTTON_SIDE)
+  if level and not rsLevels[PAGE_BUTTON_SIDE] then
+    setPage(pageIndex + 1)
+    renderCurrent()
+  end
+  rsLevels[PAGE_BUTTON_SIDE] = level
+end
+
+local function ensurePeripherals()
+  openBroadcastModems()
   if not monitor then
     monitor = findPeripheral({ "monitor" }, MONITOR_SIDE)
     if monitor then pickTextScale() end
   end
+end
 
-  if monitor then
-    local ok, data = pcall(scan)
-    if ok then
-      -- rotate through the console pages on a timer
-      local nowT = nowMs()
-      if not pageShownAt then pageShownAt = nowT end
-      if nowT - pageShownAt >= PAGE_SECONDS * 1000 then
-        pageIndex = pageIndex % #PAGES + 1
-        pageShownAt = nowT
-      end
-      draw(data, PAGES[pageIndex], pageIndex)
-      broadcast(data)
-    else
-      drawWaiting(tostring(data))
-    end
-  else
+local function refreshAndDraw()
+  ensurePeripherals()
+  if not monitor then
     print("No monitor found. Retrying...")
+    return
   end
 
-  sleep(REFRESH_SECONDS)
+  local ok, data = pcall(scan)
+  if ok then
+    lastData = data
+    broadcast(data)
+  else
+    lastData = nil
+    status = tostring(data)
+  end
+  renderCurrent()
+end
+
+local refreshTimer = os.startTimer(0)
+
+while true do
+  local ev = { os.pullEvent() }
+  local kind = ev[1]
+
+  if kind == "timer" and ev[2] == refreshTimer then
+    advancePageIfDue()
+    refreshAndDraw()
+    refreshTimer = os.startTimer(REFRESH_SECONDS)
+  elseif kind == "monitor_touch" then
+    handleTouch(ev[3], ev[4])
+  elseif kind == "redstone" then
+    handleRedstone()
+  elseif kind == "monitor_resize" then
+    if monitor then pickTextScale() end
+    renderCurrent()
+  end
 end
