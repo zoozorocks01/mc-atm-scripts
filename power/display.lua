@@ -12,13 +12,23 @@ local CRITICAL_PERCENT = 15
 local LOW_PERCENT = 35
 local STALE_SECONDS = 10
 
+local uiDraw = require("atm10-draw")
+local uiPalette = require("atm10-palette")
+
 local mon = peripheral.wrap(MONITOR_SIDE)
 if not mon then error("No monitor on " .. MONITOR_SIDE) end
+
+local paletteApplied = false
 
 rednet.open(MODEM_SIDE)
 pcall(function() rednet.host(PROTOCOL, HOSTNAME) end)
 
 local function pickTextScale()
+  if not paletteApplied then
+    pcall(uiPalette.apply, mon)
+    paletteApplied = true
+  end
+
   if type(TEXT_SCALE) == "number" then
     mon.setTextScale(TEXT_SCALE)
     return TEXT_SCALE
@@ -108,14 +118,7 @@ local function colorForPercent(p)
 end
 
 local function line(y, text, color)
-  local _, h = mon.getSize()
-  if y > h then return end
-
-  mon.setCursorPos(1, y)
-  mon.setTextColor(color or colors.white)
-  mon.setBackgroundColor(colors.black)
-  mon.clearLine()
-  mon.write(text)
+  uiDraw.line(mon, y, text, color or colors.white, colors.black)
 end
 
 local function drawBar(y, label, pct)

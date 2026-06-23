@@ -45,6 +45,13 @@ palette.themes = {
   },
 }
 
+-- Base-wide default theme. Change this to set the default for every display.
+palette.defaultTheme = "controlRoom"
+
+-- User-owned override file (one theme name per line, "#"/"--" comments allowed).
+-- The updater installs it onlyIfMissing, so edits survive future updates.
+palette.themeFile = "atm10-theme"
+
 local colorSlots = {
   black = colors.black,
   cyan = colors.cyan,
@@ -67,8 +74,33 @@ local function channels(rgb)
   return r / 255, g / 255, b / 255
 end
 
+-- Resolve which theme to use: an explicit override wins, then the user-owned
+-- themeFile, then the base default. An unknown/typo'd name falls through safely.
+function palette.resolveTheme(override)
+  if type(override) == "string" and palette.themes[override] then
+    return override
+  end
+
+  if fs and fs.exists and palette.themeFile and fs.exists(palette.themeFile) then
+    local file = fs.open(palette.themeFile, "r")
+    if file then
+      local raw = file.readAll() or ""
+      file.close()
+      for chunk in string.gmatch(raw, "[^\r\n]+") do
+        local name = chunk:gsub("%-%-.*$", ""):gsub("#.*$", ""):gsub("%s+", "")
+        if name ~= "" and palette.themes[name] then
+          return name
+        end
+      end
+    end
+  end
+
+  return palette.defaultTheme
+end
+
 function palette.apply(target, themeName)
-  local theme = palette.themes[themeName or "controlRoom"] or palette.themes.controlRoom
+  local resolved = palette.resolveTheme(themeName)
+  local theme = palette.themes[resolved] or palette.themes[palette.defaultTheme] or palette.themes.controlRoom
   local applied = 0
 
   if not target or not target.setPaletteColour then
@@ -87,7 +119,7 @@ function palette.apply(target, themeName)
     end
   end
 
-  return applied > 0, applied
+  return applied > 0, applied, resolved
 end
 
 return palette

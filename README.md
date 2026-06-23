@@ -48,7 +48,7 @@ power, dashboard, machine, and security systems should wire into the same
 display/control language. See `docs/CONTROL_ARCHITECTURE.md` for the safety
 model.
 
-Canonical source now lives in folders:
+Canonical source lives in folders:
 
 - `power/`
 - `inventory/`
@@ -56,8 +56,25 @@ Canonical source now lives in folders:
 - `dashboard/`
 - `docs/`
 
-Root-level scripts remain as compatibility mirrors for older in-game updaters.
-See `docs/REPO_STRUCTURE.md` before moving or deleting root files.
+Root-level scripts remain as temporary compatibility mirrors for computers still
+running the older root-path updater. Do not remove them during normal feature
+work; mirror changes to them instead. See `docs/REPO_STRUCTURE.md` for the
+migration rule and when the mirrors can be retired.
+
+## UI Theme
+
+Every display applies a shared monitor palette. The default is `controlRoom`;
+`amber` and `green` are also built in (see `lib/atm10-palette.lua`).
+
+To change the theme on a computer, edit its `atm10-theme` file:
+
+```lua
+edit atm10-theme
+```
+
+Put one theme name (`controlRoom`, `amber`, or `green`) on a line and reboot.
+The updater installs `atm10-theme` only if it is missing, so your choice
+survives future updates; an unknown or missing value falls back to the default.
 
 ## Power Dashboard
 
@@ -93,7 +110,7 @@ startup
 - Keep both chunks loaded, or the dashboard can stop updating.
 - `startup` is a watchdog wrapper. It reruns the dashboard/probe if the real script crashes or exits.
 - This reads total induction matrix input/output. Per-machine top users/producers require Energy Detectors on individual branches.
-- Display tuning lives at the top of `power-display.lua`: `TEXT_SCALE`, `SHOW_NET_GRAPH`, `SHOW_STORED_GRAPH`, warning thresholds, and history length.
+- Display tuning lives at the top of `power/display.lua`: `TEXT_SCALE`, `SHOW_NET_GRAPH`, `SHOW_STORED_GRAPH`, warning thresholds, and history length.
 
 ## Inventory Manager
 

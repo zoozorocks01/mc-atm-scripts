@@ -242,7 +242,7 @@ end
 local function pickTextScale()
   if not monitor then return end
   if not paletteApplied then
-    pcall(uiPalette.apply, monitor, "controlRoom")
+    pcall(uiPalette.apply, monitor)
     paletteApplied = true
   end
 

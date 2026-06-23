@@ -1,0 +1,5 @@
+# ATM10 UI theme (applies to every display on this computer).
+# Options: controlRoom (default), amber, green
+# Add your own theme to lib/atm10-palette.lua, then put its name here.
+# This file is installed once and is NOT overwritten by `update`.
+controlRoom
