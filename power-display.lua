@@ -2,6 +2,7 @@ local PROTOCOL = "atm10-power-v1"
 local HOSTNAME = "display"
 local MODEM_SIDE = "top"
 local MONITOR_SIDE = "right"
+local TEXT_SCALE = "auto"
 
 local mon = peripheral.wrap(MONITOR_SIDE)
 if not mon then error("No monitor on " .. MONITOR_SIDE) end
@@ -9,7 +10,24 @@ if not mon then error("No monitor on " .. MONITOR_SIDE) end
 rednet.open(MODEM_SIDE)
 pcall(function() rednet.host(PROTOCOL, HOSTNAME) end)
 
-mon.setTextScale(1)
+local function pickTextScale()
+  if type(TEXT_SCALE) == "number" then
+    mon.setTextScale(TEXT_SCALE)
+    return TEXT_SCALE
+  end
+
+  local scales = {5, 4, 3, 2.5, 2, 1.5, 1, 0.5}
+  for _, scale in ipairs(scales) do
+    mon.setTextScale(scale)
+    local w, h = mon.getSize()
+    if w >= 34 and h >= 13 then return scale end
+  end
+
+  mon.setTextScale(0.5)
+  return 0.5
+end
+
+local textScale = pickTextScale()
 
 local history = {}
 local last = nil
@@ -38,6 +56,9 @@ local function colorForPercent(p)
 end
 
 local function line(y, text, color)
+  local _, h = mon.getSize()
+  if y > h then return end
+
   mon.setCursorPos(1, y)
   mon.setTextColor(color or colors.white)
   mon.setBackgroundColor(colors.black)
@@ -67,6 +88,8 @@ local function drawBar(y, label, pct)
 end
 
 local function drawGraph(top, height, pctHistory)
+  if height < 2 then return end
+
   local w = mon.getSize()
   local left = 2
   local width = w - 2
@@ -125,11 +148,15 @@ local function draw()
   elseif net < 0 then status, statusColor = "DRAINING", colors.yellow end
 
   line(12, "Status: " .. status .. "   age " .. math.floor(age) .. "s", statusColor)
-  line(14, "Stored Energy History", colors.cyan)
 
-  local graphTop = 15
-  local graphHeight = math.max(3, h - graphTop)
-  drawGraph(graphTop, graphHeight, history)
+  if h >= 16 then
+    line(14, "Stored Energy History", colors.cyan)
+    local graphTop = 15
+    local graphHeight = h - graphTop
+    drawGraph(graphTop, graphHeight, history)
+  else
+    line(h, "Scale " .. tostring(textScale) .. " auto", colors.gray)
+  end
 end
 
 while true do
