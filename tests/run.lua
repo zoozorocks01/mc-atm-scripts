@@ -10,6 +10,7 @@ local t = require("support") -- sets _G.colors, _G.fs before libs load
 local status = require("atm10-status")
 local control = require("atm10-control")
 local palette = require("atm10-palette")
+local draw = require("atm10-draw")
 
 -- ---------------------------------------------------------------------------
 print("status vocabulary")
@@ -98,5 +99,33 @@ local okApply, count, resolved = palette.apply(target, "amber")
 t.check(okApply == true, "apply ok on a real target")
 t.eq(resolved, "amber", "apply returns the resolved theme name")
 t.check(count and count > 0, "apply set at least one palette slot")
+
+-- ---------------------------------------------------------------------------
+print("draw primitives")
+-- fit: pad when short, truncate with "~" when long, handle tiny/zero widths
+t.eq(draw.fit("ab", 5), "ab   ", "fit pads short text to width")
+t.eq(draw.fit("abcdef", 4), "abc~", "fit truncates long text with ~")
+t.eq(draw.fit("abc", 3), "abc", "fit exact width unchanged")
+t.eq(draw.fit("abcd", 1), "a", "fit width<=1 hard-truncates, no ~")
+t.eq(draw.fit(nil, 3), "   ", "fit nil text -> spaces")
+t.eq(draw.fit("xy", 0), "", "fit width 0 -> empty")
+t.eq(#draw.fit("anything", 7), 7, "fit output is always exactly width")
+
+-- bracket: fixed-width [###---] gauge, clamped 0..100
+t.eq(draw.bracket(0, 12), "[----------]", "bracket 0% empty")
+t.eq(draw.bracket(100, 12), "[##########]", "bracket 100% full")
+t.eq(draw.bracket(50, 12), "[#####-----]", "bracket 50% half")
+t.eq(#draw.bracket(50, 12), 12, "bracket length == width")
+t.eq(draw.bracket(-10, 12), "[----------]", "bracket clamps negative to 0")
+t.eq(draw.bracket(150, 12), "[##########]", "bracket clamps >100 to 100")
+t.eq(#draw.bracket(50, 2), 3, "bracket enforces min width 3")
+
+-- barText and percentColor
+t.eq(draw.barText(50, 10), "#####-----", "barText 50%")
+t.eq(draw.barText(100, 10), "##########", "barText 100%")
+t.check(draw.percentColor(10) == colors.red, "percentColor <15 -> red")
+t.check(draw.percentColor(20) == colors.orange, "percentColor <35 -> orange")
+t.check(draw.percentColor(50) == colors.yellow, "percentColor <65 -> yellow")
+t.check(draw.percentColor(80) == colors.green, "percentColor >=65 -> green")
 
 os.exit(t.summary() and 0 or 1)
