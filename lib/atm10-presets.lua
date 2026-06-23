@@ -76,13 +76,51 @@ presets.all = {
   },
 }
 
--- Presets as a display list (id, label, description, count).
+-- A named PERSONAL profile (opt-in, off by default). The generic stage presets
+-- above are neutral starting points anyone can use; this one is Zoozo's curated
+-- late-game setup and is the only thing that (later) enables "smart mode". It
+-- shows the full banded/compress chain: keep dust in a band and compress the
+-- surplus up dust -> ingot -> block. EXPAND with Codex's real metal list + IDs;
+-- iron is the worked example. `settings.smartMode` is reserved for when smart
+-- mode ships (it stays off unless this profile is applied).
+presets.all[#presets.all + 1] = {
+  id = "zoozo-late-game",
+  label = "Zoozo Late-Game",
+  description = "Personal profile: banded metals + compress chain (expand w/ real IDs)",
+  personal = true,
+  settings = { smartMode = true },
+  items = {
+    -- Iron, the worked example of the full chain (VERIFY dust id against the pack):
+    { name = "mekanism:dust_iron", label = "Iron Dust", target = 250000, craftTo = 250000,
+      ceiling = 350000, into = { name = "minecraft:iron_ingot", label = "Iron Ingot" }, ratio = 1 }, -- VERIFY dust id
+    { name = "minecraft:iron_ingot", label = "Iron Ingot", target = 300000, craftTo = 300000,
+      ceiling = 320000, into = { name = "minecraft:iron_block", label = "Iron Block" }, ratio = 9 },
+    { name = "minecraft:iron_block", label = "Iron Block", target = 10000, craftTo = 10000 },
+    -- Non-metal staples:
+    { name = "minecraft:dirt", label = "Dirt", target = 10000, craftTo = 10000 },
+    { name = "minecraft:stone", label = "Stone", target = 10000, craftTo = 10000 },
+    -- TODO(codex): add the rest of the metals (gold, copper, steel, allthemodium,
+    -- vibranium, unobtainium, ...) following the iron pattern, with verified dust/
+    -- ingot/block registry IDs from the live base.
+  },
+}
+
+-- Presets as a display list (id, label, description, count, personal).
 function presets.list()
   local out = {}
   for _, p in ipairs(presets.all) do
-    out[#out + 1] = { id = p.id, label = p.label, description = p.description, count = #p.items }
+    out[#out + 1] = {
+      id = p.id, label = p.label, description = p.description,
+      count = #p.items, personal = p.personal == true,
+    }
   end
   return out
+end
+
+-- The behavior settings a profile carries (smartMode, etc.), or an empty table.
+function presets.settings(id)
+  local p = presets.get(id)
+  return (p and type(p.settings) == "table") and p.settings or {}
 end
 
 function presets.get(id)

@@ -503,6 +503,19 @@ local _, n0 = presets.apply(pstore, "nope", 3000)
 t.eq(n0, 0, "applying an unknown preset writes nothing")
 t.eq(managed.count(pstore), before, "store unchanged by an unknown preset")
 
+-- the named personal profile is opt-in and carries the compress chain
+local zg = presets.get("zoozo-late-game")
+t.check(zg ~= nil, "zoozo-late-game profile exists")
+t.check(zg.personal == true, "it is flagged personal (opt-in, not a generic default)")
+t.check(presets.settings("zoozo-late-game").smartMode == true, "profile reserves smartMode on")
+t.check(presets.settings("early").smartMode == nil, "generic presets do NOT enable smart mode")
+local zstore = managed.new()
+presets.apply(zstore, "zoozo-late-game", 1)
+local ironIngot = managed.get(zstore, "minecraft:iron_ingot")
+t.check(ironIngot ~= nil and ironIngot.ceiling ~= nil, "applying the profile sets a compress ceiling")
+t.eq(ironIngot.into.name, "minecraft:iron_block", "compress chain flows through apply into the store")
+t.check(#managed.overflowItems(zstore) >= 1, "profile produces overflow-managed items")
+
 -- ---------------------------------------------------------------------------
 print("console hit-testing")
 local strip = console.tabs({ "PLAN", "QUEUE" }, 2)

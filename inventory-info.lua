@@ -1091,7 +1091,9 @@ local function drawPresetsPage(data)
   for i = 1, rows do
     local p = list[i]
     local y = start + (i - 1)
-    line(y, uiDraw.fit(p.label .. "  (" .. p.count .. " items)  - " .. p.description, w), colors.white)
+    local tag = p.personal and "* " or ""
+    line(y, uiDraw.fit(tag .. p.label .. "  (" .. p.count .. " items)  - " .. p.description, w),
+      p.personal and colors.lime or colors.white)
     presetRowRegions[#presetRowRegions + 1] = { y = y, entry = p }
   end
 
