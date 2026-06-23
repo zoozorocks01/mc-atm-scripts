@@ -2,6 +2,9 @@
 
 ComputerCraft/CC:Tweaked scripts for ATM10 base automation.
 
+Full setup instructions live in
+[`docs/INSTALLATION_AND_USE.md`](docs/INSTALLATION_AND_USE.md).
+
 ## Updater
 
 Install the updater once:
