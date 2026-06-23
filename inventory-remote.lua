@@ -183,29 +183,33 @@ local function draw(data)
     line(11, "Mode: " .. tostring(data.configMode or "dry-run"), colors.gray)
   end
 
-  line(12, "Low Stock", colors.cyan)
-  if not data.warnings or #data.warnings == 0 then
-    line(13, "All watched items are above target.", colors.lime)
-  else
-    for i = 1, math.min(4, #data.warnings) do
-      local warn = data.warnings[i]
-      local craft = warn.craftable and " craftable" or ""
-      line(12 + i, warn.label .. ": " .. fmt(warn.amount) .. " / " .. fmt(warn.target) .. craft, colors.orange)
+  local _, h = monitor.getSize()
+
+  line(12, "Category Summary", colors.cyan)
+  local summaryRows = math.min(4, h - 12)
+  for i = 1, summaryRows do
+    local summary = data.categorySummaries and data.categorySummaries[i]
+    if summary then
+      local color = colors.gray
+      if summary.blocked > 0 then color = colors.red
+      elseif summary.action > 0 then color = colors.lime
+      elseif summary.waiting > 0 then color = colors.yellow end
+      line(12 + i, summary.label .. " ok " .. summary.ok .. " act " .. summary.action .. " wait " .. summary.waiting .. " block " .. summary.blocked, color)
     end
   end
 
-  local _, h = monitor.getSize()
   local planY = 18
   line(planY, "Stock Keeper Plan", colors.cyan)
-  local planRows = math.min(4, h - planY)
+  local planRows = math.min(8, h - planY)
   for i = 1, planRows do
     local plan = data.stockPlans and data.stockPlans[i]
     if plan then
       local color = colors.gray
-      local text = plan.action .. " " .. tostring(plan.label)
+      local prefix = tostring(plan.category or "?") .. ": "
+      local text = prefix .. plan.action .. " " .. tostring(plan.label)
       if plan.action == "WOULD CRAFT" then
         color = colors.lime
-        text = text .. " +" .. fmt(plan.request)
+        text = prefix .. "WOULD CRAFT " .. tostring(plan.label) .. " +" .. fmt(plan.request)
         if plan.capped then text = text .. " capped" end
       elseif plan.action == "NOT CRAFTABLE" or plan.action == "BLOCKED" then
         color = colors.red
@@ -219,9 +223,21 @@ local function draw(data)
     end
   end
 
-  local topY = 24
-  if h < topY + 2 then topY = 14 + math.min(4, data.warnings and #data.warnings or 0) end
+  local lowY = 28
+  if h < lowY + 2 then lowY = planY + planRows + 2 end
 
+  line(lowY, "Low Stock", colors.cyan)
+  if not data.warnings or #data.warnings == 0 then
+    line(lowY + 1, "All watched items are above target.", colors.lime)
+  else
+    for i = 1, math.min(4, #data.warnings) do
+      local warn = data.warnings[i]
+      local craft = warn.craftable and " craftable" or ""
+      line(lowY + i, warn.label .. ": " .. fmt(warn.amount) .. " / " .. fmt(warn.target) .. craft, colors.orange)
+    end
+  end
+
+  local topY = lowY + math.min(5, data.warnings and #data.warnings + 1 or 1) + 1
   line(topY, "Top Stored Items", colors.cyan)
   local maxRows = math.min(8, h - topY)
   for i = 1, maxRows do

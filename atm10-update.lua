@@ -21,6 +21,7 @@ local roles = {
     files = {
       { remote = "inventory-info.lua", localName = "inventory-info" },
       { remote = "inventory-startup.lua", localName = "startup" },
+      { remote = "inventory-config-example.lua", localName = "inventory-config-example" },
       { remote = "inventory-config.lua", localName = "inventory-config", onlyIfMissing = true },
     },
   },

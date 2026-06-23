@@ -1,4 +1,4 @@
-local TITLE = "ATM10 INVENTORY INFO"
+local TITLE = "ATM10 INVENTORY MANAGER"
 local MONITOR_SIDE = "auto"
 local BRIDGE_NAME = "auto"
 local TEXT_SCALE = "auto"
@@ -24,6 +24,7 @@ local DEFAULT_CONFIG = {
     maxCraftsPerCycle = 2,
     maxRequest = 4096,
     items = {},
+    categories = {},
   },
 }
 
@@ -102,6 +103,13 @@ local function normalizeConfig(raw)
   cfg.stockKeeper.maxCraftsPerCycle = tonumber(cfg.stockKeeper.maxCraftsPerCycle) or 2
   cfg.stockKeeper.maxRequest = tonumber(cfg.stockKeeper.maxRequest) or 4096
   if type(cfg.stockKeeper.items) ~= "table" then cfg.stockKeeper.items = {} end
+  if type(cfg.stockKeeper.categories) ~= "table" then cfg.stockKeeper.categories = {} end
+
+  if #cfg.stockKeeper.categories == 0 and #cfg.stockKeeper.items > 0 then
+    cfg.stockKeeper.categories = {
+      { label = "Stock Keeper", items = cfg.stockKeeper.items },
+    }
+  end
 
   return cfg
 end
@@ -303,6 +311,28 @@ local function isItemCrafting(registryName)
   return false
 end
 
+local function summarizeCategories(plans)
+  local byName = {}
+  local ordered = {}
+
+  for _, plan in ipairs(plans or {}) do
+    local name = plan.category or "Stock Keeper"
+    local summary = byName[name]
+    if not summary then
+      summary = { label = name, ok = 0, action = 0, blocked = 0, waiting = 0 }
+      byName[name] = summary
+      ordered[#ordered + 1] = summary
+    end
+
+    if plan.action == "OK" then summary.ok = summary.ok + 1
+    elseif plan.action == "WOULD CRAFT" then summary.action = summary.action + 1
+    elseif plan.action == "NOT CRAFTABLE" or plan.action == "BLOCKED" then summary.blocked = summary.blocked + 1
+    else summary.waiting = summary.waiting + 1 end
+  end
+
+  return ordered
+end
+
 local function planStockActions(items)
   local plans = {}
   local stock = config.stockKeeper or {}
@@ -322,52 +352,62 @@ local function planStockActions(items)
   local cycleLimit = tonumber(stock.maxCraftsPerCycle) or 2
   local cycleWouldCraft = 0
 
-  for _, target in ipairs(stock.items or {}) do
-    local item = findStoredItem(items, target.name)
-    local amount = item and itemAmount(item) or 0
-    local label = target.label or target.name
-    local trigger = tonumber(target.target) or 0
-    local craftTo = tonumber(target.craftTo) or trigger
-    local maxRequest = tonumber(target.maxRequest) or tonumber(stock.maxRequest) or 4096
+  local categories = stock.categories or {}
+  if #categories == 0 and type(stock.items) == "table" then
+    categories = { { label = "Stock Keeper", items = stock.items } }
+  end
 
-    if amount >= trigger then
-      plans[#plans + 1] = { action = "OK", label = label, amount = amount, target = trigger }
-    elseif not isCraftable(target.name, item) then
-      plans[#plans + 1] = { action = "NOT CRAFTABLE", label = label, amount = amount, target = trigger }
-    elseif isItemCrafting(target.name) then
-      plans[#plans + 1] = { action = "ALREADY CRAFTING", label = label, amount = amount, target = trigger }
-    else
-      local record = ledger.requests[target.name]
-      local age = record and record.requestedAt and (now - record.requestedAt) or nil
+  for _, category in ipairs(categories) do
+    local categoryLabel = category.label or "Stock Keeper"
+    for _, target in ipairs(category.items or {}) do
+      local item = findStoredItem(items, target.name)
+      local amount = item and itemAmount(item) or 0
+      local label = target.label or target.name
+      local trigger = tonumber(target.target) or 0
+      local craftTo = tonumber(target.craftTo) or trigger
+      local maxRequest = tonumber(target.maxRequest) or tonumber(stock.maxRequest) or 4096
 
-      if record and age and age < cooldownMs then
-        plans[#plans + 1] = {
-          action = "ON COOLDOWN",
-          label = label,
-          amount = amount,
-          target = trigger,
-          secondsLeft = math.ceil((cooldownMs - age) / 1000),
-        }
-      elseif cycleWouldCraft >= cycleLimit then
-        plans[#plans + 1] = { action = "CYCLE CAP", label = label, amount = amount, target = trigger }
+      if amount >= trigger then
+        plans[#plans + 1] = { action = "OK", category = categoryLabel, label = label, amount = amount, target = trigger }
+      elseif not isCraftable(target.name, item) then
+        plans[#plans + 1] = { action = "NOT CRAFTABLE", category = categoryLabel, label = label, amount = amount, target = trigger }
+      elseif isItemCrafting(target.name) then
+        plans[#plans + 1] = { action = "ALREADY CRAFTING", category = categoryLabel, label = label, amount = amount, target = trigger }
       else
-        local request = math.max(0, craftTo - amount)
-        local capped = false
-        if request > maxRequest then
-          request = maxRequest
-          capped = true
-        end
+        local record = ledger.requests[target.name]
+        local age = record and record.requestedAt and (now - record.requestedAt) or nil
 
-        cycleWouldCraft = cycleWouldCraft + 1
-        plans[#plans + 1] = {
-          action = "WOULD CRAFT",
-          label = label,
-          amount = amount,
-          target = trigger,
-          craftTo = craftTo,
-          request = request,
-          capped = capped,
-        }
+        if record and age and age < cooldownMs then
+          plans[#plans + 1] = {
+            action = "ON COOLDOWN",
+            category = categoryLabel,
+            label = label,
+            amount = amount,
+            target = trigger,
+            secondsLeft = math.ceil((cooldownMs - age) / 1000),
+          }
+        elseif cycleWouldCraft >= cycleLimit then
+          plans[#plans + 1] = { action = "CYCLE CAP", category = categoryLabel, label = label, amount = amount, target = trigger }
+        else
+          local request = math.max(0, craftTo - amount)
+          local capped = false
+          if request > maxRequest then
+            request = maxRequest
+            capped = true
+          end
+
+          cycleWouldCraft = cycleWouldCraft + 1
+          plans[#plans + 1] = {
+            action = "WOULD CRAFT",
+            category = categoryLabel,
+            label = label,
+            amount = amount,
+            target = trigger,
+            craftTo = craftTo,
+            request = request,
+            capped = capped,
+          }
+        end
       end
     end
   end
@@ -430,6 +470,8 @@ local function scan()
     end
   end
 
+  local stockPlans = planStockActions(items)
+
   return {
     connected = connected,
     online = online,
@@ -447,7 +489,8 @@ local function scan()
     configMode = config.mode or "dry-run",
     configError = configError,
     ledgerError = ledgerError,
-    stockPlans = planStockActions(items),
+    stockPlans = stockPlans,
+    categorySummaries = summarizeCategories(stockPlans),
   }
 end
 
@@ -488,6 +531,7 @@ local function broadcast(data)
     configError = data.configError,
     ledgerError = data.ledgerError,
     stockPlans = data.stockPlans,
+    categorySummaries = data.categorySummaries,
   }, BROADCAST_PROTOCOL)
 end
 
@@ -540,29 +584,32 @@ local function draw(data)
     line(11, "Mode: " .. tostring(data.configMode or "dry-run"), colors.gray)
   end
 
-  line(12, "Low Stock", colors.cyan)
-  if #data.warnings == 0 then
-    line(13, "All watched items are above target.", colors.lime)
-  else
-    for i = 1, math.min(4, #data.warnings) do
-      local warn = data.warnings[i]
-      local craft = warn.craftable and " craftable" or ""
-      line(12 + i, warn.label .. ": " .. fmt(warn.amount) .. " / " .. fmt(warn.target) .. craft, colors.orange)
+  local _, h = monitor.getSize()
+
+  line(12, "Category Summary", colors.cyan)
+  local summaryRows = math.min(4, h - 12)
+  for i = 1, summaryRows do
+    local summary = data.categorySummaries and data.categorySummaries[i]
+    if summary then
+      local color = colors.gray
+      if summary.blocked > 0 then color = colors.red
+      elseif summary.action > 0 then color = colors.lime
+      elseif summary.waiting > 0 then color = colors.yellow end
+      line(12 + i, summary.label .. " ok " .. summary.ok .. " act " .. summary.action .. " wait " .. summary.waiting .. " block " .. summary.blocked, color)
     end
   end
 
-  local _, h = monitor.getSize()
-  local planY = 18
-  line(planY, "Stock Keeper Plan", colors.cyan)
-  local planRows = math.min(4, h - planY)
+  line(18, "Stock Keeper Plan", colors.cyan)
+  local planRows = math.min(8, h - 18)
   for i = 1, planRows do
     local plan = data.stockPlans and data.stockPlans[i]
     if plan then
       local color = colors.gray
-      local text = plan.action .. " " .. tostring(plan.label)
+      local prefix = tostring(plan.category or "?") .. ": "
+      local text = prefix .. plan.action .. " " .. tostring(plan.label)
       if plan.action == "WOULD CRAFT" then
         color = colors.lime
-        text = text .. " +" .. fmt(plan.request)
+        text = prefix .. "WOULD CRAFT " .. tostring(plan.label) .. " +" .. fmt(plan.request)
         if plan.capped then text = text .. " capped" end
       elseif plan.action == "NOT CRAFTABLE" or plan.action == "BLOCKED" then
         color = colors.red
@@ -572,19 +619,31 @@ local function draw(data)
       elseif plan.action == "ALREADY CRAFTING" then
         color = colors.orange
       end
-      line(planY + i, text, color)
+      line(18 + i, text, color)
     end
   end
 
-  local topY = 24
-  if h < topY + 2 then topY = 14 + math.min(4, #data.warnings) end
+  local topY = 28
+  if h < topY + 2 then topY = 18 + planRows + 2 end
 
-  line(topY, "Top Stored Items", colors.cyan)
-  local maxRows = math.min(TOP_ITEM_COUNT, h - topY)
+  line(topY, "Low Stock", colors.cyan)
+  if #data.warnings == 0 then
+    line(topY + 1, "All watched items are above target.", colors.lime)
+  else
+    for i = 1, math.min(4, #data.warnings) do
+      local warn = data.warnings[i]
+      local craft = warn.craftable and " craftable" or ""
+      line(topY + i, warn.label .. ": " .. fmt(warn.amount) .. " / " .. fmt(warn.target) .. craft, colors.orange)
+    end
+  end
+
+  local itemsY = topY + math.min(5, #data.warnings + 1) + 1
+  line(itemsY, "Top Stored Items", colors.cyan)
+  local maxRows = math.min(TOP_ITEM_COUNT, h - itemsY)
   for i = 1, maxRows do
     local item = data.items[i]
     if item then
-      line(topY + i, tostring(i) .. ". " .. itemName(item) .. "  " .. fmt(itemAmount(item)), colors.white)
+      line(itemsY + i, tostring(i) .. ". " .. itemName(item) .. "  " .. fmt(itemAmount(item)), colors.white)
     end
   end
 end

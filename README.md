@@ -62,12 +62,19 @@ startup
 - This reads total induction matrix input/output. Per-machine top users/producers require Energy Detectors on individual branches.
 - Display tuning lives at the top of `power-display.lua`: `TEXT_SCALE`, `SHOW_NET_GRAPH`, `SHOW_STORED_GRAPH`, warning thresholds, and history length.
 
-## Inventory Info Dashboard
+## Inventory Manager
 
-Read-only RS Bridge dashboard. It shows bridge/grid status, item storage usage
-when available, RS energy/usage, watched low-stock items, and top stored items.
-The source inventory computer also broadcasts a compact snapshot to remote
-display computers over the `atm10-inventory-v1` rednet protocol.
+Dry-run RS Bridge inventory manager. It shows bridge/grid status, item storage
+usage when available, RS energy/usage, watched low-stock items, top stored
+items, category summaries, and a stock keeper plan.
+
+The source inventory computer is the manager. It reads the RS Bridge, plans
+stock actions from `inventory-config`, and broadcasts a compact snapshot to
+remote display computers over the `atm10-inventory-v1` rednet protocol.
+Remote displays are read-only mirrors.
+
+This build does not trigger autocrafting. `WOULD CRAFT` means the planner found
+a deficit and craftable pattern, but no `craftItem` call is made.
 
 The computer needs access to:
 
@@ -86,6 +93,27 @@ startup
 Low-stock watches and stock keeper dry-run settings live in `inventory-config`.
 The updater installs that config only if it is missing, so your edited values
 are preserved.
+
+The stock manager is organized by categories:
+
+```lua
+stockKeeper = {
+  enabled = true,
+  categories = {
+    {
+      label = "Mekanism",
+      items = {
+        { label = "Infused Alloy", name = "mekanism:alloy_infused", target = 128, craftTo = 256 },
+      },
+    },
+  },
+}
+```
+
+`target` is the low line. `craftTo` is the planned refill line. `maxRequest`
+caps a single planned craft request. `inventory-config-example` contains a
+larger Mekanism, Modern Industrialization, Mystical Agriculture, and RS starter
+list to copy from.
 
 ### Install on remote inventory display
 
