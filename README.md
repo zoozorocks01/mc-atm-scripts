@@ -144,9 +144,21 @@ passes the shared safety gate in `lib/atm10-control.lua` before the runner in
 The manager monitor has three tabs (tap a tab, or pulse the page-button
 redstone side to cycle): **Plan** (stock-keeper deficits; tap a `WOULD CRAFT`
 row to approve), **Queue** (approved/in-flight crafts; tap a row to cancel), and
-**Browse** (the live grid, paginated; tap a `[craft]` item to approve a one-off
-craft of it without typing its registry ID). Plan and Queue auto-rotate; Browse
-is manual only.
+**Browse** (the live grid, paginated). Plan and Queue auto-rotate; Browse is
+manual only.
+
+### Setting quotas from the console (tap-to-manage)
+
+On the **Browse** page, tap any item to open its quota editor — no registry IDs
+to type. Use the `[-64] [-8] [-1]` / `[+1] [+8] [+64]` buttons to set **TARGET**
+(craft when stock drops below this) and **CRAFTTO** (refill up to this), then
+**SAVE**. `CRAFT x64` queues a one-off craft; `REMOVE` clears the quota; `BACK`
+exits. Items with a quota show `Q <target>` in the grid.
+
+These quotas persist on the computer (`.atm10-managed`) and are **merged into the
+planner alongside your hand-edited `inventory-config`** — the config is never
+overwritten, and either source (or both) can drive crafting. Having any quota is
+enough to start planning even if `stockKeeper.enabled` is false in config.
 
 The computer needs access to:
 

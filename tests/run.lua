@@ -14,6 +14,7 @@ local draw = require("atm10-draw")
 local stockplan = require("atm10-stockplan")
 local cqueue = require("atm10-queue")
 local craftrunner = require("atm10-craftrunner")
+local managed = require("atm10-managed")
 local console = require("atm10-console")
 
 -- ---------------------------------------------------------------------------
@@ -379,6 +380,44 @@ craftrunner.run(qf, depsF)
 t.eq(tries, 2, "retries after the backoff cooldown elapses")
 
 -- ---------------------------------------------------------------------------
+print("managed quotas (tap-to-manage store)")
+local ms = managed.new()
+t.eq(managed.count(ms), 0, "new store is empty")
+
+managed.set(ms, { name = "mek:steel", label = "Steel", target = 256, craftTo = 512 }, 100)
+t.eq(managed.count(ms), 1, "set adds a quota")
+t.eq(managed.get(ms, "mek:steel").target, 256, "quota stores target")
+t.eq(managed.get(ms, "mek:steel").craftTo, 512, "quota stores craftTo")
+
+managed.set(ms, { name = "mek:steel", label = "Steel", target = 300, craftTo = 600 }, 200)
+t.eq(managed.count(ms), 1, "re-setting the same item dedupes")
+t.eq(managed.get(ms, "mek:steel").target, 300, "re-set updates target")
+
+-- clamps: craftTo never below target (or below 1); negatives floored to 0
+managed.set(ms, { name = "x", label = "X", target = 50, craftTo = 10 }, 1)
+t.eq(managed.get(ms, "x").craftTo, 50, "craftTo clamped up to target")
+managed.set(ms, { name = "y", target = -5, craftTo = -5 }, 1)
+t.eq(managed.get(ms, "y").target, 0, "negative target floored to 0")
+t.check(managed.get(ms, "y").craftTo >= 1, "craftTo floored to at least 1")
+
+managed.set(ms, { label = "no name" }, 1) -- missing name -> no-op
+t.eq(managed.count(ms), 3, "set without a name is a no-op")
+
+managed.remove(ms, "x")
+t.check(managed.has(ms, "x") == false, "remove drops the quota")
+
+-- toCategory feeds the planner; empty store -> nil
+t.eq(managed.toCategory(managed.new()), nil, "empty store -> no category")
+local cat = managed.toCategory(ms)
+t.eq(cat.label, "Tapped", "managed category is labelled Tapped")
+t.check(#cat.items >= 1, "managed category carries its items")
+-- the merged category plans like any other stock-keeper category
+local merged = stockplan.plan({ stockKeeper = { enabled = true, categories = { cat } },
+  ledger = { requests = {} }, resolve = function() return 0, true, false end })
+t.check(#merged >= 1, "managed quotas produce plan rows")
+t.eq(merged[1].action, "WOULD CRAFT", "a below-target managed quota plans a craft")
+
+-- ---------------------------------------------------------------------------
 print("console hit-testing")
 local strip = console.tabs({ "PLAN", "QUEUE" }, 2)
 t.eq(strip.text, "[PLAN] [QUEUE]", "tab strip renders as [PLAN] [QUEUE]")
@@ -404,6 +443,15 @@ local pe = console.paginate(0, 10, 1)
 t.eq(pe.pages, 1, "empty list still has 1 page")
 t.check(pe.from > pe.to, "empty list yields an empty render range")
 
+-- buttonRow: layout + hit-testing for the quota editor
+local row = console.buttonRow({ { label = "-1", key = "t:-1" }, { label = "+1", key = "t:1" }, { label = "SAVE", key = "save" } }, 5, 1)
+t.eq(#row.buttons, 3, "button row lays out every spec")
+t.eq(row.buttons[1].text, "[-1]", "button label is bracketed")
+t.eq(console.buttonHit(row, 2, 5), "t:-1", "tap inside first button -> its key")
+t.eq(console.buttonHit(row, row.buttons[3].x1, 5), "save", "tap SAVE -> save key")
+t.eq(console.buttonHit(row, 1, 6), nil, "tap the wrong row -> nil")
+t.eq(console.buttonHit(row, 999, 5), nil, "tap past the buttons -> nil")
+
 -- ---------------------------------------------------------------------------
 print("all scripts compile")
 -- loadfile parses without executing, so the display while-loops and peripheral
@@ -411,7 +459,8 @@ print("all scripts compile")
 local luaFiles = {
   "lib/atm10-status.lua", "lib/atm10-draw.lua", "lib/atm10-palette.lua",
   "lib/atm10-control.lua", "lib/atm10-stockplan.lua", "lib/atm10-queue.lua",
-  "lib/atm10-craftrunner.lua", "lib/atm10-console.lua", "atm10-console.lua",
+  "lib/atm10-craftrunner.lua", "lib/atm10-managed.lua",
+  "lib/atm10-console.lua", "atm10-console.lua",
   "inventory/manager.lua", "inventory/remote.lua",
   "inventory/config.lua", "inventory/config-example.lua",
   "power/display.lua", "power/probe.lua",
@@ -419,7 +468,7 @@ local luaFiles = {
   "inventory-info.lua", "inventory-remote.lua", "power-display.lua",
   "atm10-status.lua", "atm10-palette.lua", "atm10-control.lua",
   "atm10-draw.lua", "atm10-stockplan.lua", "atm10-queue.lua",
-  "atm10-craftrunner.lua",
+  "atm10-craftrunner.lua", "atm10-managed.lua",
 }
 for _, f in ipairs(luaFiles) do
   local chunk, err = loadfile(f)

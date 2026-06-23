@@ -10,6 +10,8 @@ local BROADCAST_PROTOCOL = "atm10-inventory-v1"
 local CONFIG_FILE = "inventory-config"
 local LEDGER_FILE = ".atm10-stock-ledger"
 local QUEUE_FILE = ".atm10-craft-queue"
+local MANAGED_FILE = ".atm10-managed" -- operator-set quotas (tap-to-manage store)
+local EDIT_STEPS = { 64, 8, 1 }       -- +/- step buttons in the quota editor
 local PAGE_SECONDS = 10
 local PAGES = { "PLAN", "QUEUE", "BROWSE" }
 local QUEUE_MAX_AGE_MS = 30 * 60 * 1000 -- prune approvals older than 30 minutes
@@ -22,6 +24,7 @@ local uiPalette = require("atm10-palette")
 local stockplan = require("atm10-stockplan")
 local cqueue = require("atm10-queue")
 local craftrunner = require("atm10-craftrunner")
+local managed = require("atm10-managed")
 local console = require("atm10-console")
 
 local DEFAULT_CONFIG = {
@@ -59,6 +62,7 @@ local paletteApplied = false
 local pageIndex = 1
 local pageShownAt = nil
 local craftQueue = nil
+local managedStore = nil
 local lastData = nil
 local tabStrip = nil
 local planRowRegions = {}
@@ -66,6 +70,8 @@ local queueRowRegions = {}
 local browseRowRegions = {}
 local browseNavRegions = {}
 local browsePage = 1
+local editing = nil       -- when set, the Browse page shows the quota editor for this item
+local editorRows = {}     -- button rows in the editor, for touch hit-testing
 local rsLevels = {}
 
 local function peripheralTypeMatches(actual, expected)
@@ -237,6 +243,30 @@ local function loadQueue()
   return cqueue.normalize(data)
 end
 
+-- Load operator-set quotas (fail-safe: any problem yields an empty store).
+local function loadManaged()
+  if not fs.exists(MANAGED_FILE) then return managed.new() end
+  local file = fs.open(MANAGED_FILE, "r")
+  if not file then return managed.new() end
+  local text = file.readAll()
+  file.close()
+  local ok, data = pcall(textutils.unserialize, text)
+  if not ok then return managed.new() end
+  return managed.normalize(data)
+end
+
+-- Persist the managed-quota store atomically (tmp + move), like the queue.
+local function saveManaged(store)
+  local tmp = MANAGED_FILE .. ".tmp"
+  local file = fs.open(tmp, "w")
+  if not file then return false end
+  file.write(textutils.serialize(store))
+  file.close()
+  if fs.exists(MANAGED_FILE) then fs.delete(MANAGED_FILE) end
+  fs.move(tmp, MANAGED_FILE)
+  return true
+end
+
 -- Persist the craft queue atomically (tmp + move), like the ledger.
 local function saveQueue(q)
   local tmp = QUEUE_FILE .. ".tmp"
@@ -346,6 +376,11 @@ local function buildManagedItemNames()
     for _, target in ipairs(category.items or {}) do
       if target.name then names[target.name] = true end
     end
+  end
+
+  -- tap-to-manage quotas count as managed too
+  for _, e in ipairs(managed.list(managedStore or managed.new())) do
+    if e.name then names[e.name] = true end
   end
 
   return names
@@ -492,14 +527,47 @@ local function summarizeCategories(plans)
   return ordered
 end
 
-local function planStockActions(items)
+-- Merge the hand-edited config stock keeper with the operator-set tap-to-manage
+-- quotas (a synthetic "Tapped" category). Returns nil when neither has anything
+-- to plan, so a disabled keeper with no quotas plans nothing (and never touches
+-- the ledger). Presence of any managed quota enables planning.
+local function effectiveStockKeeper()
   local stock = config.stockKeeper or {}
-  if stock.enabled ~= true then
+  local managedCat = managed.toCategory(managedStore or managed.new())
+
+  if not managedCat and stock.enabled ~= true then
+    return nil
+  end
+
+  -- Config categories plan only when the keeper is explicitly enabled; managed
+  -- quotas always plan. (So tapping one item never silently re-activates config
+  -- categories the operator disabled.)
+  local categories = {}
+  if stock.enabled == true then
+    for _, c in ipairs(stock.categories or {}) do categories[#categories + 1] = c end
+    if #categories == 0 and type(stock.items) == "table" and #stock.items > 0 then
+      categories[#categories + 1] = { label = "Stock Keeper", items = stock.items }
+    end
+  end
+  if managedCat then categories[#categories + 1] = managedCat end
+
+  return {
+    enabled = true,
+    cooldownSeconds = stock.cooldownSeconds,
+    maxCraftsPerCycle = stock.maxCraftsPerCycle,
+    maxRequest = stock.maxRequest,
+    categories = categories,
+  }
+end
+
+local function planStockActions(items)
+  local stock = effectiveStockKeeper()
+  if not stock then
     return {}
   end
 
-  -- readLedger() records ledgerError on corruption, so call it only when the
-  -- stock keeper is enabled: a disabled keeper must not surface a ledger error.
+  -- readLedger() records ledgerError on corruption, so call it only when there
+  -- is something to plan: an idle keeper must not surface a ledger error.
   local ledger = readLedger()
 
   return stockplan.plan({
@@ -626,6 +694,7 @@ local function scan()
     end
   end
 
+  if not managedStore then managedStore = loadManaged() end
   local managedNames = buildManagedItemNames()
   local listedItems = collectListedItems(items)
   local stockPlans = planStockActions(items)
@@ -832,9 +901,9 @@ local function drawQueuePage(data)
   end
 end
 
--- Browse the live grid and tap a craftable item to approve a craft of it. This
--- removes the need to hand-type registry IDs in config for one-off crafts. Rows
--- are paginated; [< PREV] / [NEXT >] tap targets sit on the bottom line.
+-- Browse the live grid and tap any item to set/edit its stock quota (no
+-- hand-typed registry IDs). Managed items show their target. Rows are paginated;
+-- [< PREV] / [NEXT >] tap targets sit on the bottom line.
 local function drawBrowsePage(data)
   local w, h = monitor.getSize()
   local items = data.items or {}
@@ -849,7 +918,7 @@ local function drawBrowsePage(data)
   line(6, "Browse Grid   " .. fmt(total) .. " items   page " .. pg.page .. "/" .. pg.pages, colors.cyan)
   local wide = w >= 60
   if wide then
-    line(7, uiDraw.fit("ITEM", math.max(16, w - 24)) .. "   STORED   CRAFT", colors.gray)
+    line(7, uiDraw.fit("ITEM", math.max(16, w - 26)) .. "   STORED   QUOTA", colors.gray)
   end
 
   if total == 0 then
@@ -857,26 +926,34 @@ local function drawBrowsePage(data)
     return
   end
 
+  local store = managedStore or managed.new()
   for i = pg.from, pg.to do
     local item = items[i]
     local y = listTop + (i - pg.from)
     local name = itemName(item)
     local amount = itemAmount(item)
     local craftable = item.isCraftable == true
+    local quota = item.name and managed.get(store, item.name) or nil
+
+    local tag, color
+    if quota then tag, color = "Q " .. fmt(quota.target), colors.lime
+    elseif craftable then tag, color = "craft", colors.white
+    else tag, color = "-", colors.gray end
+
     local text
     if wide then
-      text = uiDraw.fit(name, math.max(16, w - 24)) ..
+      text = uiDraw.fit(name, math.max(16, w - 26)) ..
         "   " .. rjust(fmt(amount), 6) ..
-        "   " .. uiDraw.fit(craftable and "[craft]" or "-", 6)
+        "   " .. uiDraw.fit(tag, 8)
     else
-      text = uiDraw.fit((craftable and "* " or "  ") .. name .. " " .. fmt(amount), w)
+      text = uiDraw.fit((quota and "Q " or (craftable and "* " or "  ")) .. name .. " " .. fmt(amount), w)
     end
-    line(y, text, craftable and colors.white or colors.gray)
-    -- only craftable items are tappable (tap = approve a craft into the queue)
-    if craftable and item.name then
+    line(y, text, color)
+    -- every named item is tappable: tap opens the quota editor
+    if item.name then
       browseRowRegions[#browseRowRegions + 1] = {
         y = y,
-        entry = { name = item.name, label = name, request = BROWSE_CRAFT_AMOUNT },
+        entry = { name = item.name, label = name, amount = amount, craftable = craftable },
       }
     end
   end
@@ -890,7 +967,57 @@ local function drawBrowsePage(data)
     { x1 = 11, x2 = 10 + #next, y = navY, delta = 1 },
   }
   if w >= 44 then
-    uiDraw.write(monitor, 21, navY, "tap [craft] to queue x" .. BROWSE_CRAFT_AMOUNT, colors.gray, colors.black)
+    uiDraw.write(monitor, 21, navY, "tap an item to set its quota", colors.gray, colors.black)
+  end
+end
+
+-- Render a button row and keep it for hit-testing. specs: {{label,key}}.
+local function renderButtonRow(specs, y)
+  local row = console.buttonRow(specs, y, 1, 1)
+  for _, b in ipairs(row.buttons) do
+    uiDraw.write(monitor, b.x1, y, b.text, colors.cyan, colors.black)
+  end
+  editorRows[#editorRows + 1] = row
+  return row
+end
+
+-- +/- step buttons for a numeric field (keys encode "field:delta").
+local function stepSpecs(field)
+  local specs = {}
+  for _, s in ipairs(EDIT_STEPS) do specs[#specs + 1] = { label = "-" .. s, key = field .. ":-" .. s } end
+  for i = #EDIT_STEPS, 1, -1 do
+    local s = EDIT_STEPS[i]
+    specs[#specs + 1] = { label = "+" .. s, key = field .. ":" .. s }
+  end
+  return specs
+end
+
+-- The quota editor for the item in `editing` (opened from the Browse page).
+local function drawEditor()
+  local w = (monitor.getSize())
+  editorRows = {}
+  local e = editing
+  local already = managed.has(managedStore or managed.new(), e.name)
+
+  line(6, uiDraw.fit("Set Quota: " .. tostring(e.label), w), colors.cyan)
+  line(7, "stored: " .. fmt(e.amount) .. "    craftable: " .. (e.craftable and "yes" or "NO"),
+    e.craftable and colors.gray or colors.orange)
+
+  line(9, "TARGET:  " .. fmt(e.target) .. "   (craft when stock drops below)", colors.white)
+  renderButtonRow(stepSpecs("target"), 10)
+
+  line(12, "CRAFTTO: " .. fmt(e.craftTo) .. "   (refill up to)", colors.white)
+  renderButtonRow(stepSpecs("craftTo"), 13)
+
+  local actions = { { label = "SAVE", key = "save" } }
+  if already then actions[#actions + 1] = { label = "REMOVE", key = "remove" } end
+  if e.craftable then actions[#actions + 1] = { label = "CRAFT x" .. BROWSE_CRAFT_AMOUNT, key = "craftnow" } end
+  actions[#actions + 1] = { label = "BACK", key = "back" }
+  renderButtonRow(actions, 15)
+
+  line(17, already and "Editing an existing quota. SAVE to update." or "New quota. SAVE to add.", colors.gray)
+  if not e.craftable then
+    line(18, "Not craftable now: quota will read NOT CRAFTABLE until a recipe exists.", colors.orange)
   end
 end
 
@@ -908,6 +1035,7 @@ local function draw(data)
   queueRowRegions = {}
   browseRowRegions = {}
   browseNavRegions = {}
+  editorRows = {}
 
   local pageName = PAGES[pageIndex]
 
@@ -941,7 +1069,7 @@ local function draw(data)
   if pageName == "QUEUE" then
     drawQueuePage(data)
   elseif pageName == "BROWSE" then
-    drawBrowsePage(data)
+    if editing then drawEditor() else drawBrowsePage(data) end
   else
     drawPlanPage(data)
   end
@@ -949,6 +1077,7 @@ end
 
 local function setPage(i)
   pageIndex = ((i - 1) % #PAGES) + 1
+  editing = nil -- any page change exits the quota editor
   pageShownAt = nowMs() -- a manual page change resets the auto-rotate timer
 end
 
@@ -986,7 +1115,8 @@ local function approve(entry)
   print("Approved: " .. tostring(entry.label or entry.name) .. " x" .. tostring(entry.request))
 end
 
--- Cancel a queued approval. INERT: removes intent only; nothing was crafting.
+-- Cancel a queued approval. Removes intent only; the runner crafts at most once
+-- per approval, so a canceled-but-already-requested item just stops being shown.
 local function cancelEntry(entry)
   if not entry or not entry.name then return end
   craftQueue = cqueue.cancel(craftQueue or loadQueue(), entry.name)
@@ -995,7 +1125,75 @@ local function cancelEntry(entry)
   print("Canceled approval: " .. tostring(entry.label or entry.name))
 end
 
+-- Open the quota editor for a browsed item, seeding from an existing quota or
+-- from sensible defaults (hold current stock, refill one batch above).
+local function openEditor(entry)
+  local existing = managed.get(managedStore or loadManaged(), entry.name)
+  local target, craftTo
+  if existing then
+    target, craftTo = existing.target, existing.craftTo
+  else
+    target = math.max(0, math.floor(entry.amount or 0))
+    craftTo = target + BROWSE_CRAFT_AMOUNT
+  end
+  editing = {
+    name = entry.name, label = entry.label, amount = entry.amount or 0,
+    craftable = entry.craftable == true, target = target, craftTo = craftTo,
+  }
+  pageShownAt = nowMs()
+end
+
+local function saveEditing()
+  managedStore = managed.set(managedStore or loadManaged(),
+    { name = editing.name, label = editing.label, target = editing.target, craftTo = editing.craftTo }, nowMs())
+  saveManaged(managedStore)
+  print("Quota saved: " .. tostring(editing.label) ..
+    "  target " .. editing.target .. " / craftTo " .. editing.craftTo)
+  editing = nil
+end
+
+local function removeEditing()
+  managedStore = managed.remove(managedStore or loadManaged(), editing.name)
+  saveManaged(managedStore)
+  print("Quota removed: " .. tostring(editing.label))
+  editing = nil
+end
+
+-- Touch handling while the quota editor is open.
+local function handleEditorTouch(x, y)
+  -- tabs still navigate (and exit the editor)
+  local page = console.tabHit(tabStrip, x, y)
+  if page then setPage(page); renderCurrent(); return end
+
+  for _, row in ipairs(editorRows) do
+    local key = console.buttonHit(row, x, y)
+    if key then
+      if key == "save" then saveEditing()
+      elseif key == "remove" then removeEditing()
+      elseif key == "back" then editing = nil
+      elseif key == "craftnow" then
+        approve({ name = editing.name, label = editing.label, request = BROWSE_CRAFT_AMOUNT })
+        editing = nil
+      else
+        local field, delta = string.match(key, "^(%a+):(-?%d+)$")
+        if field then
+          local v = math.max(0, (editing[field] or 0) + (tonumber(delta) or 0))
+          editing[field] = v
+        end
+      end
+      pageShownAt = nowMs()
+      renderCurrent()
+      return
+    end
+  end
+end
+
 local function handleTouch(x, y)
+  if editing then
+    handleEditorTouch(x, y)
+    return
+  end
+
   local page = console.tabHit(tabStrip, x, y)
   if page then
     setPage(page)
@@ -1017,7 +1215,7 @@ local function handleTouch(x, y)
     return
   end
 
-  -- Browse page: [< PREV] / [NEXT >] paging, then tap a craftable row to queue it
+  -- Browse page: [< PREV] / [NEXT >] paging, then tap a row to edit its quota
   for _, nav in ipairs(browseNavRegions) do
     if y == nav.y and x >= nav.x1 and x <= nav.x2 then
       browsePage = math.max(1, browsePage + nav.delta)
@@ -1029,7 +1227,7 @@ local function handleTouch(x, y)
 
   local browseEntry = console.rowHit(browseRowRegions, y)
   if browseEntry then
-    approve(browseEntry)
+    openEditor(browseEntry)
     renderCurrent()
   end
 end

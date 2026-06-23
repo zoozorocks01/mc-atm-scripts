@@ -42,6 +42,33 @@ function console.rowHit(rows, y)
   return nil
 end
 
+-- Lay out a row of labeled buttons like "[-1] [+1] [SAVE]" at (startX, y).
+-- specs: array of { label, key }. Returns { buttons = {{key,label,text,x1,x2,y}}, y }
+-- for the renderer to draw `text` at (x1, y) and to keep for hit-testing.
+function console.buttonRow(specs, y, startX, gap)
+  y = y or 1
+  local x = startX or 1
+  gap = gap or 1
+  local buttons = {}
+  for _, spec in ipairs(specs or {}) do
+    local text = "[" .. tostring(spec.label) .. "]"
+    local x1 = x
+    local x2 = x + #text - 1
+    buttons[#buttons + 1] = { key = spec.key, label = spec.label, text = text, x1 = x1, x2 = x2, y = y }
+    x = x2 + 1 + gap
+  end
+  return { buttons = buttons, y = y }
+end
+
+-- Which button key (if any) was tapped on a button row.
+function console.buttonHit(row, x, y)
+  if type(row) ~= "table" or y ~= row.y then return nil end
+  for _, b in ipairs(row.buttons or {}) do
+    if x >= b.x1 and x <= b.x2 then return b.key end
+  end
+  return nil
+end
+
 -- Page math for a scrollable list. Clamps `page` into range and returns the
 -- 1-based slice [from, to] to render (an empty list yields from=1, to=0 so a
 -- `for i = from, to` loop runs zero times).
