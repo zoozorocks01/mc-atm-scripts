@@ -55,11 +55,11 @@ function stockplan.plan(ctx)
       local maxRequest = tonumber(target.maxRequest) or tonumber(stock.maxRequest) or 4096
 
       if amount >= trigger then
-        plans[#plans + 1] = { action = "OK", category = categoryLabel, label = label, amount = amount, target = trigger }
+        plans[#plans + 1] = { action = "OK", name = target.name, category = categoryLabel, label = label, amount = amount, target = trigger }
       elseif not craftable then
-        plans[#plans + 1] = { action = "NOT CRAFTABLE", category = categoryLabel, label = label, amount = amount, target = trigger }
+        plans[#plans + 1] = { action = "NOT CRAFTABLE", name = target.name, category = categoryLabel, label = label, amount = amount, target = trigger }
       elseif crafting then
-        plans[#plans + 1] = { action = "ALREADY CRAFTING", category = categoryLabel, label = label, amount = amount, target = trigger }
+        plans[#plans + 1] = { action = "ALREADY CRAFTING", name = target.name, category = categoryLabel, label = label, amount = amount, target = trigger }
       else
         local record = ledger.requests[target.name]
         local age = record and record.requestedAt and (now - record.requestedAt) or nil
@@ -67,6 +67,7 @@ function stockplan.plan(ctx)
         if record and age and age < cooldownMs then
           plans[#plans + 1] = {
             action = "ON COOLDOWN",
+            name = target.name,
             category = categoryLabel,
             label = label,
             amount = amount,
@@ -74,7 +75,7 @@ function stockplan.plan(ctx)
             secondsLeft = math.ceil((cooldownMs - age) / 1000),
           }
         elseif cycleWouldCraft >= cycleLimit then
-          plans[#plans + 1] = { action = "CYCLE CAP", category = categoryLabel, label = label, amount = amount, target = trigger }
+          plans[#plans + 1] = { action = "CYCLE CAP", name = target.name, category = categoryLabel, label = label, amount = amount, target = trigger }
         else
           local request = math.max(0, craftTo - amount)
           local capped = false
@@ -86,6 +87,7 @@ function stockplan.plan(ctx)
           cycleWouldCraft = cycleWouldCraft + 1
           plans[#plans + 1] = {
             action = "WOULD CRAFT",
+            name = target.name,
             category = categoryLabel,
             label = label,
             amount = amount,

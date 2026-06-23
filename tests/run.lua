@@ -13,6 +13,7 @@ local palette = require("atm10-palette")
 local draw = require("atm10-draw")
 local stockplan = require("atm10-stockplan")
 local cqueue = require("atm10-queue")
+local console = require("atm10-console")
 
 -- ---------------------------------------------------------------------------
 print("status vocabulary")
@@ -177,6 +178,7 @@ local wcP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100, craf
   resolve = function() return 40, true, false end })
 t.eq(wcP[1].action, "WOULD CRAFT", "deficit -> WOULD CRAFT")
 t.eq(wcP[1].request, 216, "request = craftTo - amount (256-40)")
+t.eq(wcP[1].name, "x", "plan row carries the registry name (for approve/reconcile)")
 t.check(wcP[1].capped == false, "not capped below maxRequest")
 t.eq(wcP[1].category, "Stock Keeper", "items-only config falls back to Stock Keeper category")
 
@@ -256,12 +258,25 @@ t.eq(noPrune, 0, "maxAge<=0 disables pruning")
 t.eq(cqueue.count(cqueue.normalize("garbage")), 0, "normalize coerces garbage to empty")
 
 -- ---------------------------------------------------------------------------
+print("console hit-testing")
+local strip = console.tabs({ "PLAN", "QUEUE" }, 2)
+t.eq(strip.text, "[PLAN] [QUEUE]", "tab strip renders as [PLAN] [QUEUE]")
+t.eq(console.tabHit(strip, 3, 2), 1, "tap inside [PLAN] -> page 1")
+t.eq(console.tabHit(strip, 10, 2), 2, "tap inside [QUEUE] -> page 2")
+t.eq(console.tabHit(strip, 7, 2), nil, "tap the gap between tabs -> nil")
+t.eq(console.tabHit(strip, 3, 3), nil, "tap the wrong row -> nil")
+local hitRows = { { y = 5, entry = "a" }, { y = 6, entry = "b" } }
+t.eq(console.rowHit(hitRows, 6), "b", "rowHit returns the entry at that y")
+t.eq(console.rowHit(hitRows, 9), nil, "rowHit miss -> nil")
+
+-- ---------------------------------------------------------------------------
 print("all scripts compile")
 -- loadfile parses without executing, so the display while-loops and peripheral
 -- wraps never run. This guards every shipped Lua file against syntax errors.
 local luaFiles = {
   "lib/atm10-status.lua", "lib/atm10-draw.lua", "lib/atm10-palette.lua",
   "lib/atm10-control.lua", "lib/atm10-stockplan.lua", "lib/atm10-queue.lua",
+  "lib/atm10-console.lua",
   "inventory/manager.lua", "inventory/remote.lua",
   "inventory/config.lua", "inventory/config-example.lua",
   "power/display.lua", "power/probe.lua",
