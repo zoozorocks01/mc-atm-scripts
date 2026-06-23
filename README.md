@@ -31,15 +31,26 @@ reboot
 The repo now includes shared baseline modules for the next dashboard/control
 pass:
 
-- `atm10-status`: common status names, glyphs, colors, and tallies
-- `atm10-palette`: shared monitor palettes
-- `atm10-draw`: bars, gauges, panel boxes, and diff-buffer rendering
-- `atm10-control`: proposed-action records and execution-mode gates
+- `lib/atm10-status.lua`: common status names, glyphs, colors, and tallies
+- `lib/atm10-palette.lua`: shared monitor palettes
+- `lib/atm10-draw.lua`: bars, gauges, panel boxes, and diff-buffer rendering
+- `lib/atm10-control.lua`: proposed-action records and execution-mode gates
 
 The current scripts still work independently. These modules are installed by
 the updater so future power, inventory, machine, and security systems can share
-one display/control language. See `CONTROL_ARCHITECTURE.md` for the safety
-model.
+one display/control language. See `docs/CONTROL_ARCHITECTURE.md` for the
+safety model.
+
+Canonical source now lives in folders:
+
+- `power/`
+- `inventory/`
+- `lib/`
+- `dashboard/`
+- `docs/`
+
+Root-level scripts remain as compatibility mirrors for older in-game updaters.
+See `docs/REPO_STRUCTURE.md` before moving or deleting root files.
 
 ## Power Dashboard
 
@@ -56,16 +67,16 @@ empty/full, status, and history graphs.
 ### Install on display computer
 
 ```lua
-wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/power-display.lua power-display
-wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/display-startup.lua startup
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/power/display.lua power-display
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/power/display-startup.lua startup
 startup
 ```
 
 ### Install on power computer
 
 ```lua
-wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/power-probe.lua power-probe
-wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/probe-startup.lua startup
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/power/probe.lua power-probe
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/power/probe-startup.lua startup
 startup
 ```
 
@@ -99,8 +110,8 @@ The computer needs access to:
 ### Install on inventory computer
 
 ```lua
-wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventory-info.lua inventory-info
-wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventory-startup.lua startup
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventory/manager.lua inventory-info
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventory/manager-startup.lua startup
 label set atm10-inventory-info
 startup
 ```
@@ -151,8 +162,8 @@ Remote displays need only an advanced monitor and modem on the same modem
 network/band as the inventory source computer.
 
 ```lua
-wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventory-remote.lua inventory-remote
-wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventory-remote-startup.lua startup
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventory/remote.lua inventory-remote
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventory/remote-startup.lua startup
 label set atm10-inventory-remote
 startup
 ```

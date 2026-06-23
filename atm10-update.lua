@@ -2,41 +2,41 @@ local BASE_URL = "https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/
 local ROLE_FILE = ".atm10-role"
 
 local commonFiles = {
-  { remote = "atm10-status.lua", localName = "atm10-status.lua" },
-  { remote = "atm10-palette.lua", localName = "atm10-palette.lua" },
-  { remote = "atm10-draw.lua", localName = "atm10-draw.lua" },
-  { remote = "atm10-control.lua", localName = "atm10-control.lua" },
+  { remote = "lib/atm10-status.lua", localName = "atm10-status.lua" },
+  { remote = "lib/atm10-palette.lua", localName = "atm10-palette.lua" },
+  { remote = "lib/atm10-draw.lua", localName = "atm10-draw.lua" },
+  { remote = "lib/atm10-control.lua", localName = "atm10-control.lua" },
 }
 
 local roles = {
   ["power-display"] = {
     label = "atm10-power-display",
     files = {
-      { remote = "power-display.lua", localName = "power-display" },
-      { remote = "display-startup.lua", localName = "startup" },
+      { remote = "power/display.lua", localName = "power-display" },
+      { remote = "power/display-startup.lua", localName = "startup" },
     },
   },
   ["power-probe"] = {
     label = "atm10-power-probe",
     files = {
-      { remote = "power-probe.lua", localName = "power-probe" },
-      { remote = "probe-startup.lua", localName = "startup" },
+      { remote = "power/probe.lua", localName = "power-probe" },
+      { remote = "power/probe-startup.lua", localName = "startup" },
     },
   },
   ["inventory-source"] = {
     label = "atm10-inventory-info",
     files = {
-      { remote = "inventory-info.lua", localName = "inventory-info" },
-      { remote = "inventory-startup.lua", localName = "startup" },
-      { remote = "inventory-config-example.lua", localName = "inventory-config-example" },
-      { remote = "inventory-config.lua", localName = "inventory-config", onlyIfMissing = true },
+      { remote = "inventory/manager.lua", localName = "inventory-info" },
+      { remote = "inventory/manager-startup.lua", localName = "startup" },
+      { remote = "inventory/config-example.lua", localName = "inventory-config-example" },
+      { remote = "inventory/config.lua", localName = "inventory-config", onlyIfMissing = true },
     },
   },
   ["inventory-remote"] = {
     label = "atm10-inventory-remote",
     files = {
-      { remote = "inventory-remote.lua", localName = "inventory-remote" },
-      { remote = "inventory-remote-startup.lua", localName = "startup" },
+      { remote = "inventory/remote.lua", localName = "inventory-remote" },
+      { remote = "inventory/remote-startup.lua", localName = "startup" },
     },
   },
 }
@@ -69,6 +69,13 @@ local function writeRole(role)
   file.close()
 end
 
+local function ensureParentDir(path)
+  local dir = fs.getDir(path)
+  if dir and dir ~= "" and not fs.exists(dir) then
+    fs.makeDir(dir)
+  end
+end
+
 local function printUsage()
   print("Usage:")
   print("  update power-display")
@@ -82,6 +89,8 @@ end
 local function download(remote, localName)
   local tmp = localName .. ".new"
   local url = BASE_URL .. remote .. "?v=" .. cacheBust()
+
+  ensureParentDir(localName)
 
   if fs.exists(tmp) then fs.delete(tmp) end
 
