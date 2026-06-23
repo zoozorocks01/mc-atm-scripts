@@ -11,7 +11,7 @@ local CONFIG_FILE = "inventory-config"
 local LEDGER_FILE = ".atm10-stock-ledger"
 local QUEUE_FILE = ".atm10-craft-queue"
 local MANAGED_FILE = ".atm10-managed" -- operator-set quotas (tap-to-manage store)
-local EDIT_STEPS = { 64, 8, 1 }       -- +/- step buttons in the quota editor
+local EDIT_STEPS = { 1, 10, 100, 1000, 10000 } -- cycleable +/- step sizes in the quota editor
 local PAGE_SECONDS = 10
 local PAGES = { "PLAN", "QUEUE", "BROWSE", "PRESETS" }
 local QUEUE_MAX_AGE_MS = 30 * 60 * 1000 -- prune approvals older than 30 minutes
@@ -25,6 +25,7 @@ local stockplan = require("atm10-stockplan")
 local cqueue = require("atm10-queue")
 local craftrunner = require("atm10-craftrunner")
 local managed = require("atm10-managed")
+local balance = require("atm10-balance")
 local presets = require("atm10-presets")
 local console = require("atm10-console")
 
@@ -563,6 +564,28 @@ local function effectiveStockKeeper()
   }
 end
 
+-- Overflow/compress plans: when a managed item exceeds its ceiling, craft the
+-- denser "into" item to drain the surplus. Same row shape as the stock planner,
+-- so they show + approve + craft through the existing path.
+local function planOverflowActions(items)
+  local overflow = managed.overflowItems(managedStore or managed.new())
+  if #overflow == 0 then return {} end
+
+  local stock = config.stockKeeper or {}
+  return balance.plan({
+    items = overflow,
+    now = nowMs(),
+    ledger = readLedger(),
+    cooldownSeconds = stock.cooldownSeconds,
+    maxRequest = stock.maxRequest,
+    resolve = function(name)
+      local item = findStoredItem(items, name)
+      local amount = item and itemAmount(item) or 0
+      return amount, isCraftable(name, item), isItemCrafting(name)
+    end,
+  })
+end
+
 local function planStockActions(items)
   local stock = effectiveStockKeeper()
   if not stock then
@@ -701,6 +724,8 @@ local function scan()
   local managedNames = buildManagedItemNames()
   local listedItems = collectListedItems(items)
   local stockPlans = planStockActions(items)
+  -- append overflow/compress plans so they render + approve like refill rows
+  for _, r in ipairs(planOverflowActions(items)) do stockPlans[#stockPlans + 1] = r end
   local stockTally = uiStatus.tally(stockPlans)
 
   -- keep the in-memory queue tidy: drop now-satisfied items, age out stale ones
@@ -918,7 +943,11 @@ local function drawBrowsePage(data)
   local pg = console.paginate(total, perPage, browsePage)
   browsePage = pg.page -- keep the clamped page
 
-  line(6, "Browse Grid   " .. fmt(total) .. " items   page " .. pg.page .. "/" .. pg.pages, colors.cyan)
+  if editing and editing.pickingInto then
+    line(6, uiDraw.fit("Pick compress target for " .. tostring(editing.label) .. " - tap an item", w), colors.yellow)
+  else
+    line(6, "Browse Grid   " .. fmt(total) .. " items   page " .. pg.page .. "/" .. pg.pages, colors.cyan)
+  end
   local wide = w >= 60
   if wide then
     line(7, uiDraw.fit("ITEM", math.max(16, w - 26)) .. "   STORED   QUOTA", colors.gray)
@@ -984,43 +1013,69 @@ local function renderButtonRow(specs, y)
   return row
 end
 
--- +/- step buttons for a numeric field (keys encode "field:delta").
-local function stepSpecs(field)
-  local specs = {}
-  for _, s in ipairs(EDIT_STEPS) do specs[#specs + 1] = { label = "-" .. s, key = field .. ":-" .. s } end
-  for i = #EDIT_STEPS, 1, -1 do
-    local s = EDIT_STEPS[i]
-    specs[#specs + 1] = { label = "+" .. s, key = field .. ":" .. s }
+-- The next step size in the cycle (1 -> 10 -> ... -> 10000 -> 1).
+local function nextStep(cur)
+  for i, s in ipairs(EDIT_STEPS) do
+    if s == cur then return EDIT_STEPS[(i % #EDIT_STEPS) + 1] end
   end
-  return specs
+  return EDIT_STEPS[1]
+end
+
+-- A "[-] LABEL: value [+]" row that adjusts `field` by the current step size.
+local function renderFieldRow(label, value, field, y)
+  uiDraw.write(monitor, 1, y, "[-]", colors.cyan, colors.black)
+  uiDraw.write(monitor, 5, y, label .. ": " .. fmt(value), colors.white, colors.black)
+  uiDraw.write(monitor, 26, y, "[+]", colors.cyan, colors.black)
+  editorRows[#editorRows + 1] = { y = y, buttons = {
+    { key = field .. ":-", x1 = 1, x2 = 3 },
+    { key = field .. ":+", x1 = 26, x2 = 28 },
+  } }
 end
 
 -- The quota editor for the item in `editing` (opened from the Browse page).
+-- Step size cycles so big late-game numbers (300k) are reachable.
 local function drawEditor()
   local w = (monitor.getSize())
   editorRows = {}
   local e = editing
   local already = managed.has(managedStore or managed.new(), e.name)
 
-  line(6, uiDraw.fit("Set Quota: " .. tostring(e.label), w), colors.cyan)
-  line(7, "stored: " .. fmt(e.amount) .. "    craftable: " .. (e.craftable and "yes" or "NO"),
+  line(6, uiDraw.fit("Quota: " .. tostring(e.label), w), colors.cyan)
+  line(7, "stored: " .. fmt(e.amount) .. "   craftable: " .. (e.craftable and "yes" or "NO"),
     e.craftable and colors.gray or colors.orange)
 
-  line(9, "TARGET:  " .. fmt(e.target) .. "   (craft when stock drops below)", colors.white)
-  renderButtonRow(stepSpecs("target"), 10)
+  uiDraw.write(monitor, 1, 8, "step: " .. fmt(e.step), colors.gray, colors.black)
+  do
+    local r = console.buttonRow({ { label = "STEP", key = "step" } }, 8, 14)
+    for _, b in ipairs(r.buttons) do uiDraw.write(monitor, b.x1, 8, b.text, colors.cyan, colors.black) end
+    editorRows[#editorRows + 1] = r
+  end
 
-  line(12, "CRAFTTO: " .. fmt(e.craftTo) .. "   (refill up to)", colors.white)
-  renderButtonRow(stepSpecs("craftTo"), 13)
+  renderFieldRow("TARGET ", e.target, "target", 10)   -- floor: craft when below
+  renderFieldRow("CRAFTTO", e.craftTo, "craftTo", 11) -- refill up to
+  renderFieldRow("CEILING", e.ceiling, "ceiling", 12) -- cap: compress surplus above (0 = off)
+
+  local intoLabel = e.into and tostring(e.into.label or e.into.name) or "none"
+  line(13, "compress into: " .. intoLabel .. (e.into and ("  (x" .. e.ratio .. ")") or ""), colors.white)
+  renderButtonRow({
+    { label = "SET INTO", key = "setinto" },
+    { label = "x-", key = "ratio:-" },
+    { label = "x+", key = "ratio:+" },
+    { label = "CLR OVF", key = "clrovf" },
+  }, 14)
 
   local actions = { { label = "SAVE", key = "save" } }
   if already then actions[#actions + 1] = { label = "REMOVE", key = "remove" } end
-  if e.craftable then actions[#actions + 1] = { label = "CRAFT x" .. BROWSE_CRAFT_AMOUNT, key = "craftnow" } end
+  if e.craftable then actions[#actions + 1] = { label = "CRAFT", key = "craftnow" } end
   actions[#actions + 1] = { label = "BACK", key = "back" }
-  renderButtonRow(actions, 15)
+  renderButtonRow(actions, 16)
 
-  line(17, already and "Editing an existing quota. SAVE to update." or "New quota. SAVE to add.", colors.gray)
-  if not e.craftable then
-    line(18, "Not craftable now: quota will read NOT CRAFTABLE until a recipe exists.", colors.orange)
+  if e.ceiling > 0 and not e.into then
+    line(18, "Set 'compress into' or the ceiling just caps refills (no compress).", colors.orange)
+  elseif not e.craftable then
+    line(18, "Not craftable now: refill reads NOT CRAFTABLE until a recipe exists.", colors.orange)
+  else
+    line(18, "TARGET=floor (refill below).  CEILING=compress surplus above into the item.", colors.gray)
   end
 end
 
@@ -1095,7 +1150,8 @@ local function draw(data)
   if pageName == "QUEUE" then
     drawQueuePage(data)
   elseif pageName == "BROWSE" then
-    if editing then drawEditor() else drawBrowsePage(data) end
+    -- editing shows the editor, unless we're picking a compress target from the grid
+    if editing and not editing.pickingInto then drawEditor() else drawBrowsePage(data) end
   elseif pageName == "PRESETS" then
     drawPresetsPage(data)
   else
@@ -1160,26 +1216,39 @@ end
 -- from sensible defaults (hold current stock, refill one batch above).
 local function openEditor(entry)
   local existing = managed.get(managedStore or loadManaged(), entry.name)
-  local target, craftTo
+  local target, craftTo, ceiling, into, ratio
   if existing then
     target, craftTo = existing.target, existing.craftTo
+    ceiling, into, ratio = existing.ceiling or 0, existing.into, existing.ratio or 1
   else
     target = math.max(0, math.floor(entry.amount or 0))
     craftTo = target + BROWSE_CRAFT_AMOUNT
+    ceiling, into, ratio = 0, nil, 1
   end
   editing = {
     name = entry.name, label = entry.label, amount = entry.amount or 0,
-    craftable = entry.craftable == true, target = target, craftTo = craftTo,
+    craftable = entry.craftable == true,
+    target = target, craftTo = craftTo, ceiling = ceiling, into = into, ratio = ratio,
+    step = 100, pickingInto = false,
   }
   pageShownAt = nowMs()
 end
 
 local function saveEditing()
-  managedStore = managed.set(managedStore or loadManaged(),
-    { name = editing.name, label = editing.label, target = editing.target, craftTo = editing.craftTo }, nowMs())
+  local store = managedStore or loadManaged()
+  local hasOverflow = editing.ceiling > 0 and editing.into ~= nil
+  managed.set(store, {
+    name = editing.name, label = editing.label,
+    target = editing.target, craftTo = editing.craftTo,
+    ceiling = hasOverflow and editing.ceiling or nil,
+    into = hasOverflow and editing.into or nil,
+    ratio = editing.ratio,
+  }, nowMs())
+  if not hasOverflow then managed.clearOverflow(store, editing.name) end
+  managedStore = store
   saveManaged(managedStore)
-  print("Quota saved: " .. tostring(editing.label) ..
-    "  target " .. editing.target .. " / craftTo " .. editing.craftTo)
+  print("Quota saved: " .. tostring(editing.label) .. "  target " .. editing.target ..
+    (hasOverflow and ("  compress>" .. editing.ceiling .. " -> " .. tostring(editing.into.label)) or ""))
   editing = nil
 end
 
@@ -1213,14 +1282,19 @@ local function handleEditorTouch(x, y)
       if key == "save" then saveEditing()
       elseif key == "remove" then removeEditing()
       elseif key == "back" then editing = nil
+      elseif key == "step" then editing.step = nextStep(editing.step)
+      elseif key == "setinto" then editing.pickingInto = true
+      elseif key == "clrovf" then editing.ceiling, editing.into = 0, nil
+      elseif key == "ratio:-" then editing.ratio = math.max(1, editing.ratio - 1)
+      elseif key == "ratio:+" then editing.ratio = editing.ratio + 1
       elseif key == "craftnow" then
         approve({ name = editing.name, label = editing.label, request = BROWSE_CRAFT_AMOUNT })
         editing = nil
       else
-        local field, delta = string.match(key, "^(%a+):(-?%d+)$")
-        if field then
-          local v = math.max(0, (editing[field] or 0) + (tonumber(delta) or 0))
-          editing[field] = v
+        local field, sign = string.match(key, "^(%a+):([-+])$")
+        if field == "target" or field == "craftTo" or field == "ceiling" then
+          local d = (sign == "-") and -editing.step or editing.step
+          editing[field] = math.max(0, (editing[field] or 0) + d)
         end
       end
       pageShownAt = nowMs()
@@ -1230,7 +1304,33 @@ local function handleEditorTouch(x, y)
   end
 end
 
+-- Touch handling while picking a compress-into target from the Browse grid.
+local function handlePickIntoTouch(x, y)
+  local page = console.tabHit(tabStrip, x, y)
+  if page then setPage(page); renderCurrent(); return end -- tab cancels the whole edit
+
+  for _, nav in ipairs(browseNavRegions) do
+    if y == nav.y and x >= nav.x1 and x <= nav.x2 then
+      browsePage = math.max(1, browsePage + nav.delta)
+      pageShownAt = nowMs(); renderCurrent(); return
+    end
+  end
+
+  local pick = console.rowHit(browseRowRegions, y)
+  if pick then
+    editing.into = { name = pick.name, label = pick.label }
+    editing.pickingInto = false
+    if editing.ceiling <= 0 then editing.ceiling = math.max(0, math.floor(editing.amount or 0)) end
+    pageShownAt = nowMs()
+    renderCurrent()
+  end
+end
+
 local function handleTouch(x, y)
+  if editing and editing.pickingInto then
+    handlePickIntoTouch(x, y)
+    return
+  end
   if editing then
     handleEditorTouch(x, y)
     return

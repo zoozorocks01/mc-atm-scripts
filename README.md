@@ -150,10 +150,20 @@ manual only.
 ### Setting quotas from the console (tap-to-manage)
 
 On the **Browse** page, tap any item to open its quota editor — no registry IDs
-to type. Use the `[-64] [-8] [-1]` / `[+1] [+8] [+64]` buttons to set **TARGET**
-(craft when stock drops below this) and **CRAFTTO** (refill up to this), then
-**SAVE**. `CRAFT x64` queues a one-off craft; `REMOVE` clears the quota; `BACK`
-exits. Items with a quota show `Q <target>` in the grid.
+to type. Pick a **step size** with `[STEP]` (1 → 10 → … → 10000, so big late-game
+numbers are reachable), then use `[-]` / `[+]` on each field:
+
+- **TARGET** — floor: craft when stock drops below this.
+- **CRAFTTO** — refill up to this.
+- **CEILING** — cap: when stock rises above this, *compress* the surplus into a
+  denser item (0 = off). Tap `SET INTO`, then tap the target item on the grid;
+  set the `x` **ratio** (source units per crafted unit, e.g. 9 ingots → 1 block).
+  `CLR OVF` removes the overflow rule.
+
+`SAVE` stores it; `CRAFT` queues a one-off craft; `REMOVE` deletes the quota;
+`BACK` exits. Items with a quota show `Q <target>` in the grid. Overflow/compress
+crafts appear on the Plan page under the **Overflow** category and approve like
+any other craft.
 
 These quotas persist on the computer (`.atm10-managed`) and are **merged into the
 planner alongside your hand-edited `inventory-config`** — the config is never

@@ -27,16 +27,35 @@ function managed.set(store, entry, now)
   local name = entry and entry.name
   if not name then return store end
 
-  local target = math.max(0, math.floor(tonumber(entry.target) or 0))
-  local craftTo = math.max(target, 1, math.floor(tonumber(entry.craftTo) or 0))
+  -- Merge over any existing entry so a partial edit (e.g. floor only) preserves
+  -- the overflow config, and vice versa.
+  local prev = store.items[name] or {}
+  local target = math.max(0, math.floor(tonumber(entry.target) or prev.target or 0))
+  local craftTo = math.max(target, 1, math.floor(tonumber(entry.craftTo) or prev.craftTo or 0))
 
-  store.items[name] = {
+  local item = {
     name = name,
-    label = entry.label or name,
+    label = entry.label or prev.label or name,
     target = target,
     craftTo = craftTo,
-    addedAt = tonumber(now) or (store.items[name] and store.items[name].addedAt) or 0,
+    addedAt = tonumber(now) or prev.addedAt or 0,
   }
+
+  -- Optional overflow/compress config: ceiling + the denser "into" item it
+  -- compresses to, with `ratio` source units per crafted unit. Update if
+  -- provided, otherwise carry forward.
+  local ceiling = entry.ceiling
+  if ceiling == nil then ceiling = prev.ceiling end
+  if ceiling ~= nil then item.ceiling = math.max(0, math.floor(tonumber(ceiling) or 0)) end
+
+  local into = entry.into
+  if into == nil then into = prev.into end
+  if type(into) == "table" and into.name then
+    item.into = { name = into.name, label = into.label or into.name }
+    item.ratio = math.max(1, math.floor(tonumber(entry.ratio) or prev.ratio or 1))
+  end
+
+  store.items[name] = item
   return store
 end
 
@@ -44,6 +63,23 @@ function managed.remove(store, name)
   store = managed.normalize(store)
   store.items[name] = nil
   return store
+end
+
+-- Drop just the overflow/compress config, keeping the floor quota.
+function managed.clearOverflow(store, name)
+  store = managed.normalize(store)
+  local e = store.items[name]
+  if e then e.ceiling, e.into, e.ratio = nil, nil, nil end
+  return store
+end
+
+-- Items that have a configured overflow chain (ceiling + into), for the balancer.
+function managed.overflowItems(store)
+  local out = {}
+  for _, e in ipairs(managed.list(store)) do
+    if e.ceiling and type(e.into) == "table" and e.into.name then out[#out + 1] = e end
+  end
+  return out
 end
 
 function managed.get(store, name)

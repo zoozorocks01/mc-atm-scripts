@@ -15,6 +15,7 @@ local stockplan = require("atm10-stockplan")
 local cqueue = require("atm10-queue")
 local craftrunner = require("atm10-craftrunner")
 local managed = require("atm10-managed")
+local balance = require("atm10-balance")
 local presets = require("atm10-presets")
 local console = require("atm10-console")
 
@@ -418,6 +419,63 @@ local merged = stockplan.plan({ stockKeeper = { enabled = true, categories = { c
 t.check(#merged >= 1, "managed quotas produce plan rows")
 t.eq(merged[1].action, "WOULD CRAFT", "a below-target managed quota plans a craft")
 
+-- overflow config merges with (does not wipe) the floor quota
+local os2 = managed.new()
+managed.set(os2, { name = "iron", label = "Iron", target = 100, craftTo = 200,
+  ceiling = 1000, into = { name = "iron_block", label = "Iron Block" }, ratio = 9 }, 1)
+local ie = managed.get(os2, "iron")
+t.eq(ie.ceiling, 1000, "overflow ceiling stored")
+t.eq(ie.into.name, "iron_block", "overflow into-item stored")
+t.eq(ie.ratio, 9, "overflow ratio stored")
+managed.set(os2, { name = "iron", label = "Iron", target = 150, craftTo = 250 }, 2) -- floor edit only
+t.eq(managed.get(os2, "iron").target, 150, "floor edit updates target")
+t.eq(managed.get(os2, "iron").ceiling, 1000, "floor edit preserves the overflow config")
+t.eq(#managed.overflowItems(os2), 1, "overflowItems lists configured items")
+managed.clearOverflow(os2, "iron")
+t.eq(managed.get(os2, "iron").ceiling, nil, "clearOverflow drops the ceiling")
+t.eq(#managed.overflowItems(os2), 0, "clearOverflow removes it from overflowItems")
+
+-- ---------------------------------------------------------------------------
+print("overflow balancer (compress above ceiling)")
+local function ovItem(over) local i = { name = "dust", label = "Steel Dust",
+  ceiling = 1000, into = { name = "ingot", label = "Steel Ingot" }, ratio = 1 }
+  for k, v in pairs(over or {}) do i[k] = v end; return i end
+
+-- below ceiling -> no compress row
+t.eq(#balance.plan({ items = { ovItem() }, resolve = function() return 500, true, false end }), 0,
+  "no overflow row while below the ceiling")
+
+-- above ceiling, into craftable -> WOULD CRAFT, request = floor(surplus/ratio)
+local br = balance.plan({ items = { ovItem({ ratio = 1 }) }, ledger = { requests = {} },
+  resolve = function(name) if name == "dust" then return 1600, true, false end return 0, true, false end })
+t.eq(br[1].action, "WOULD CRAFT", "surplus over ceiling -> WOULD CRAFT the denser item")
+t.eq(br[1].name, "ingot", "compress row crafts the into-item")
+t.eq(br[1].request, 600, "request = surplus / ratio (1600-1000)/1")
+t.eq(br[1].category, "Overflow", "compress rows are categorised Overflow")
+
+-- ratio 9 (ingots -> blocks)
+local br9 = balance.plan({ items = { ovItem({ name = "ingot", into = { name = "block" }, ceiling = 1000, ratio = 9 } ) },
+  ledger = { requests = {} }, resolve = function() return 1900, true, false end })
+t.eq(br9[1].request, 100, "ratio 9: (1900-1000)/9 = 100 blocks")
+
+-- into not craftable / already crafting
+t.eq((balance.plan({ items = { ovItem() }, resolve = function(n) if n == "dust" then return 2000, true, false end return 0, false, false end })[1]).action,
+  "NOT CRAFTABLE", "uncraftable into-item -> NOT CRAFTABLE")
+t.eq((balance.plan({ items = { ovItem() }, resolve = function(n) if n == "dust" then return 2000, true, false end return 0, true, true end })[1]).action,
+  "ALREADY CRAFTING", "in-flight into-item -> ALREADY CRAFTING")
+
+-- cooldown keyed by the into item (shared with refills)
+local brc = balance.plan({ items = { ovItem() }, now = 100000, cooldownSeconds = 300,
+  ledger = { requests = { ingot = { requestedAt = 40000 } } },
+  resolve = function(n) if n == "dust" then return 2000, true, false end return 0, true, false end })
+t.eq(brc[1].action, "ON COOLDOWN", "recent into-item request -> ON COOLDOWN")
+
+-- maxRequest cap
+local brm = balance.plan({ items = { ovItem({ maxRequest = 50 }) }, ledger = { requests = {} },
+  resolve = function(n) if n == "dust" then return 5000, true, false end return 0, true, false end })
+t.eq(brm[1].request, 50, "compress request capped to maxRequest")
+t.check(brm[1].capped == true, "capped flag set on compress row")
+
 -- ---------------------------------------------------------------------------
 print("quota presets (Zoozo bundles)")
 local plist = presets.list()
@@ -487,8 +545,8 @@ print("all scripts compile")
 local luaFiles = {
   "lib/atm10-status.lua", "lib/atm10-draw.lua", "lib/atm10-palette.lua",
   "lib/atm10-control.lua", "lib/atm10-stockplan.lua", "lib/atm10-queue.lua",
-  "lib/atm10-craftrunner.lua", "lib/atm10-managed.lua", "lib/atm10-presets.lua",
-  "lib/atm10-console.lua", "atm10-console.lua",
+  "lib/atm10-craftrunner.lua", "lib/atm10-managed.lua", "lib/atm10-balance.lua",
+  "lib/atm10-presets.lua", "lib/atm10-console.lua", "atm10-console.lua",
   "inventory/manager.lua", "inventory/remote.lua",
   "inventory/config.lua", "inventory/config-example.lua",
   "power/display.lua", "power/probe.lua",
@@ -496,7 +554,8 @@ local luaFiles = {
   "inventory-info.lua", "inventory-remote.lua", "power-display.lua",
   "atm10-status.lua", "atm10-palette.lua", "atm10-control.lua",
   "atm10-draw.lua", "atm10-stockplan.lua", "atm10-queue.lua",
-  "atm10-craftrunner.lua", "atm10-managed.lua", "atm10-presets.lua",
+  "atm10-craftrunner.lua", "atm10-managed.lua", "atm10-balance.lua",
+  "atm10-presets.lua",
 }
 for _, f in ipairs(luaFiles) do
   local chunk, err = loadfile(f)
