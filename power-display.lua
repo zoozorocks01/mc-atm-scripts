@@ -20,6 +20,12 @@ local function pickTextScale()
   for _, scale in ipairs(scales) do
     mon.setTextScale(scale)
     local w, h = mon.getSize()
+    if w >= 34 and h >= 15 then return scale end
+  end
+
+  for _, scale in ipairs(scales) do
+    mon.setTextScale(scale)
+    local w, h = mon.getSize()
     if w >= 34 and h >= 13 then return scale end
   end
 
@@ -97,7 +103,10 @@ local function drawGraph(top, height, pctHistory)
   for x = 1, width do
     local sample = pctHistory[#pctHistory - width + x]
     local pct = sample or 0
-    local filled = math.floor((pct / 100) * height)
+    local filled = 0
+    if sample and pct > 0 then
+      filled = math.max(1, math.ceil((pct / 100) * height))
+    end
 
     for y = 0, height - 1 do
       mon.setCursorPos(left + x - 1, top + height - y - 1)
@@ -109,6 +118,26 @@ local function drawGraph(top, height, pctHistory)
       mon.write(" ")
     end
   end
+  mon.setBackgroundColor(colors.black)
+end
+
+local function drawCompactGraph(y, pctHistory)
+  local w = mon.getSize()
+  if y < 1 then return end
+
+  mon.setCursorPos(1, y)
+  mon.clearLine()
+
+  for x = 1, w do
+    local sample = pctHistory[#pctHistory - w + x]
+    if sample then
+      mon.setBackgroundColor(colorForPercent(sample))
+    else
+      mon.setBackgroundColor(colors.black)
+    end
+    mon.write(" ")
+  end
+
   mon.setBackgroundColor(colors.black)
 end
 
@@ -149,11 +178,13 @@ local function draw()
 
   line(12, "Status: " .. status .. "   age " .. math.floor(age) .. "s", statusColor)
 
-  if h >= 16 then
-    line(14, "Stored Energy History", colors.cyan)
-    local graphTop = 15
-    local graphHeight = h - graphTop
+  if h >= 15 then
+    line(13, "Stored Energy History", colors.cyan)
+    local graphTop = 14
+    local graphHeight = h - 13
     drawGraph(graphTop, graphHeight, history)
+  elseif h >= 13 then
+    drawCompactGraph(13, history)
   else
     line(h, "Scale " .. tostring(textScale) .. " auto", colors.gray)
   end
