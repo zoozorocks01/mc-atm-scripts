@@ -7,6 +7,9 @@ status.CRAFTING = "CRAFTING"
 status.COOLDOWN = "COOLDOWN"
 status.NO_RECIPE = "NO_RECIPE"
 status.BLOCKED = "BLOCKED"
+status.CRITICAL = "CRITICAL"
+status.DRAINING = "DRAINING"
+status.STALE = "STALE"
 status.DISABLED = "DISABLED"
 status.UNKNOWN = "UNKNOWN"
 
@@ -24,6 +27,10 @@ local byAction = {
   ["NO_RECIPE"] = status.NO_RECIPE,
   ["BLOCKED"] = status.BLOCKED,
   ["CYCLE CAP"] = status.BLOCKED,
+  ["CRITICAL"] = status.CRITICAL,
+  ["DRAINING"] = status.DRAINING,
+  ["STALE"] = status.STALE,
+  ["STALE DATA"] = status.STALE,
   ["DISABLED"] = status.DISABLED,
   ["UNKNOWN"] = status.UNKNOWN,
 }
@@ -36,6 +43,9 @@ local glyphs = {
   COOLDOWN = ".",
   NO_RECIPE = "x",
   BLOCKED = "#",
+  CRITICAL = "x",
+  DRAINING = "v",
+  STALE = "?",
   DISABLED = "-",
   UNKNOWN = "?",
 }
@@ -48,6 +58,9 @@ local labels = {
   COOLDOWN = "COOLDOWN",
   NO_RECIPE = "NO RECIPE",
   BLOCKED = "BLOCKED",
+  CRITICAL = "CRITICAL",
+  DRAINING = "DRAINING",
+  STALE = "STALE",
   DISABLED = "DISABLED",
   UNKNOWN = "UNKNOWN",
 }
@@ -60,6 +73,9 @@ local colorsByStatus = {
   COOLDOWN = colors.lightBlue,
   NO_RECIPE = colors.red,
   BLOCKED = colors.orange,
+  CRITICAL = colors.red,
+  DRAINING = colors.yellow,
+  STALE = colors.orange,
   DISABLED = colors.gray,
   UNKNOWN = colors.lightGray,
 }
@@ -71,9 +87,12 @@ local severity = {
   COOLDOWN = 2,
   CRAFTING = 2,
   WOULD = 3,
+  DRAINING = 3,
   LOW = 4,
   BLOCKED = 5,
+  STALE = 5,
   NO_RECIPE = 6,
+  CRITICAL = 8,
 }
 
 function status.normalize(value)
@@ -126,6 +145,9 @@ function status.tally(rows)
     NO_RECIPE = 0,
     BLOCKED = 0,
     LOW = 0,
+    CRITICAL = 0,
+    DRAINING = 0,
+    STALE = 0,
     DISABLED = 0,
     UNKNOWN = 0,
   }

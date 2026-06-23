@@ -27,6 +27,15 @@ t.eq(status.worst({ "OK", "NO_RECIPE", "BLOCKED" }), status.NO_RECIPE, "worst pi
 local tally = status.tally({ { action = "WOULD CRAFT" }, { action = "OK" }, { status = "OK" } })
 t.eq(tally.WOULD, 1, "tally WOULD = 1")
 t.eq(tally.OK, 2, "tally OK = 2")
+-- power-side states (PR5 vocabulary): additive, existing entries unchanged
+t.eq(status.normalize("STALE DATA"), status.STALE, "STALE DATA -> STALE")
+t.eq(status.normalize("CRITICAL"), status.CRITICAL, "CRITICAL recognized")
+t.eq(status.normalize("DRAINING"), status.DRAINING, "DRAINING recognized")
+t.check(status.color(status.CRITICAL) == colors.red, "CRITICAL color red")
+t.check(status.color(status.DRAINING) == colors.yellow, "DRAINING color yellow")
+t.check(status.color(status.STALE) == colors.orange, "STALE color orange")
+t.eq(status.worst({ "OK", "CRITICAL", "NO_RECIPE", "BLOCKED" }), status.CRITICAL, "CRITICAL is most severe")
+t.eq(status.normalize("NOT CRAFTABLE"), status.NO_RECIPE, "existing vocab still intact after extension")
 
 -- ---------------------------------------------------------------------------
 print("control gate (safety)")
