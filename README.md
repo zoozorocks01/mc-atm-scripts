@@ -83,7 +83,9 @@ label set atm10-inventory-info
 startup
 ```
 
-Low-stock watches live at the top of `inventory-info.lua` in `LOW_STOCK`.
+Low-stock watches and stock keeper dry-run settings live in `inventory-config`.
+The updater installs that config only if it is missing, so your edited values
+are preserved.
 
 ### Install on remote inventory display
 

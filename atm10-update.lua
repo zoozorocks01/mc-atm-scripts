@@ -21,6 +21,7 @@ local roles = {
     files = {
       { remote = "inventory-info.lua", localName = "inventory-info" },
       { remote = "inventory-startup.lua", localName = "startup" },
+      { remote = "inventory-config.lua", localName = "inventory-config", onlyIfMissing = true },
     },
   },
   ["inventory-remote"] = {
@@ -79,6 +80,10 @@ local function download(remote, localName)
   fs.move(tmp, localName)
 end
 
+local function shouldSkip(file)
+  return file.onlyIfMissing and fs.exists(file.localName)
+end
+
 local role = args[1] or readRole()
 if not role or role == "help" or role == "--help" then
   printUsage()
@@ -96,7 +101,11 @@ writeRole(role)
 print("ATM10 role: " .. role)
 
 for _, file in ipairs(config.files) do
-  download(file.remote, file.localName)
+  if shouldSkip(file) then
+    print("Keeping existing " .. file.localName)
+  else
+    download(file.remote, file.localName)
+  end
 end
 
 download("atm10-update.lua", "update")

@@ -7,12 +7,24 @@ local TOP_ITEM_COUNT = 8
 local BROADCAST_ENABLED = true
 local BROADCAST_MODEM_SIDE = "auto"
 local BROADCAST_PROTOCOL = "atm10-inventory-v1"
+local CONFIG_FILE = "inventory-config"
+local LEDGER_FILE = ".atm10-stock-ledger"
 
-local LOW_STOCK = {
-  { label = "Glass", name = "minecraft:glass", target = 512 },
-  { label = "Redstone", name = "minecraft:redstone", target = 1024 },
-  { label = "Iron Ingots", name = "minecraft:iron_ingot", target = 512 },
-  { label = "Quartz", name = "minecraft:quartz", target = 256 },
+local DEFAULT_CONFIG = {
+  mode = "dry-run",
+  lowStock = {
+    { label = "Glass", name = "minecraft:glass", target = 512 },
+    { label = "Redstone", name = "minecraft:redstone", target = 1024 },
+    { label = "Iron Ingots", name = "minecraft:iron_ingot", target = 512 },
+    { label = "Quartz", name = "minecraft:quartz", target = 256 },
+  },
+  stockKeeper = {
+    enabled = false,
+    cooldownSeconds = 300,
+    maxCraftsPerCycle = 2,
+    maxRequest = 4096,
+    items = {},
+  },
 }
 
 local monitor = nil
@@ -20,6 +32,9 @@ local bridge = nil
 local bridgeName = nil
 local status = "Starting"
 local broadcastReady = false
+local config = DEFAULT_CONFIG
+local configError = nil
+local ledgerError = nil
 
 local function peripheralTypeMatches(actual, expected)
   if actual == expected then return true end
@@ -55,6 +70,96 @@ local function call(target, method, ...)
     if ok then return result, extra end
   end
   return nil
+end
+
+local function nowMs()
+  if os.epoch then return os.epoch("utc") end
+  return math.floor(os.clock() * 1000)
+end
+
+local function shallowCopyList(list)
+  local copy = {}
+  if type(list) ~= "table" then return copy end
+  for i, item in ipairs(list) do copy[i] = item end
+  return copy
+end
+
+local function normalizeConfig(raw)
+  local cfg = type(raw) == "table" and raw or {}
+
+  if cfg.mode ~= "dry-run" then
+    cfg.mode = "dry-run"
+    configError = "Mode forced to dry-run"
+  end
+
+  if type(cfg.lowStock) ~= "table" then
+    cfg.lowStock = shallowCopyList(DEFAULT_CONFIG.lowStock)
+  end
+
+  if type(cfg.stockKeeper) ~= "table" then cfg.stockKeeper = {} end
+  if cfg.stockKeeper.enabled ~= true then cfg.stockKeeper.enabled = false end
+  cfg.stockKeeper.cooldownSeconds = tonumber(cfg.stockKeeper.cooldownSeconds) or 300
+  cfg.stockKeeper.maxCraftsPerCycle = tonumber(cfg.stockKeeper.maxCraftsPerCycle) or 2
+  cfg.stockKeeper.maxRequest = tonumber(cfg.stockKeeper.maxRequest) or 4096
+  if type(cfg.stockKeeper.items) ~= "table" then cfg.stockKeeper.items = {} end
+
+  return cfg
+end
+
+local function loadConfig()
+  configError = nil
+
+  if not fs.exists(CONFIG_FILE) then
+    config = normalizeConfig(DEFAULT_CONFIG)
+    return
+  end
+
+  local ok, loaded = pcall(dofile, CONFIG_FILE)
+  if not ok then
+    config = normalizeConfig(DEFAULT_CONFIG)
+    configError = "Config error: " .. tostring(loaded)
+    return
+  end
+
+  config = normalizeConfig(loaded)
+end
+
+local function readLedger()
+  ledgerError = nil
+
+  if not fs.exists(LEDGER_FILE) then
+    return { requests = {} }
+  end
+
+  local file = fs.open(LEDGER_FILE, "r")
+  if not file then
+    ledgerError = "Ledger unreadable"
+    return nil
+  end
+
+  local text = file.readAll()
+  file.close()
+
+  local ok, data = pcall(textutils.unserialize, text)
+  if not ok or type(data) ~= "table" or type(data.requests) ~= "table" then
+    ledgerError = "Ledger corrupt; stock keeper blocked"
+    return nil
+  end
+
+  return data
+end
+
+local function writeLedger(data)
+  -- Reserved for the future manual/auto craft path. Dry-run planning never writes.
+  local tmp = LEDGER_FILE .. ".tmp"
+  local file = fs.open(tmp, "w")
+  if not file then return false, "Ledger tmp open failed" end
+  file.write(textutils.serialize(data))
+  file.close()
+
+  if fs.exists(LEDGER_FILE) then fs.delete(LEDGER_FILE) end
+  fs.move(tmp, LEDGER_FILE)
+  return true
 end
 
 local function openBroadcastModems()
@@ -188,7 +293,96 @@ local function isCraftable(registryName, item)
   return result == true
 end
 
+local function isItemCrafting(registryName)
+  local result = call(bridge, "isItemCrafting", { name = registryName })
+  if result ~= nil then return result == true end
+
+  result = call(bridge, "isCrafting", { name = registryName })
+  if result ~= nil then return result == true end
+
+  return false
+end
+
+local function planStockActions(items)
+  local plans = {}
+  local stock = config.stockKeeper or {}
+
+  if stock.enabled ~= true then
+    return plans
+  end
+
+  local ledger = readLedger()
+  if not ledger then
+    plans[#plans + 1] = { action = "BLOCKED", label = "Ledger", reason = ledgerError or "ledger unavailable" }
+    return plans
+  end
+
+  local now = nowMs()
+  local cooldownMs = (tonumber(stock.cooldownSeconds) or 300) * 1000
+  local cycleLimit = tonumber(stock.maxCraftsPerCycle) or 2
+  local cycleWouldCraft = 0
+
+  for _, target in ipairs(stock.items or {}) do
+    local item = findStoredItem(items, target.name)
+    local amount = item and itemAmount(item) or 0
+    local label = target.label or target.name
+    local trigger = tonumber(target.target) or 0
+    local craftTo = tonumber(target.craftTo) or trigger
+    local maxRequest = tonumber(target.maxRequest) or tonumber(stock.maxRequest) or 4096
+
+    if amount >= trigger then
+      plans[#plans + 1] = { action = "OK", label = label, amount = amount, target = trigger }
+    elseif not isCraftable(target.name, item) then
+      plans[#plans + 1] = { action = "NOT CRAFTABLE", label = label, amount = amount, target = trigger }
+    elseif isItemCrafting(target.name) then
+      plans[#plans + 1] = { action = "ALREADY CRAFTING", label = label, amount = amount, target = trigger }
+    else
+      local record = ledger.requests[target.name]
+      local age = record and record.requestedAt and (now - record.requestedAt) or nil
+
+      if record and age and age < cooldownMs then
+        plans[#plans + 1] = {
+          action = "ON COOLDOWN",
+          label = label,
+          amount = amount,
+          target = trigger,
+          secondsLeft = math.ceil((cooldownMs - age) / 1000),
+        }
+      elseif cycleWouldCraft >= cycleLimit then
+        plans[#plans + 1] = { action = "CYCLE CAP", label = label, amount = amount, target = trigger }
+      else
+        local request = math.max(0, craftTo - amount)
+        local capped = false
+        if request > maxRequest then
+          request = maxRequest
+          capped = true
+        end
+
+        cycleWouldCraft = cycleWouldCraft + 1
+        plans[#plans + 1] = {
+          action = "WOULD CRAFT",
+          label = label,
+          amount = amount,
+          target = trigger,
+          craftTo = craftTo,
+          request = request,
+          capped = capped,
+        }
+      end
+    end
+  end
+
+  return plans
+end
+
+local function requestCraft(_plan)
+  -- Single future craft chokepoint. There is intentionally no craftItem call in this build.
+  error("Crafting is disabled in this dry-run build", 0)
+end
+
 local function scan()
+  loadConfig()
+
   if not monitor then
     monitor = findPeripheral({ "monitor" }, MONITOR_SIDE)
     if monitor then pickTextScale() end
@@ -223,7 +417,7 @@ local function scan()
   table.sort(sorted, function(a, b) return itemAmount(a) > itemAmount(b) end)
 
   local warnings = {}
-  for _, target in ipairs(LOW_STOCK) do
+  for _, target in ipairs(config.lowStock or {}) do
     local item = findStoredItem(items, target.name)
     local amount = item and itemAmount(item) or 0
     if amount < target.target then
@@ -250,6 +444,10 @@ local function scan()
     storedEnergy = call(bridge, "getStoredEnergy") or call(bridge, "getEnergyStorage"),
     energyCapacity = call(bridge, "getEnergyCapacity") or call(bridge, "getMaxEnergyStorage"),
     energyUsage = call(bridge, "getEnergyUsage"),
+    configMode = config.mode or "dry-run",
+    configError = configError,
+    ledgerError = ledgerError,
+    stockPlans = planStockActions(items),
   }
 end
 
@@ -286,6 +484,10 @@ local function broadcast(data)
     storedEnergy = data.storedEnergy,
     energyCapacity = data.energyCapacity,
     energyUsage = data.energyUsage,
+    configMode = data.configMode,
+    configError = data.configError,
+    ledgerError = data.ledgerError,
+    stockPlans = data.stockPlans,
   }, BROADCAST_PROTOCOL)
 end
 
@@ -332,6 +534,12 @@ local function draw(data)
     line(10, "RS Usage:  " .. fmt(data.energyUsage) .. " FE/t", colors.white)
   end
 
+  if data.configError then
+    line(11, data.configError, colors.orange)
+  else
+    line(11, "Mode: " .. tostring(data.configMode or "dry-run"), colors.gray)
+  end
+
   line(12, "Low Stock", colors.cyan)
   if #data.warnings == 0 then
     line(13, "All watched items are above target.", colors.lime)
@@ -344,7 +552,31 @@ local function draw(data)
   end
 
   local _, h = monitor.getSize()
-  local topY = 18
+  local planY = 18
+  line(planY, "Stock Keeper Plan", colors.cyan)
+  local planRows = math.min(4, h - planY)
+  for i = 1, planRows do
+    local plan = data.stockPlans and data.stockPlans[i]
+    if plan then
+      local color = colors.gray
+      local text = plan.action .. " " .. tostring(plan.label)
+      if plan.action == "WOULD CRAFT" then
+        color = colors.lime
+        text = text .. " +" .. fmt(plan.request)
+        if plan.capped then text = text .. " capped" end
+      elseif plan.action == "NOT CRAFTABLE" or plan.action == "BLOCKED" then
+        color = colors.red
+      elseif plan.action == "ON COOLDOWN" then
+        color = colors.yellow
+        text = text .. " " .. tostring(plan.secondsLeft or "?") .. "s"
+      elseif plan.action == "ALREADY CRAFTING" then
+        color = colors.orange
+      end
+      line(planY + i, text, color)
+    end
+  end
+
+  local topY = 24
   if h < topY + 2 then topY = 14 + math.min(4, #data.warnings) end
 
   line(topY, "Top Stored Items", colors.cyan)

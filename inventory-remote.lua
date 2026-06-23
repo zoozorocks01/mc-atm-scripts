@@ -177,6 +177,12 @@ local function draw(data)
     line(10, "RS Usage:  " .. fmt(data.energyUsage) .. " FE/t", colors.white)
   end
 
+  if data.configError then
+    line(11, data.configError, colors.orange)
+  else
+    line(11, "Mode: " .. tostring(data.configMode or "dry-run"), colors.gray)
+  end
+
   line(12, "Low Stock", colors.cyan)
   if not data.warnings or #data.warnings == 0 then
     line(13, "All watched items are above target.", colors.lime)
@@ -189,7 +195,31 @@ local function draw(data)
   end
 
   local _, h = monitor.getSize()
-  local topY = 18
+  local planY = 18
+  line(planY, "Stock Keeper Plan", colors.cyan)
+  local planRows = math.min(4, h - planY)
+  for i = 1, planRows do
+    local plan = data.stockPlans and data.stockPlans[i]
+    if plan then
+      local color = colors.gray
+      local text = plan.action .. " " .. tostring(plan.label)
+      if plan.action == "WOULD CRAFT" then
+        color = colors.lime
+        text = text .. " +" .. fmt(plan.request)
+        if plan.capped then text = text .. " capped" end
+      elseif plan.action == "NOT CRAFTABLE" or plan.action == "BLOCKED" then
+        color = colors.red
+      elseif plan.action == "ON COOLDOWN" then
+        color = colors.yellow
+        text = text .. " " .. tostring(plan.secondsLeft or "?") .. "s"
+      elseif plan.action == "ALREADY CRAFTING" then
+        color = colors.orange
+      end
+      line(planY + i, text, color)
+    end
+  end
+
+  local topY = 24
   if h < topY + 2 then topY = 14 + math.min(4, data.warnings and #data.warnings or 0) end
 
   line(topY, "Top Stored Items", colors.cyan)
