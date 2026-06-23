@@ -11,6 +11,7 @@ local status = require("atm10-status")
 local control = require("atm10-control")
 local palette = require("atm10-palette")
 local draw = require("atm10-draw")
+local stockplan = require("atm10-stockplan")
 
 -- ---------------------------------------------------------------------------
 print("status vocabulary")
@@ -136,5 +137,76 @@ t.check(draw.percentColor(10) == colors.red, "percentColor <15 -> red")
 t.check(draw.percentColor(20) == colors.orange, "percentColor <35 -> orange")
 t.check(draw.percentColor(50) == colors.yellow, "percentColor <65 -> yellow")
 t.check(draw.percentColor(80) == colors.green, "percentColor >=65 -> green")
+
+-- ---------------------------------------------------------------------------
+print("stock planner (dry-run classification)")
+local emptyLedger = { requests = {} }
+local function SK(items, extra)
+  local s = { enabled = true, cooldownSeconds = 300, maxCraftsPerCycle = 2, maxRequest = 4096, items = items }
+  for k, v in pairs(extra or {}) do s[k] = v end
+  return s
+end
+
+-- disabled keeper plans nothing (and never consults the ledger)
+t.eq(#stockplan.plan({ stockKeeper = { enabled = false } }), 0, "disabled keeper -> no plans")
+
+-- enabled with no ledger -> single BLOCKED row (fail closed)
+local blocked = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 10 } }), ledger = nil, ledgerError = "corrupt" })
+t.eq(#blocked, 1, "nil ledger -> one row")
+t.eq(blocked[1].action, "BLOCKED", "nil ledger -> BLOCKED (no crafting attempted)")
+t.eq(blocked[1].reason, "corrupt", "BLOCKED carries the ledger error")
+
+-- at/above target -> OK
+local okP = stockplan.plan({ stockKeeper = SK({ { name = "g", target = 100 } }), ledger = emptyLedger,
+  resolve = function() return 150, true, false end })
+t.eq(okP[1].action, "OK", "amount >= target -> OK")
+
+-- below target, not craftable -> NOT CRAFTABLE
+local ncP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100 } }), ledger = emptyLedger,
+  resolve = function() return 0, false, false end })
+t.eq(ncP[1].action, "NOT CRAFTABLE", "no recipe -> NOT CRAFTABLE")
+
+-- below target, craftable, already crafting -> ALREADY CRAFTING
+local acP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100 } }), ledger = emptyLedger,
+  resolve = function() return 0, true, true end })
+t.eq(acP[1].action, "ALREADY CRAFTING", "in-flight craft -> ALREADY CRAFTING")
+
+-- below target, craftable, idle, no record -> WOULD CRAFT, request = craftTo - amount
+local wcP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100, craftTo = 256 } }), ledger = emptyLedger,
+  resolve = function() return 40, true, false end })
+t.eq(wcP[1].action, "WOULD CRAFT", "deficit -> WOULD CRAFT")
+t.eq(wcP[1].request, 216, "request = craftTo - amount (256-40)")
+t.check(wcP[1].capped == false, "not capped below maxRequest")
+t.eq(wcP[1].category, "Stock Keeper", "items-only config falls back to Stock Keeper category")
+
+-- request capped at maxRequest
+local capP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100, craftTo = 10000, maxRequest = 500 } }), ledger = emptyLedger,
+  resolve = function() return 0, true, false end })
+t.eq(capP[1].request, 500, "request capped to maxRequest")
+t.check(capP[1].capped == true, "capped flag set")
+
+-- recent ledger record within cooldown -> ON COOLDOWN with secondsLeft
+local cdP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100, craftTo = 200 } }),
+  now = 100000, ledger = { requests = { x = { requestedAt = 40000 } } },
+  resolve = function() return 0, true, false end })
+t.eq(cdP[1].action, "ON COOLDOWN", "recent request -> ON COOLDOWN (no duplicate craft)")
+t.eq(cdP[1].secondsLeft, 240, "secondsLeft = ceil((300000-60000)/1000)")
+
+-- expired cooldown -> WOULD CRAFT again
+local cdOld = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100, craftTo = 200 } }),
+  now = 1000000, ledger = { requests = { x = { requestedAt = 600000 } } },
+  resolve = function() return 0, true, false end })
+t.eq(cdOld[1].action, "WOULD CRAFT", "expired cooldown -> WOULD CRAFT")
+
+-- cycle cap: 3 deficits, cap 2 -> third is CYCLE CAP
+local cyc = stockplan.plan({ stockKeeper = SK({
+    { name = "a", target = 10, craftTo = 20 },
+    { name = "b", target = 10, craftTo = 20 },
+    { name = "c", target = 10, craftTo = 20 },
+  }, { maxCraftsPerCycle = 2 }), ledger = emptyLedger,
+  resolve = function() return 0, true, false end })
+t.eq(cyc[1].action, "WOULD CRAFT", "1st within cycle cap")
+t.eq(cyc[2].action, "WOULD CRAFT", "2nd within cycle cap")
+t.eq(cyc[3].action, "CYCLE CAP", "3rd exceeds cycle cap")
 
 os.exit(t.summary() and 0 or 1)

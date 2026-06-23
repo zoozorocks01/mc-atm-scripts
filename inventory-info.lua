@@ -13,6 +13,7 @@ local LEDGER_FILE = ".atm10-stock-ledger"
 local uiStatus = require("atm10-status")
 local uiDraw = require("atm10-draw")
 local uiPalette = require("atm10-palette")
+local stockplan = require("atm10-stockplan")
 
 local DEFAULT_CONFIG = {
   mode = "dry-run",
@@ -476,85 +477,26 @@ local function summarizeCategories(plans)
 end
 
 local function planStockActions(items)
-  local plans = {}
   local stock = config.stockKeeper or {}
-
   if stock.enabled ~= true then
-    return plans
+    return {}
   end
 
+  -- readLedger() records ledgerError on corruption, so call it only when the
+  -- stock keeper is enabled: a disabled keeper must not surface a ledger error.
   local ledger = readLedger()
-  if not ledger then
-    plans[#plans + 1] = { action = "BLOCKED", label = "Ledger", reason = ledgerError or "ledger unavailable" }
-    return plans
-  end
 
-  local now = nowMs()
-  local cooldownMs = (tonumber(stock.cooldownSeconds) or 300) * 1000
-  local cycleLimit = tonumber(stock.maxCraftsPerCycle) or 2
-  local cycleWouldCraft = 0
-
-  local categories = stock.categories or {}
-  if #categories == 0 and type(stock.items) == "table" then
-    categories = { { label = "Stock Keeper", items = stock.items } }
-  end
-
-  for _, category in ipairs(categories) do
-    local categoryLabel = category.label or "Stock Keeper"
-    for _, target in ipairs(category.items or {}) do
-      local item = findStoredItem(items, target.name)
+  return stockplan.plan({
+    stockKeeper = stock,
+    now = nowMs(),
+    ledger = ledger,
+    ledgerError = ledgerError,
+    resolve = function(name)
+      local item = findStoredItem(items, name)
       local amount = item and itemAmount(item) or 0
-      local label = target.label or target.name
-      local trigger = tonumber(target.target) or 0
-      local craftTo = tonumber(target.craftTo) or trigger
-      local maxRequest = tonumber(target.maxRequest) or tonumber(stock.maxRequest) or 4096
-
-      if amount >= trigger then
-        plans[#plans + 1] = { action = "OK", category = categoryLabel, label = label, amount = amount, target = trigger }
-      elseif not isCraftable(target.name, item) then
-        plans[#plans + 1] = { action = "NOT CRAFTABLE", category = categoryLabel, label = label, amount = amount, target = trigger }
-      elseif isItemCrafting(target.name) then
-        plans[#plans + 1] = { action = "ALREADY CRAFTING", category = categoryLabel, label = label, amount = amount, target = trigger }
-      else
-        local record = ledger.requests[target.name]
-        local age = record and record.requestedAt and (now - record.requestedAt) or nil
-
-        if record and age and age < cooldownMs then
-          plans[#plans + 1] = {
-            action = "ON COOLDOWN",
-            category = categoryLabel,
-            label = label,
-            amount = amount,
-            target = trigger,
-            secondsLeft = math.ceil((cooldownMs - age) / 1000),
-          }
-        elseif cycleWouldCraft >= cycleLimit then
-          plans[#plans + 1] = { action = "CYCLE CAP", category = categoryLabel, label = label, amount = amount, target = trigger }
-        else
-          local request = math.max(0, craftTo - amount)
-          local capped = false
-          if request > maxRequest then
-            request = maxRequest
-            capped = true
-          end
-
-          cycleWouldCraft = cycleWouldCraft + 1
-          plans[#plans + 1] = {
-            action = "WOULD CRAFT",
-            category = categoryLabel,
-            label = label,
-            amount = amount,
-            target = trigger,
-            craftTo = craftTo,
-            request = request,
-            capped = capped,
-          }
-        end
-      end
-    end
-  end
-
-  return plans
+      return amount, isCraftable(name, item), isItemCrafting(name)
+    end,
+  })
 end
 
 local function requestCraft(_plan)
