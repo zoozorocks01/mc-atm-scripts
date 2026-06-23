@@ -10,6 +10,10 @@ local BROADCAST_PROTOCOL = "atm10-inventory-v1"
 local CONFIG_FILE = "inventory-config"
 local LEDGER_FILE = ".atm10-stock-ledger"
 
+local uiStatus = require("atm10-status")
+local uiDraw = require("atm10-draw")
+local uiPalette = require("atm10-palette")
+
 local DEFAULT_CONFIG = {
   mode = "dry-run",
   itemDefaults = {
@@ -40,6 +44,7 @@ local broadcastReady = false
 local config = DEFAULT_CONFIG
 local configError = nil
 local ledgerError = nil
+local paletteApplied = false
 
 local function peripheralTypeMatches(actual, expected)
   if actual == expected then return true end
@@ -236,6 +241,11 @@ end
 
 local function pickTextScale()
   if not monitor then return end
+  if not paletteApplied then
+    pcall(uiPalette.apply, monitor, "controlRoom")
+    paletteApplied = true
+  end
+
   if type(TEXT_SCALE) == "number" then
     monitor.setTextScale(TEXT_SCALE)
     return
@@ -252,13 +262,7 @@ local function pickTextScale()
 end
 
 local function line(y, text, color)
-  local _, h = monitor.getSize()
-  if y > h then return end
-  monitor.setCursorPos(1, y)
-  monitor.setBackgroundColor(colors.black)
-  monitor.setTextColor(color or colors.white)
-  monitor.clearLine()
-  monitor.write(text)
+  uiDraw.line(monitor, y, text, color or colors.white, colors.black)
 end
 
 local function bar(y, label, used, total)
@@ -336,6 +340,69 @@ local function countKeys(map)
   return count
 end
 
+local function rjust(value, width)
+  local text = tostring(value or "")
+  width = math.max(0, tonumber(width) or 0)
+  if #text >= width then return string.sub(text, 1, width) end
+  return string.rep(" ", width - #text) .. text
+end
+
+local function planDelta(plan)
+  if plan.action == "WOULD CRAFT" then
+    local text = "+" .. fmt(plan.request)
+    if plan.capped then text = text .. "*" end
+    return text
+  end
+
+  if plan.action == "ON COOLDOWN" then
+    return tostring(plan.secondsLeft or "?") .. "s"
+  end
+
+  return "-"
+end
+
+local function formatCategorySummary(summary, width)
+  local text = tostring(summary.label or "?") ..
+    ": +" .. fmt(summary.ok) ..
+    " >" .. fmt(summary.would) ..
+    " ~" .. fmt(summary.crafting) ..
+    " ." .. fmt(summary.cooldown) ..
+    " x" .. fmt(summary.noRecipe) ..
+    " #" .. fmt(summary.blocked)
+
+  return uiDraw.fit(text, width)
+end
+
+local function categorySummaryStatus(summary)
+  if (summary.noRecipe or 0) > 0 then return uiStatus.NO_RECIPE end
+  if (summary.blocked or 0) > 0 then return uiStatus.BLOCKED end
+  if (summary.would or 0) > 0 then return uiStatus.WOULD end
+  if (summary.crafting or 0) > 0 then return uiStatus.CRAFTING end
+  if (summary.cooldown or 0) > 0 then return uiStatus.COOLDOWN end
+  return uiStatus.OK
+end
+
+local function formatPlanRow(plan, width)
+  local tag = uiStatus.tag(plan.action)
+  local category = tostring(plan.category or "?")
+  local label = tostring(plan.label or "?")
+  local item = category .. ": " .. label
+  local have = fmt(plan.amount)
+  local target = fmt(plan.target)
+  local delta = planDelta(plan)
+
+  if width >= 72 then
+    local itemWidth = math.max(18, width - 39)
+    return uiDraw.fit(item, itemWidth) ..
+      " " .. rjust(have, 8) ..
+      " " .. rjust(target, 8) ..
+      " " .. rjust(delta, 7) ..
+      " " .. uiDraw.fit(tag, 12)
+  end
+
+  return uiDraw.fit(tag .. " " .. item .. " " .. delta .. " (" .. have .. "/" .. target .. ")", width)
+end
+
 local function isCraftable(registryName, item)
   if type(item) == "table" and item.isCraftable ~= nil then return item.isCraftable end
 
@@ -381,15 +448,28 @@ local function summarizeCategories(plans)
     local name = plan.category or "Stock Keeper"
     local summary = byName[name]
     if not summary then
-      summary = { label = name, ok = 0, action = 0, blocked = 0, waiting = 0 }
+      summary = {
+        label = name,
+        ok = 0,
+        would = 0,
+        crafting = 0,
+        cooldown = 0,
+        noRecipe = 0,
+        blocked = 0,
+        other = 0,
+      }
       byName[name] = summary
       ordered[#ordered + 1] = summary
     end
 
-    if plan.action == "OK" then summary.ok = summary.ok + 1
-    elseif plan.action == "WOULD CRAFT" then summary.action = summary.action + 1
-    elseif plan.action == "NOT CRAFTABLE" or plan.action == "BLOCKED" then summary.blocked = summary.blocked + 1
-    else summary.waiting = summary.waiting + 1 end
+    local normalized = uiStatus.normalize(plan.action)
+    if normalized == uiStatus.OK then summary.ok = summary.ok + 1
+    elseif normalized == uiStatus.WOULD then summary.would = summary.would + 1
+    elseif normalized == uiStatus.CRAFTING then summary.crafting = summary.crafting + 1
+    elseif normalized == uiStatus.COOLDOWN then summary.cooldown = summary.cooldown + 1
+    elseif normalized == uiStatus.NO_RECIPE then summary.noRecipe = summary.noRecipe + 1
+    elseif normalized == uiStatus.BLOCKED then summary.blocked = summary.blocked + 1
+    else summary.other = summary.other + 1 end
   end
 
   return ordered
@@ -535,6 +615,7 @@ local function scan()
   local managedNames = buildManagedItemNames()
   local listedItems = collectListedItems(items)
   local stockPlans = planStockActions(items)
+  local stockTally = uiStatus.tally(stockPlans)
 
   return {
     connected = connected,
@@ -559,6 +640,7 @@ local function scan()
     configError = configError,
     ledgerError = ledgerError,
     stockPlans = stockPlans,
+    stockTally = stockTally,
     categorySummaries = summarizeCategories(stockPlans),
   }
 end
@@ -605,6 +687,7 @@ local function broadcast(data)
     configError = data.configError,
     ledgerError = data.ledgerError,
     stockPlans = data.stockPlans,
+    stockTally = data.stockTally,
     categorySummaries = data.categorySummaries,
   }, BROADCAST_PROTOCOL)
 end
@@ -661,45 +744,45 @@ local function draw(data)
 
   local _, h = monitor.getSize()
 
-  line(12, "Category Summary", colors.cyan)
+  local w = monitor.getSize()
+
+  line(12, "Category Summary   + ok  > would  ~ craft  . wait  x recipe  # block", colors.cyan)
   local summaryRows = math.min(4, h - 12)
   for i = 1, summaryRows do
     local summary = data.categorySummaries and data.categorySummaries[i]
     if summary then
-      local color = colors.gray
-      if summary.blocked > 0 then color = colors.red
-      elseif summary.action > 0 then color = colors.lime
-      elseif summary.waiting > 0 then color = colors.yellow end
-      line(12 + i, summary.label .. " ok " .. summary.ok .. " act " .. summary.action .. " wait " .. summary.waiting .. " block " .. summary.blocked, color)
+      line(12 + i, formatCategorySummary(summary, w), uiStatus.color(categorySummaryStatus(summary)))
     end
   end
 
-  line(18, "Stock Keeper Plan", colors.cyan)
-  local planRows = math.min(8, h - 18)
+  line(18, "Stock Keeper Plan [dry-run]", colors.cyan)
+  if w >= 72 then
+    line(19, uiDraw.fit("ITEM", math.max(18, w - 39)) .. "     HAVE   TARGET    PLAN   STATUS", colors.gray)
+  end
+
+  local planStart = w >= 72 and 20 or 19
+  local planRows = math.min(7, h - planStart)
   for i = 1, planRows do
     local plan = data.stockPlans and data.stockPlans[i]
     if plan then
-      local color = colors.gray
-      local prefix = tostring(plan.category or "?") .. ": "
-      local text = prefix .. plan.action .. " " .. tostring(plan.label)
-      if plan.action == "WOULD CRAFT" then
-        color = colors.lime
-        text = prefix .. "WOULD CRAFT " .. tostring(plan.label) .. " +" .. fmt(plan.request)
-        if plan.capped then text = text .. " capped" end
-      elseif plan.action == "NOT CRAFTABLE" or plan.action == "BLOCKED" then
-        color = colors.red
-      elseif plan.action == "ON COOLDOWN" then
-        color = colors.yellow
-        text = text .. " " .. tostring(plan.secondsLeft or "?") .. "s"
-      elseif plan.action == "ALREADY CRAFTING" then
-        color = colors.orange
-      end
-      line(18 + i, text, color)
+      line(planStart + i - 1, formatPlanRow(plan, w), uiStatus.color(plan.action))
     end
   end
 
+  local tally = data.stockTally or {}
+  local tallyY = planStart + planRows
+  if tallyY < h then
+    line(tallyY, "+ " .. fmt(tally.OK) ..
+      "  > " .. fmt(tally.WOULD) ..
+      "  ~ " .. fmt(tally.CRAFTING) ..
+      "  . " .. fmt(tally.COOLDOWN) ..
+      "  x " .. fmt(tally.NO_RECIPE) ..
+      "  # " .. fmt(tally.BLOCKED) ..
+      "   apply disabled", colors.gray)
+  end
+
   local topY = 28
-  if h < topY + 2 then topY = 18 + planRows + 2 end
+  if h < topY + 2 then topY = tallyY + 2 end
 
   line(topY, "Low Stock", colors.cyan)
   if #data.warnings == 0 then
