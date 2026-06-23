@@ -12,6 +12,7 @@ local control = require("atm10-control")
 local palette = require("atm10-palette")
 local draw = require("atm10-draw")
 local stockplan = require("atm10-stockplan")
+local cqueue = require("atm10-queue")
 
 -- ---------------------------------------------------------------------------
 print("status vocabulary")
@@ -210,12 +211,57 @@ t.eq(cyc[2].action, "WOULD CRAFT", "2nd within cycle cap")
 t.eq(cyc[3].action, "CYCLE CAP", "3rd exceeds cycle cap")
 
 -- ---------------------------------------------------------------------------
+print("craft queue (manual mode, inert)")
+local q = cqueue.new()
+t.eq(cqueue.count(q), 0, "new queue is empty")
+
+q = cqueue.approve(q, { name = "x", label = "Item X", request = 64 }, 10)
+t.eq(cqueue.count(q), 1, "approve adds an entry")
+t.check(cqueue.has(q, "x"), "approved item present")
+t.eq(q.entries.x.state, cqueue.APPROVED, "entry marked APPROVED")
+t.eq(q.entries.x.request, 64, "entry carries request size")
+
+q = cqueue.approve(q, { name = "x", request = 128 }, 20) -- dedupe + refresh
+t.eq(cqueue.count(q), 1, "re-approving same item dedupes")
+t.eq(q.entries.x.request, 128, "re-approve refreshes the request")
+
+q = cqueue.approve(q, { label = "no name" }, 30) -- missing name -> no-op
+t.eq(cqueue.count(q), 1, "approve without a name is a no-op")
+
+q = cqueue.approve(q, { name = "y", request = 16 }, 40)
+local listed = cqueue.list(q)
+t.eq(listed[1].name, "y", "list is newest-approval first")
+
+q = cqueue.cancel(q, "y")
+t.check(cqueue.has(q, "y") == false, "cancel removes an entry")
+t.eq(cqueue.count(q), 1, "cancel decrements count")
+
+-- reconcile: drop items whose stock is now satisfied
+q = cqueue.approve(q, { name = "z", request = 8 }, 50)
+local _, removed = cqueue.reconcile(q, { x = true })
+t.eq(removed, 1, "reconcile removes satisfied items")
+t.check(cqueue.has(q, "x") == false, "satisfied item dropped")
+t.check(cqueue.has(q, "z"), "unsatisfied item kept")
+
+-- prune: age out stale approvals
+local pq = cqueue.approve(cqueue.new(), { name = "old", request = 1 }, 0)
+pq = cqueue.approve(pq, { name = "new", request = 1 }, 900)
+local _, pruned = cqueue.prune(pq, 1000, 500)
+t.eq(pruned, 1, "prune removes entries older than maxAge")
+t.check(cqueue.has(pq, "old") == false, "stale entry pruned")
+t.check(cqueue.has(pq, "new"), "fresh entry kept")
+local _, noPrune = cqueue.prune(pq, 1000000, 0)
+t.eq(noPrune, 0, "maxAge<=0 disables pruning")
+
+t.eq(cqueue.count(cqueue.normalize("garbage")), 0, "normalize coerces garbage to empty")
+
+-- ---------------------------------------------------------------------------
 print("all scripts compile")
 -- loadfile parses without executing, so the display while-loops and peripheral
 -- wraps never run. This guards every shipped Lua file against syntax errors.
 local luaFiles = {
   "lib/atm10-status.lua", "lib/atm10-draw.lua", "lib/atm10-palette.lua",
-  "lib/atm10-control.lua", "lib/atm10-stockplan.lua",
+  "lib/atm10-control.lua", "lib/atm10-stockplan.lua", "lib/atm10-queue.lua",
   "inventory/manager.lua", "inventory/remote.lua",
   "inventory/config.lua", "inventory/config-example.lua",
   "power/display.lua", "power/probe.lua",
