@@ -9,7 +9,7 @@ if not mon then error("No monitor on " .. MONITOR_SIDE) end
 rednet.open(MODEM_SIDE)
 pcall(function() rednet.host(PROTOCOL, HOSTNAME) end)
 
-mon.setTextScale(0.5)
+mon.setTextScale(1)
 
 local history = {}
 local last = nil
@@ -109,12 +109,13 @@ local function draw()
   line(3, "Stored: " .. fmt(last.energy) .. " / " .. fmt(last.maxEnergy), colors.white)
   drawBar(4, "Matrix", pct)
 
-  line(6, "Input:  " .. fmt(last.input) .. "/t", colors.lime)
-  line(7, "Output: " .. fmt(last.output) .. "/t", colors.red)
+  line(6, "Full:   " .. string.format("%.2f%%", pct), colorForPercent(pct))
+  line(8, "Input:  " .. fmt(last.input) .. "/t", colors.lime)
+  line(9, "Output: " .. fmt(last.output) .. "/t", colors.red)
 
   local netColor = colors.white
   if net > 0 then netColor = colors.lime elseif net < 0 then netColor = colors.red end
-  line(8, "Net:    " .. fmt(net) .. "/t", netColor)
+  line(10, "Net:    " .. fmt(net) .. "/t", netColor)
 
   local status = "OK"
   local statusColor = colors.lime
@@ -123,10 +124,10 @@ local function draw()
   elseif pct < 35 then status, statusColor = "LOW", colors.orange
   elseif net < 0 then status, statusColor = "DRAINING", colors.yellow end
 
-  line(10, "Status: " .. status .. "   age " .. math.floor(age) .. "s", statusColor)
-  line(12, "Stored Energy History", colors.cyan)
+  line(12, "Status: " .. status .. "   age " .. math.floor(age) .. "s", statusColor)
+  line(14, "Stored Energy History", colors.cyan)
 
-  local graphTop = 13
+  local graphTop = 15
   local graphHeight = math.max(3, h - graphTop)
   drawGraph(graphTop, graphHeight, history)
 end
