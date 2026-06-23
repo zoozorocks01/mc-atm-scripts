@@ -4,6 +4,9 @@ local BRIDGE_NAME = "auto"
 local TEXT_SCALE = "auto"
 local REFRESH_SECONDS = 5
 local TOP_ITEM_COUNT = 8
+local BROADCAST_ENABLED = true
+local BROADCAST_MODEM_SIDE = "auto"
+local BROADCAST_PROTOCOL = "atm10-inventory-v1"
 
 local LOW_STOCK = {
   { label = "Glass", name = "minecraft:glass", target = 512 },
@@ -16,6 +19,7 @@ local monitor = nil
 local bridge = nil
 local bridgeName = nil
 local status = "Starting"
+local broadcastReady = false
 
 local function peripheralTypeMatches(actual, expected)
   if actual == expected then return true end
@@ -51,6 +55,25 @@ local function call(target, method, ...)
     if ok then return result, extra end
   end
   return nil
+end
+
+local function openBroadcastModems()
+  if not BROADCAST_ENABLED or broadcastReady then return end
+
+  if BROADCAST_MODEM_SIDE ~= "auto" then
+    if peripheralTypeMatches(peripheral.getType(BROADCAST_MODEM_SIDE), "modem") then
+      rednet.open(BROADCAST_MODEM_SIDE)
+      broadcastReady = true
+    end
+    return
+  end
+
+  for _, side in ipairs(rs.getSides()) do
+    if peripheralTypeMatches(peripheral.getType(side), "modem") then
+      rednet.open(side)
+      broadcastReady = true
+    end
+  end
 end
 
 local function fmt(n)
@@ -230,6 +253,42 @@ local function scan()
   }
 end
 
+local function compactItems(items, limit)
+  local compact = {}
+  for i = 1, math.min(limit, #items) do
+    local item = items[i]
+    compact[#compact + 1] = {
+      name = itemName(item),
+      amount = itemAmount(item),
+      id = item.name,
+    }
+  end
+  return compact
+end
+
+local function broadcast(data)
+  if not BROADCAST_ENABLED or not broadcastReady or not data then return end
+
+  rednet.broadcast({
+    kind = "inventory_snapshot",
+    source = os.getComputerID(),
+    bridgeName = bridgeName,
+    online = data.online,
+    connected = data.connected,
+    unique = data.unique,
+    totalAmount = data.totalAmount,
+    craftableCount = data.craftableCount,
+    warnings = data.warnings,
+    topItems = compactItems(data.items, TOP_ITEM_COUNT),
+    usedItemStorage = data.usedItemStorage,
+    totalItemStorage = data.totalItemStorage,
+    availableItemStorage = data.availableItemStorage,
+    storedEnergy = data.storedEnergy,
+    energyCapacity = data.energyCapacity,
+    energyUsage = data.energyUsage,
+  }, BROADCAST_PROTOCOL)
+end
+
 local function drawWaiting(message)
   monitor.setBackgroundColor(colors.black)
   monitor.clear()
@@ -299,6 +358,8 @@ local function draw(data)
 end
 
 while true do
+  openBroadcastModems()
+
   if not monitor then
     monitor = findPeripheral({ "monitor" }, MONITOR_SIDE)
     if monitor then pickTextScale() end
@@ -306,7 +367,12 @@ while true do
 
   if monitor then
     local ok, data = pcall(scan)
-    if ok then draw(data) else drawWaiting(tostring(data)) end
+    if ok then
+      draw(data)
+      broadcast(data)
+    else
+      drawWaiting(tostring(data))
+    end
   else
     print("No monitor found. Retrying...")
   end

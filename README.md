@@ -42,6 +42,8 @@ startup
 
 Read-only RS Bridge dashboard. It shows bridge/grid status, item storage usage
 when available, RS energy/usage, watched low-stock items, and top stored items.
+The source inventory computer also broadcasts a compact snapshot to remote
+display computers over the `atm10-inventory-v1` rednet protocol.
 
 The computer needs access to:
 
@@ -58,3 +60,15 @@ startup
 ```
 
 Low-stock watches live at the top of `inventory-info.lua` in `LOW_STOCK`.
+
+### Install on remote inventory display
+
+Remote displays need only an advanced monitor and modem on the same modem
+network/band as the inventory source computer.
+
+```lua
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventory-remote.lua inventory-remote
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventory-remote-startup.lua startup
+label set atm10-inventory-remote
+startup
+```
