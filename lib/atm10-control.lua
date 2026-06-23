@@ -124,6 +124,35 @@ function control.action(args)
   }
 end
 
+-- Build an autocraft control action from an approved craft-queue entry.
+-- The operator's queue approval IS the manual approval, so `approved` defaults
+-- true. enabled/armed default true (a configured + approved stock item is an
+-- explicit, operator-driven request, not a latent actuator output). The caller
+-- supplies the executor and may override any gate via opts.
+function control.craftAction(entry, opts)
+  entry = entry or {}
+  opts = opts or {}
+
+  local function default(value, fallback)
+    if value == nil then return fallback end
+    return value
+  end
+
+  return control.action({
+    id = "craft:" .. tostring(entry.name),
+    system = "inventory",
+    label = entry.label or entry.name,
+    capability = control.CAPABILITY_AUTOCRAFT,
+    target = entry.name,
+    amount = tonumber(entry.request) or 0,
+    mode = opts.mode,
+    enabled = default(opts.enabled, true),
+    armed = default(opts.armed, true),
+    approved = default(opts.approved, true),
+    execute = opts.execute,
+  })
+end
+
 local function resolveMode(action, policy)
   if policy and policy.mode then
     return control.normalizeMode(policy.mode, control.MODE_DRY_RUN)

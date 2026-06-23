@@ -1,5 +1,17 @@
 return {
-  mode = "dry-run",
+  -- Control mode (gates whether a planned craft can ever fire):
+  --   "monitor"  read-only; never crafts
+  --   "dry-run"  plans only; never crafts
+  --   "manual"   plans + requires you to approve each craft on the console
+  --   "auto"     crafts approved deficits unattended (advanced)
+  -- NOTE: the craft executor is not live yet (Stage A). Nothing crafts in any
+  -- mode until Stage B ships and is verified in-game.
+  mode = "manual",
+
+  -- Autocraft capability flag. Must be true for any craft to fire (still gated
+  -- by mode + per-item approval). Set false to hard-disable crafting on this
+  -- computer regardless of mode.
+  allowAutocraft = true,
 
   itemDefaults = {
     handling = "unmanaged",

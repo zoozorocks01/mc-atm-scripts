@@ -23,7 +23,8 @@ local cqueue = require("atm10-queue")
 local console = require("atm10-console")
 
 local DEFAULT_CONFIG = {
-  mode = "dry-run",
+  mode = "manual",          -- manual: plan + require operator approval before a craft fires
+  allowAutocraft = true,    -- autocraft capability on by default (still gated by mode + approval)
   itemDefaults = {
     handling = "unmanaged",
   },
@@ -59,6 +60,7 @@ local craftQueue = nil
 local lastData = nil
 local tabStrip = nil
 local planRowRegions = {}
+local queueRowRegions = {}
 local rsLevels = {}
 
 local function peripheralTypeMatches(actual, expected)
@@ -120,10 +122,17 @@ end
 local function normalizeConfig(raw)
   local cfg = type(raw) == "table" and raw or {}
 
-  if cfg.mode ~= "dry-run" then
-    cfg.mode = "dry-run"
-    noteConfigError("Mode forced to dry-run")
+  -- Control mode gates execution: monitor/dry-run never craft; manual requires
+  -- operator approval; auto crafts approved deficits unattended. Unknown values
+  -- fall back to manual (the shipped default).
+  local requestedMode = cfg.mode
+  cfg.mode = control.normalizeMode(cfg.mode, control.MODE_MANUAL)
+  if requestedMode ~= nil and requestedMode ~= cfg.mode then
+    noteConfigError("Unknown mode '" .. tostring(requestedMode) .. "'; using " .. cfg.mode)
   end
+
+  -- Autocraft capability flag. Default on; only an explicit false disables it.
+  cfg.allowAutocraft = cfg.allowAutocraft ~= false
 
   local hadItemDefaults = type(cfg.itemDefaults) == "table"
   if not hadItemDefaults then cfg.itemDefaults = {} end
@@ -501,9 +510,21 @@ local function planStockActions(items)
   })
 end
 
-local function requestCraft(_plan)
-  -- Single future craft chokepoint. There is intentionally no craftItem call in this build.
-  error("Crafting is disabled in this dry-run build", 0)
+-- The single craft chokepoint. Stage A wires and DISPLAYS the safety gate but
+-- this body is intentionally EMPTY: it performs no craftItem call, so crafting
+-- is impossible regardless of mode/config. Stage B fills this in-game (call
+-- bridge.craftItem, record the ledger, transition the queue entry).
+local function requestCraft(_action)
+  return false, "crafting executor not implemented (Stage B)"
+end
+
+-- Execution policy derived from config: the global mode + capability flags that
+-- gate every real action. Local touch approval lives in the craft queue.
+local function buildPolicy()
+  return control.policy({
+    mode = config.mode,
+    allowAutocraft = config.allowAutocraft == true,
+  })
 end
 
 local function scan()
@@ -705,36 +726,54 @@ end
 local function drawQueuePage(data)
   local w, h = monitor.getSize()
   local q = data.craftQueue or {}
+  local policy = buildPolicy()
 
-  line(6, "Craft Queue   " .. #q .. " approved   [crafting disabled]", colors.cyan)
+  line(6, "Craft Queue   " .. #q .. " approved   mode:" .. tostring(config.mode) ..
+    "   [executor: Stage B]", colors.cyan)
 
   if #q == 0 then
     line(8, "No approved crafts yet.", colors.lime)
-    line(9, "Approving items from the Plan page comes in the next step.", colors.gray)
+    line(9, "Tap a WOULD CRAFT row on the Plan page to approve one.", colors.gray)
     return
   end
 
   local wide = w >= 60
   if wide then
-    line(7, uiDraw.fit("ITEM", math.max(16, w - 28)) .. "  REQUEST   STATE     AGE", colors.gray)
+    line(7, uiDraw.fit("ITEM", math.max(16, w - 28)) .. "  REQUEST   GATE      AGE", colors.gray)
   end
 
   local start = wide and 8 or 7
-  local rows = math.max(0, math.min(#q, h - start))
+  -- leave the last row for the cancel hint
+  local rows = math.max(0, math.min(#q, h - start - 1))
   local now = nowMs()
   for i = 1, rows do
     local e = q[i]
     local ageS = math.max(0, math.floor((now - (e.approvedAt or now)) / 1000))
+    -- Run the entry through the real safety gate to show whether it WOULD craft
+    -- once the Stage B executor ships. requestCraft satisfies the executor gate.
+    local action = control.craftAction(e, { mode = config.mode, execute = requestCraft })
+    local gateState = control.executionState(action, policy)
     local text
     if wide then
       text = uiDraw.fit(tostring(e.label or e.name), math.max(16, w - 28)) ..
         "  " .. rjust("+" .. fmt(e.request), 7) ..
-        "  " .. uiDraw.fit(tostring(e.state or "?"), 8) ..
+        "  " .. uiDraw.fit(uiStatus.label(gateState), 8) ..
         "  " .. rjust(ageS .. "s", 4)
     else
-      text = uiDraw.fit(tostring(e.label or e.name) .. " +" .. fmt(e.request) .. " " .. tostring(e.state), w)
+      text = uiDraw.fit(tostring(e.label or e.name) .. " +" .. fmt(e.request) ..
+        " " .. uiStatus.label(gateState), w)
     end
-    line(start + i - 1, text, uiStatus.color(uiStatus.WOULD))
+    local y = start + i - 1
+    line(y, text, uiStatus.color(gateState))
+    -- tap a queued row to cancel (remove) the approval
+    if e.name then
+      queueRowRegions[#queueRowRegions + 1] = { y = y, entry = e }
+    end
+  end
+
+  local hintY = start + rows
+  if hintY <= h then
+    line(hintY, "Tap a row to cancel its approval.", colors.gray)
   end
 end
 
@@ -749,6 +788,7 @@ local function draw(data)
   monitor.setBackgroundColor(colors.black)
   monitor.clear()
   planRowRegions = {} -- rebuilt each render for touch hit-testing
+  queueRowRegions = {}
 
   local pageName = PAGES[pageIndex]
 
@@ -773,7 +813,7 @@ local function draw(data)
   if data.configError then
     line(4, data.configError, colors.orange)
   else
-    line(4, "Mode: " .. tostring(data.configMode or "dry-run") .. " (crafting disabled)", colors.gray)
+    line(4, "Mode: " .. tostring(data.configMode or "manual") .. "   crafting executor: pending (Stage B)", colors.gray)
   end
 
   if pageName == "QUEUE" then
@@ -812,6 +852,15 @@ local function approve(entry)
   print("Approved (queued, crafting disabled): " .. tostring(entry.label or entry.name))
 end
 
+-- Cancel a queued approval. INERT: removes intent only; nothing was crafting.
+local function cancelEntry(entry)
+  if not entry or not entry.name then return end
+  craftQueue = cqueue.cancel(craftQueue or loadQueue(), entry.name)
+  saveQueue(craftQueue)
+  pageShownAt = nowMs()
+  print("Canceled approval: " .. tostring(entry.label or entry.name))
+end
+
 local function handleTouch(x, y)
   local page = console.tabHit(tabStrip, x, y)
   if page then
@@ -820,9 +869,16 @@ local function handleTouch(x, y)
     return
   end
 
-  local entry = console.rowHit(planRowRegions, y)
-  if entry then
-    approve(entry)
+  local planEntry = console.rowHit(planRowRegions, y)
+  if planEntry then
+    approve(planEntry)
+    renderCurrent()
+    return
+  end
+
+  local queueEntry = console.rowHit(queueRowRegions, y)
+  if queueEntry then
+    cancelEntry(queueEntry)
     renderCurrent()
   end
 end

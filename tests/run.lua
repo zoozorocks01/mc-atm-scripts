@@ -88,6 +88,43 @@ t.check((control.authorize(7, { token = "secret" }, pSecured)) == true, "listed 
 t.check((control.authorize(99, {}, control.policy({}))) == true, "open policy accepts any sender")
 
 -- ---------------------------------------------------------------------------
+print("craft action (queue -> control gate)")
+local entry = { name = "mek:alloy", label = "Infused Alloy", request = 128 }
+
+-- craftAction maps a queue entry onto a well-formed autocraft action
+local ca = control.craftAction(entry, { execute = function() end })
+t.eq(ca.capability, control.CAPABILITY_AUTOCRAFT, "craftAction capability = autocraft")
+t.eq(ca.target, "mek:alloy", "craftAction target = entry name")
+t.eq(ca.amount, 128, "craftAction amount = request size")
+t.check(ca.approved == true, "queued entry is approved by default (the queue IS approval)")
+t.check(ca.enabled == true and ca.armed == true, "queued craft defaults enabled + armed")
+
+local function craftSpy() local h = { n = 0 }; return h, function() h.n = h.n + 1; return true end end
+local pCraftManual = control.policy({ mode = "manual", allowAutocraft = true })
+local pCraftDry    = control.policy({ mode = "dry-run", allowAutocraft = true })
+local pCraftNoCap  = control.policy({ mode = "manual", allowAutocraft = false })
+
+-- dry-run never executes, even fully approved/armed/allowed
+local h1, e1 = craftSpy()
+t.check(control.execute(control.craftAction(entry, { execute = e1 }), pCraftDry) == false, "craft in dry-run -> false")
+t.eq(h1.n, 0, "craft executor NOT called in dry-run")
+
+-- manual + approved + armed + enabled + allowAutocraft + executor -> fires once
+local h2, e2 = craftSpy()
+control.execute(control.craftAction(entry, { execute = e2 }), pCraftManual)
+t.eq(h2.n, 1, "craft executor called exactly once when every gate passes")
+
+-- capability off -> blocked, no call
+local h3, e3 = craftSpy()
+t.check(control.execute(control.craftAction(entry, { execute = e3 }), pCraftNoCap) == false, "craft blocked when allowAutocraft false")
+t.eq(h3.n, 0, "craft executor NOT called when capability off")
+
+-- unapproved in manual (e.g. not yet tapped) -> waits, no call
+local h4, e4 = craftSpy()
+control.execute(control.craftAction(entry, { approved = false, execute = e4 }), pCraftManual)
+t.eq(h4.n, 0, "craft executor NOT called while awaiting approval")
+
+-- ---------------------------------------------------------------------------
 print("palette theme resolution")
 t.eq(palette.defaultTheme, "controlRoom", "default theme is controlRoom")
 t.clearFiles()
