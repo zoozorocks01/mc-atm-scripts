@@ -11,9 +11,10 @@ local CONFIG_FILE = "inventory-config"
 local LEDGER_FILE = ".atm10-stock-ledger"
 local QUEUE_FILE = ".atm10-craft-queue"
 local PAGE_SECONDS = 10
-local PAGES = { "PLAN", "QUEUE" }
+local PAGES = { "PLAN", "QUEUE", "BROWSE" }
 local QUEUE_MAX_AGE_MS = 30 * 60 * 1000 -- prune approvals older than 30 minutes
 local PAGE_BUTTON_SIDE = "back"          -- a redstone pulse here flips to the next page ("none" disables)
+local BROWSE_CRAFT_AMOUNT = 64           -- default quantity when approving a craft from the Browse page
 
 local uiStatus = require("atm10-status")
 local uiDraw = require("atm10-draw")
@@ -62,6 +63,9 @@ local lastData = nil
 local tabStrip = nil
 local planRowRegions = {}
 local queueRowRegions = {}
+local browseRowRegions = {}
+local browseNavRegions = {}
+local browsePage = 1
 local rsLevels = {}
 
 local function peripheralTypeMatches(actual, expected)
@@ -828,6 +832,68 @@ local function drawQueuePage(data)
   end
 end
 
+-- Browse the live grid and tap a craftable item to approve a craft of it. This
+-- removes the need to hand-type registry IDs in config for one-off crafts. Rows
+-- are paginated; [< PREV] / [NEXT >] tap targets sit on the bottom line.
+local function drawBrowsePage(data)
+  local w, h = monitor.getSize()
+  local items = data.items or {}
+  local total = #items
+
+  local listTop = 8
+  local listBottom = h - 1 -- bottom line is the nav row
+  local perPage = math.max(1, listBottom - listTop + 1)
+  local pg = console.paginate(total, perPage, browsePage)
+  browsePage = pg.page -- keep the clamped page
+
+  line(6, "Browse Grid   " .. fmt(total) .. " items   page " .. pg.page .. "/" .. pg.pages, colors.cyan)
+  local wide = w >= 60
+  if wide then
+    line(7, uiDraw.fit("ITEM", math.max(16, w - 24)) .. "   STORED   CRAFT", colors.gray)
+  end
+
+  if total == 0 then
+    line(listTop, "Grid is empty or unavailable.", colors.gray)
+    return
+  end
+
+  for i = pg.from, pg.to do
+    local item = items[i]
+    local y = listTop + (i - pg.from)
+    local name = itemName(item)
+    local amount = itemAmount(item)
+    local craftable = item.isCraftable == true
+    local text
+    if wide then
+      text = uiDraw.fit(name, math.max(16, w - 24)) ..
+        "   " .. rjust(fmt(amount), 6) ..
+        "   " .. uiDraw.fit(craftable and "[craft]" or "-", 6)
+    else
+      text = uiDraw.fit((craftable and "* " or "  ") .. name .. " " .. fmt(amount), w)
+    end
+    line(y, text, craftable and colors.white or colors.gray)
+    -- only craftable items are tappable (tap = approve a craft into the queue)
+    if craftable and item.name then
+      browseRowRegions[#browseRowRegions + 1] = {
+        y = y,
+        entry = { name = item.name, label = name, request = BROWSE_CRAFT_AMOUNT },
+      }
+    end
+  end
+
+  local navY = h
+  local prev, next = "[< PREV]", "[NEXT >]"
+  uiDraw.write(monitor, 1, navY, prev, pg.page > 1 and colors.cyan or colors.gray, colors.black)
+  uiDraw.write(monitor, 11, navY, next, pg.page < pg.pages and colors.cyan or colors.gray, colors.black)
+  browseNavRegions = {
+    { x1 = 1, x2 = #prev, y = navY, delta = -1 },
+    { x1 = 11, x2 = 10 + #next, y = navY, delta = 1 },
+  }
+  if w >= 44 then
+    uiDraw.write(monitor, 21, navY, "tap [craft] to queue x" .. BROWSE_CRAFT_AMOUNT, colors.gray, colors.black)
+  end
+end
+
 local function draw(data)
   if not monitor then return end
 
@@ -840,6 +906,8 @@ local function draw(data)
   monitor.clear()
   planRowRegions = {} -- rebuilt each render for touch hit-testing
   queueRowRegions = {}
+  browseRowRegions = {}
+  browseNavRegions = {}
 
   local pageName = PAGES[pageIndex]
 
@@ -872,6 +940,8 @@ local function draw(data)
 
   if pageName == "QUEUE" then
     drawQueuePage(data)
+  elseif pageName == "BROWSE" then
+    drawBrowsePage(data)
   else
     drawPlanPage(data)
   end
@@ -885,8 +955,17 @@ end
 local function advancePageIfDue()
   local nowT = nowMs()
   if not pageShownAt then pageShownAt = nowT end
+  -- Browsing is manual: never auto-rotate away from (or into) the Browse page.
+  if PAGES[pageIndex] == "BROWSE" then
+    pageShownAt = nowT
+    return
+  end
   if nowT - pageShownAt >= PAGE_SECONDS * 1000 then
-    pageIndex = pageIndex % #PAGES + 1
+    local nextIndex = pageIndex % #PAGES + 1
+    if PAGES[nextIndex] == "BROWSE" then
+      nextIndex = nextIndex % #PAGES + 1 -- skip Browse in the auto-rotation
+    end
+    pageIndex = nextIndex
     pageShownAt = nowT
   end
 end
@@ -895,15 +974,16 @@ local function renderCurrent()
   draw(lastData)
 end
 
--- Approve a planned craft into the queue. INERT: this only records intent;
--- there is no craftItem call anywhere in this build.
+-- Approve a planned/selected craft into the queue. The gated craft runner issues
+-- the actual request on a later cycle, and only if mode + capability + approval
+-- all pass; approving here never crafts directly.
 local function approve(entry)
   if not entry or not entry.name then return end
   craftQueue = cqueue.approve(craftQueue or loadQueue(),
     { name = entry.name, label = entry.label, request = entry.request }, nowMs())
   saveQueue(craftQueue)
   pageShownAt = nowMs()
-  print("Approved (queued, crafting disabled): " .. tostring(entry.label or entry.name))
+  print("Approved: " .. tostring(entry.label or entry.name) .. " x" .. tostring(entry.request))
 end
 
 -- Cancel a queued approval. INERT: removes intent only; nothing was crafting.
@@ -933,6 +1013,23 @@ local function handleTouch(x, y)
   local queueEntry = console.rowHit(queueRowRegions, y)
   if queueEntry then
     cancelEntry(queueEntry)
+    renderCurrent()
+    return
+  end
+
+  -- Browse page: [< PREV] / [NEXT >] paging, then tap a craftable row to queue it
+  for _, nav in ipairs(browseNavRegions) do
+    if y == nav.y and x >= nav.x1 and x <= nav.x2 then
+      browsePage = math.max(1, browsePage + nav.delta)
+      pageShownAt = nowMs()
+      renderCurrent()
+      return
+    end
+  end
+
+  local browseEntry = console.rowHit(browseRowRegions, y)
+  if browseEntry then
+    approve(browseEntry)
     renderCurrent()
   end
 end

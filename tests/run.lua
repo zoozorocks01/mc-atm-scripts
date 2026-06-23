@@ -390,6 +390,20 @@ local hitRows = { { y = 5, entry = "a" }, { y = 6, entry = "b" } }
 t.eq(console.rowHit(hitRows, 6), "b", "rowHit returns the entry at that y")
 t.eq(console.rowHit(hitRows, 9), nil, "rowHit miss -> nil")
 
+-- paginate: clamp, slice, and handle empty / overflow pages
+local p1 = console.paginate(25, 10, 1)
+t.eq(p1.pages, 3, "25 items / 10 per page -> 3 pages")
+t.eq(p1.from, 1, "page 1 starts at 1")
+t.eq(p1.to, 10, "page 1 ends at 10")
+local p3 = console.paginate(25, 10, 3)
+t.eq(p3.from, 21, "page 3 starts at 21")
+t.eq(p3.to, 25, "page 3 ends at the last item")
+t.eq(console.paginate(25, 10, 9).page, 3, "overflow page clamps to last page")
+t.eq(console.paginate(25, 10, 0).page, 1, "page < 1 clamps to 1")
+local pe = console.paginate(0, 10, 1)
+t.eq(pe.pages, 1, "empty list still has 1 page")
+t.check(pe.from > pe.to, "empty list yields an empty render range")
+
 -- ---------------------------------------------------------------------------
 print("all scripts compile")
 -- loadfile parses without executing, so the display while-loops and peripheral

@@ -42,4 +42,21 @@ function console.rowHit(rows, y)
   return nil
 end
 
+-- Page math for a scrollable list. Clamps `page` into range and returns the
+-- 1-based slice [from, to] to render (an empty list yields from=1, to=0 so a
+-- `for i = from, to` loop runs zero times).
+function console.paginate(total, perPage, page)
+  total = math.max(0, math.floor(tonumber(total) or 0))
+  perPage = math.max(1, math.floor(tonumber(perPage) or 1))
+  page = math.floor(tonumber(page) or 1)
+
+  local pages = math.max(1, math.ceil(total / perPage))
+  if page < 1 then page = 1 end
+  if page > pages then page = pages end
+
+  local from = (page - 1) * perPage + 1
+  local to = math.min(total, page * perPage)
+  return { page = page, pages = pages, perPage = perPage, from = from, to = to, total = total }
+end
+
 return console

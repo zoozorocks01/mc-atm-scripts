@@ -139,6 +139,15 @@ your approval per item; `auto` crafts approved deficits unattended. Setting
 passes the shared safety gate in `lib/atm10-control.lua` before the runner in
 `lib/atm10-craftrunner.lua` touches the bridge.
 
+### Console pages
+
+The manager monitor has three tabs (tap a tab, or pulse the page-button
+redstone side to cycle): **Plan** (stock-keeper deficits; tap a `WOULD CRAFT`
+row to approve), **Queue** (approved/in-flight crafts; tap a row to cancel), and
+**Browse** (the live grid, paginated; tap a `[craft]` item to approve a one-off
+craft of it without typing its registry ID). Plan and Queue auto-rotate; Browse
+is manual only.
+
 The computer needs access to:
 
 - an advanced monitor
