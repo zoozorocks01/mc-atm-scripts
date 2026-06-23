@@ -346,5 +346,17 @@ while true do
     while #netHistory > HISTORY_LIMIT do table.remove(netHistory, 1) end
   end
 
-  draw()
+  -- A render error (e.g. a malformed packet) logs and self-heals on the next
+  -- tick instead of crashing the loop and losing the history buffer.
+  local ok, err = pcall(draw)
+  if not ok then
+    print("draw error: " .. tostring(err))
+    pcall(function()
+      mon.setBackgroundColor(colors.black)
+      mon.clear()
+      line(1, TITLE, colors.cyan)
+      line(3, "Render error; retrying", colors.orange)
+      line(5, tostring(err), colors.gray)
+    end)
+  end
 end

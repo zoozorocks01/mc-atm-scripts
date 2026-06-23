@@ -336,7 +336,13 @@ while true do
       last = msg
       lastSeen = os.clock()
     end
-    draw(last)
+    -- A render error (e.g. a malformed broadcast) logs and self-heals on the
+    -- next tick instead of crashing the display.
+    local ok, err = pcall(draw, last)
+    if not ok then
+      print("draw error: " .. tostring(err))
+      pcall(drawWaiting, "Render error; retrying")
+    end
   else
     print("No monitor found. Retrying...")
     sleep(2)
