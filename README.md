@@ -37,3 +37,24 @@ startup
 - `startup` is a watchdog wrapper. It reruns the dashboard/probe if the real script crashes or exits.
 - This reads total induction matrix input/output. Per-machine top users/producers require Energy Detectors on individual branches.
 - Display tuning lives at the top of `power-display.lua`: `TEXT_SCALE`, `SHOW_NET_GRAPH`, `SHOW_STORED_GRAPH`, warning thresholds, and history length.
+
+## Inventory Info Dashboard
+
+Read-only RS Bridge dashboard. It shows bridge/grid status, item storage usage
+when available, RS energy/usage, watched low-stock items, and top stored items.
+
+The computer needs access to:
+
+- an advanced monitor
+- an Advanced Peripherals RS Bridge peripheral, named either `rs_bridge` or `rsBridge`
+
+### Install on inventory computer
+
+```lua
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventory-info.lua inventory-info
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventory-startup.lua startup
+label set atm10-inventory-info
+startup
+```
+
+Low-stock watches live at the top of `inventory-info.lua` in `LOW_STOCK`.
