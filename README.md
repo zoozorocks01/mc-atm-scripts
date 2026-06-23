@@ -14,14 +14,14 @@ The two ender modems should be on the same private band/color.
 ### Install on display computer
 
 ```lua
-wget https://raw.githubusercontent.com/zoozorocks/mc-atm-scripts/main/power-display.lua startup
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/power-display.lua startup
 startup
 ```
 
 ### Install on power computer
 
 ```lua
-wget https://raw.githubusercontent.com/zoozorocks/mc-atm-scripts/main/power-probe.lua startup
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/power-probe.lua startup
 startup
 ```
 
