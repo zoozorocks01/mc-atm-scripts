@@ -75,8 +75,9 @@ local browseNavRegions = {}
 local presetRowRegions = {}
 local presetStatus = nil   -- short confirmation line after applying a preset
 local smartRowRegions = {} -- tappable suggestion rows on the Smart page
-local smartButtons = nil   -- enable/disable toggle row on the Smart page
+local smartButtons = nil   -- enable/disable + clear toggle row on the Smart page
 local trendHistory = {}    -- in-memory consumption history for smart mode
+local dismissedSuggestions = {} -- names the operator cleared this session
 local browsePage = 1
 local editing = nil       -- when set, the Browse page shows the quota editor for this item
 local editorRows = {}     -- button rows in the editor, for touch hit-testing
@@ -746,7 +747,8 @@ local function scan()
     for _, e in ipairs(managed.list(managedStore)) do
       quotasMap[e.name] = { target = e.target, craftTo = e.craftTo }
     end
-    suggestions = suggest.analyze(trendHistory, { managed = managedNames, quotas = quotasMap, max = 8 })
+    suggestions = suggest.analyze(trendHistory,
+      { managed = managedNames, quotas = quotasMap, dismissed = dismissedSuggestions, max = 8 })
   end
   local stockTally = uiStatus.tally(stockPlans)
 
@@ -1135,7 +1137,9 @@ local function drawSmartPage(data)
   line(6, "Smart Mode: " .. (on and "ON" or "OFF") .. "   (suggests quotas from drain)",
     on and colors.lime or colors.gray)
   do
-    local r = console.buttonRow({ { label = on and "DISABLE" or "ENABLE", key = "smarttoggle" } }, 7, 1)
+    local specs = { { label = on and "DISABLE" or "ENABLE", key = "smarttoggle" } }
+    if on and #(data.suggestions or {}) > 0 then specs[#specs + 1] = { label = "CLEAR", key = "smartclear" } end
+    local r = console.buttonRow(specs, 7, 1)
     for _, b in ipairs(r.buttons) do uiDraw.write(monitor, b.x1, 7, b.text, colors.cyan, colors.black) end
     smartButtons = r
   end
@@ -1467,9 +1471,17 @@ local function handleTouch(x, y)
     return
   end
 
-  -- Smart page: enable/disable toggle, then tap a suggestion to review + save
-  if console.buttonHit(smartButtons, x, y) == "smarttoggle" then
+  -- Smart page: enable/disable + clear toggles, then tap a suggestion to review
+  local smartKey = console.buttonHit(smartButtons, x, y)
+  if smartKey == "smarttoggle" then
     toggleSmart()
+    renderCurrent()
+    return
+  elseif smartKey == "smartclear" then
+    for _, s in ipairs((lastData and lastData.suggestions) or {}) do
+      if s.name then dismissedSuggestions[s.name] = true end
+    end
+    pageShownAt = nowMs()
     renderCurrent()
     return
   end
