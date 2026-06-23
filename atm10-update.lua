@@ -1,6 +1,13 @@
 local BASE_URL = "https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/"
 local ROLE_FILE = ".atm10-role"
 
+local commonFiles = {
+  { remote = "atm10-status.lua", localName = "atm10-status.lua" },
+  { remote = "atm10-palette.lua", localName = "atm10-palette.lua" },
+  { remote = "atm10-draw.lua", localName = "atm10-draw.lua" },
+  { remote = "atm10-control.lua", localName = "atm10-control.lua" },
+}
+
 local roles = {
   ["power-display"] = {
     label = "atm10-power-display",
@@ -33,6 +40,13 @@ local roles = {
     },
   },
 }
+
+local function filesForRole(roleConfig)
+  local files = {}
+  for _, file in ipairs(commonFiles) do files[#files + 1] = file end
+  for _, file in ipairs(roleConfig.files or {}) do files[#files + 1] = file end
+  return files
+end
 
 local args = { ... }
 
@@ -101,7 +115,7 @@ end
 writeRole(role)
 print("ATM10 role: " .. role)
 
-for _, file in ipairs(config.files) do
+for _, file in ipairs(filesForRole(config)) do
   if shouldSkip(file) then
     print("Keeping existing " .. file.localName)
   else

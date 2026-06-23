@@ -26,6 +26,21 @@ update
 reboot
 ```
 
+## Shared Baseline
+
+The repo now includes shared baseline modules for the next dashboard/control
+pass:
+
+- `atm10-status`: common status names, glyphs, colors, and tallies
+- `atm10-palette`: shared monitor palettes
+- `atm10-draw`: bars, gauges, panel boxes, and diff-buffer rendering
+- `atm10-control`: proposed-action records and execution-mode gates
+
+The current scripts still work independently. These modules are installed by
+the updater so future power, inventory, machine, and security systems can share
+one display/control language. See `CONTROL_ARCHITECTURE.md` for the safety
+model.
+
 ## Power Dashboard
 
 This setup uses two computers:
