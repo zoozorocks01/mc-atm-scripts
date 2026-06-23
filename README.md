@@ -191,3 +191,16 @@ wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventor
 label set atm10-inventory-remote
 startup
 ```
+
+## Development
+
+Off-CC unit tests cover the pure logic in the shared libs (the control-mode
+safety gate, the theme resolver, and the status vocabulary). They stub the
+CC:Tweaked globals, so they run anywhere Lua is installed. From the repo root:
+
+```sh
+lua tests/run.lua
+```
+
+The tests are dev-only and are not distributed by the updater. They do not
+exercise display rendering or the RS Bridge, which still need an in-game check.
