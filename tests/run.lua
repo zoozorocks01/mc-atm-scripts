@@ -268,7 +268,7 @@ local luaFiles = {
   "atm10-update.lua",
   "inventory-info.lua", "inventory-remote.lua", "power-display.lua",
   "atm10-status.lua", "atm10-palette.lua", "atm10-control.lua",
-  "atm10-draw.lua", "atm10-stockplan.lua",
+  "atm10-draw.lua", "atm10-stockplan.lua", "atm10-queue.lua",
 }
 for _, f in ipairs(luaFiles) do
   local chunk, err = loadfile(f)

@@ -9,11 +9,15 @@ local BROADCAST_MODEM_SIDE = "auto"
 local BROADCAST_PROTOCOL = "atm10-inventory-v1"
 local CONFIG_FILE = "inventory-config"
 local LEDGER_FILE = ".atm10-stock-ledger"
+local QUEUE_FILE = ".atm10-craft-queue"
+local PAGE_SECONDS = 10
+local PAGES = { "PLAN", "QUEUE" }
 
 local uiStatus = require("atm10-status")
 local uiDraw = require("atm10-draw")
 local uiPalette = require("atm10-palette")
 local stockplan = require("atm10-stockplan")
+local cqueue = require("atm10-queue")
 
 local DEFAULT_CONFIG = {
   mode = "dry-run",
@@ -46,6 +50,8 @@ local config = DEFAULT_CONFIG
 local configError = nil
 local ledgerError = nil
 local paletteApplied = false
+local pageIndex = 1
+local pageShownAt = nil
 
 local function peripheralTypeMatches(actual, expected)
   if actual == expected then return true end
@@ -197,6 +203,18 @@ local function writeLedger(data)
   return true
 end
 
+-- Load the approved-craft queue (fail-safe: any problem yields an empty queue).
+local function loadQueue()
+  if not fs.exists(QUEUE_FILE) then return cqueue.new() end
+  local file = fs.open(QUEUE_FILE, "r")
+  if not file then return cqueue.new() end
+  local text = file.readAll()
+  file.close()
+  local ok, data = pcall(textutils.unserialize, text)
+  if not ok then return cqueue.new() end
+  return cqueue.normalize(data)
+end
+
 local function openBroadcastModems()
   if not BROADCAST_ENABLED or broadcastReady then return end
 
@@ -226,20 +244,6 @@ local function fmt(n)
   return tostring(math.floor(n))
 end
 
-local function pct(used, total)
-  used = tonumber(used) or 0
-  total = tonumber(total) or 0
-  if total <= 0 then return 0 end
-  return math.max(0, math.min(100, (used / total) * 100))
-end
-
-local function colorForPercent(value)
-  if value >= 90 then return colors.red end
-  if value >= 75 then return colors.orange end
-  if value >= 50 then return colors.yellow end
-  return colors.lime
-end
-
 local function pickTextScale()
   if not monitor then return end
   if not paletteApplied then
@@ -264,28 +268,6 @@ end
 
 local function line(y, text, color)
   uiDraw.line(monitor, y, text, color or colors.white, colors.black)
-end
-
-local function bar(y, label, used, total)
-  local w = monitor.getSize()
-  local p = pct(used, total)
-  local barWidth = math.max(10, w - #label - 12)
-  local filled = math.floor((p / 100) * barWidth)
-
-  monitor.setCursorPos(1, y)
-  monitor.setTextColor(colors.white)
-  monitor.setBackgroundColor(colors.black)
-  monitor.clearLine()
-  monitor.write(label .. " [")
-
-  for i = 1, barWidth do
-    monitor.setBackgroundColor(i <= filled and colorForPercent(p) or colors.gray)
-    monitor.write(" ")
-  end
-
-  monitor.setBackgroundColor(colors.black)
-  monitor.setTextColor(colors.white)
-  monitor.write("] " .. string.format("%3.0f%%", p))
 end
 
 local function getItems()
@@ -584,6 +566,7 @@ local function scan()
     stockPlans = stockPlans,
     stockTally = stockTally,
     categorySummaries = summarizeCategories(stockPlans),
+    craftQueue = cqueue.list(loadQueue()),
   }
 end
 
@@ -642,78 +625,36 @@ local function drawWaiting(message)
   line(5, "Attach monitor + RS Bridge to this computer.", colors.gray)
 end
 
-local function draw(data)
-  if not monitor then return end
+-- The manager monitor is a management-only console. Inventory browsing lives on
+-- the separate read-only viewers; here we show the stock Plan and the craft Queue.
+local function drawPlanPage(data)
+  local w, h = monitor.getSize()
 
-  monitor.setBackgroundColor(colors.black)
-  monitor.clear()
-
-  line(1, TITLE, colors.cyan)
-  line(2, "Bridge: " .. tostring(bridgeName or "?"), colors.gray)
-
-  if not data then
-    drawWaiting(status)
-    return
-  end
-
-  local onlineText = "unknown"
-  local onlineColor = colors.yellow
-  if data.online == true then onlineText, onlineColor = "ONLINE", colors.lime
-  elseif data.online == false then onlineText, onlineColor = "OFFLINE", colors.red end
-
-  line(4, "Grid: " .. onlineText .. "   Types: " .. fmt(data.unique) .. "   Items: " .. fmt(data.totalAmount), onlineColor)
-  line(5, "Managed: " .. fmt(data.managedItemCount) .. "   Listed: " .. fmt(data.listedItemCount) .. "   Default: " .. tostring(data.defaultHandling or "unmanaged"), colors.gray)
-
-  if data.usedItemStorage and data.totalItemStorage then
-    line(6, "Item Storage: " .. fmt(data.usedItemStorage) .. " / " .. fmt(data.totalItemStorage), colors.white)
-    bar(7, "Items", data.usedItemStorage, data.totalItemStorage)
-  else
-    line(6, "Item Storage: capacity unavailable", colors.gray)
-  end
-
-  if data.storedEnergy and data.energyCapacity then
-    line(9, "RS Energy: " .. fmt(data.storedEnergy) .. " / " .. fmt(data.energyCapacity) .. " FE", colors.white)
-  end
-  if data.energyUsage then
-    line(10, "RS Usage:  " .. fmt(data.energyUsage) .. " FE/t", colors.white)
-  end
-
-  if data.configError then
-    line(11, data.configError, colors.orange)
-  else
-    line(11, "Mode: " .. tostring(data.configMode or "dry-run"), colors.gray)
-  end
-
-  local _, h = monitor.getSize()
-
-  local w = monitor.getSize()
-
-  line(12, "Category Summary   + ok  > would  ~ craft  . wait  x recipe  # block", colors.cyan)
-  local summaryRows = math.min(4, h - 12)
+  line(6, "Category Summary   + ok  > would  ~ craft  . wait  x recipe  # block", colors.cyan)
+  local summaries = data.categorySummaries or {}
+  local summaryRows = math.min(4, #summaries)
   for i = 1, summaryRows do
-    local summary = data.categorySummaries and data.categorySummaries[i]
-    if summary then
-      line(12 + i, formatCategorySummary(summary, w), uiStatus.color(categorySummaryStatus(summary)))
-    end
+    line(6 + i, formatCategorySummary(summaries[i], w), uiStatus.color(categorySummaryStatus(summaries[i])))
   end
 
-  line(18, "Stock Keeper Plan [dry-run]", colors.cyan)
+  local planLabelY = 6 + summaryRows + 2
+  line(planLabelY, "Stock Keeper Plan [dry-run]", colors.cyan)
+  local headerRows = 0
   if w >= 72 then
-    line(19, uiDraw.fit("ITEM", math.max(18, w - 39)) .. "     HAVE   TARGET    PLAN   STATUS", colors.gray)
+    line(planLabelY + 1, uiDraw.fit("ITEM", math.max(18, w - 39)) .. "     HAVE   TARGET    PLAN   STATUS", colors.gray)
+    headerRows = 1
   end
 
-  local planStart = w >= 72 and 20 or 19
-  local planRows = math.min(7, h - planStart)
+  local planStart = planLabelY + 1 + headerRows
+  local plans = data.stockPlans or {}
+  local planRows = math.max(0, math.min(#plans, h - planStart - 1))
   for i = 1, planRows do
-    local plan = data.stockPlans and data.stockPlans[i]
-    if plan then
-      line(planStart + i - 1, formatPlanRow(plan, w), uiStatus.color(plan.action))
-    end
+    line(planStart + i - 1, formatPlanRow(plans[i], w), uiStatus.color(plans[i].action))
   end
 
   local tally = data.stockTally or {}
   local tallyY = planStart + planRows
-  if tallyY < h then
+  if tallyY <= h then
     line(tallyY, "+ " .. fmt(tally.OK) ..
       "  > " .. fmt(tally.WOULD) ..
       "  ~ " .. fmt(tally.CRAFTING) ..
@@ -722,29 +663,75 @@ local function draw(data)
       "  # " .. fmt(tally.BLOCKED) ..
       "   apply disabled", colors.gray)
   end
+end
 
-  local topY = 28
-  if h < topY + 2 then topY = tallyY + 2 end
+local function drawQueuePage(data)
+  local w, h = monitor.getSize()
+  local q = data.craftQueue or {}
 
-  line(topY, "Low Stock", colors.cyan)
-  if #data.warnings == 0 then
-    line(topY + 1, "All watched items are above target.", colors.lime)
-  else
-    for i = 1, math.min(4, #data.warnings) do
-      local warn = data.warnings[i]
-      local craft = warn.craftable and " craftable" or ""
-      line(topY + i, warn.label .. ": " .. fmt(warn.amount) .. " / " .. fmt(warn.target) .. craft, colors.orange)
-    end
+  line(6, "Craft Queue   " .. #q .. " approved   [crafting disabled]", colors.cyan)
+
+  if #q == 0 then
+    line(8, "No approved crafts yet.", colors.lime)
+    line(9, "Approving items from the Plan page comes in the next step.", colors.gray)
+    return
   end
 
-  local itemsY = topY + math.min(5, #data.warnings + 1) + 1
-  line(itemsY, "Top Stored Items", colors.cyan)
-  local maxRows = math.min(TOP_ITEM_COUNT, h - itemsY)
-  for i = 1, maxRows do
-    local item = data.items[i]
-    if item then
-      line(itemsY + i, tostring(i) .. ". " .. itemName(item) .. "  " .. fmt(itemAmount(item)), colors.white)
+  local wide = w >= 60
+  if wide then
+    line(7, uiDraw.fit("ITEM", math.max(16, w - 28)) .. "  REQUEST   STATE     AGE", colors.gray)
+  end
+
+  local start = wide and 8 or 7
+  local rows = math.max(0, math.min(#q, h - start))
+  local now = nowMs()
+  for i = 1, rows do
+    local e = q[i]
+    local ageS = math.max(0, math.floor((now - (e.approvedAt or now)) / 1000))
+    local text
+    if wide then
+      text = uiDraw.fit(tostring(e.label or e.name), math.max(16, w - 28)) ..
+        "  " .. rjust("+" .. fmt(e.request), 7) ..
+        "  " .. uiDraw.fit(tostring(e.state or "?"), 8) ..
+        "  " .. rjust(ageS .. "s", 4)
+    else
+      text = uiDraw.fit(tostring(e.label or e.name) .. " +" .. fmt(e.request) .. " " .. tostring(e.state), w)
     end
+    line(start + i - 1, text, uiStatus.color(uiStatus.WOULD))
+  end
+end
+
+local function draw(data, pageName, pageNumber)
+  if not monitor then return end
+
+  if not data then
+    drawWaiting(status)
+    return
+  end
+
+  monitor.setBackgroundColor(colors.black)
+  monitor.clear()
+
+  -- shared header (both pages)
+  line(1, TITLE, colors.cyan)
+  line(2, "Page " .. tostring(pageNumber) .. "/" .. #PAGES .. ": " .. tostring(pageName) ..
+    "   Bridge: " .. tostring(bridgeName or "?"), colors.gray)
+
+  local onlineText, onlineColor = "unknown", colors.yellow
+  if data.online == true then onlineText, onlineColor = "ONLINE", colors.lime
+  elseif data.online == false then onlineText, onlineColor = "OFFLINE", colors.red end
+  line(3, "Grid: " .. onlineText .. "   Managed: " .. fmt(data.managedItemCount), onlineColor)
+
+  if data.configError then
+    line(4, data.configError, colors.orange)
+  else
+    line(4, "Mode: " .. tostring(data.configMode or "dry-run") .. " (crafting disabled)", colors.gray)
+  end
+
+  if pageName == "QUEUE" then
+    drawQueuePage(data)
+  else
+    drawPlanPage(data)
   end
 end
 
@@ -759,7 +746,14 @@ while true do
   if monitor then
     local ok, data = pcall(scan)
     if ok then
-      draw(data)
+      -- rotate through the console pages on a timer
+      local nowT = nowMs()
+      if not pageShownAt then pageShownAt = nowT end
+      if nowT - pageShownAt >= PAGE_SECONDS * 1000 then
+        pageIndex = pageIndex % #PAGES + 1
+        pageShownAt = nowT
+      end
+      draw(data, PAGES[pageIndex], pageIndex)
       broadcast(data)
     else
       drawWaiting(tostring(data))

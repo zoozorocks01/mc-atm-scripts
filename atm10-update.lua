@@ -7,6 +7,7 @@ local commonFiles = {
   { remote = "lib/atm10-draw.lua", localName = "atm10-draw.lua" },
   { remote = "lib/atm10-control.lua", localName = "atm10-control.lua" },
   { remote = "lib/atm10-stockplan.lua", localName = "atm10-stockplan.lua" },
+  { remote = "lib/atm10-queue.lua", localName = "atm10-queue.lua" },
   { remote = "atm10-theme", localName = "atm10-theme", onlyIfMissing = true },
 }
 
