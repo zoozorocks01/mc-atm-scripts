@@ -2,7 +2,15 @@ local PROTOCOL = "atm10-power-v1"
 local HOSTNAME = "display"
 local MODEM_SIDE = "top"
 local MONITOR_SIDE = "right"
+
+local TITLE = "ATM10 POWER MANAGEMENT"
 local TEXT_SCALE = "auto"
+local HISTORY_LIMIT = 180
+local SHOW_NET_GRAPH = true
+local SHOW_STORED_GRAPH = true
+local CRITICAL_PERCENT = 15
+local LOW_PERCENT = 35
+local STALE_SECONDS = 10
 
 local mon = peripheral.wrap(MONITOR_SIDE)
 if not mon then error("No monitor on " .. MONITOR_SIDE) end
@@ -20,7 +28,7 @@ local function pickTextScale()
   for _, scale in ipairs(scales) do
     mon.setTextScale(scale)
     local w, h = mon.getSize()
-    if w >= 34 and h >= 15 then return scale end
+    if w >= 34 and h >= 18 then return scale end
   end
 
   for _, scale in ipairs(scales) do
@@ -36,6 +44,7 @@ end
 local textScale = pickTextScale()
 
 local history = {}
+local netHistory = {}
 local last = nil
 local lastSeen = nil
 
@@ -52,6 +61,28 @@ local function fmt(n)
   if a >= 1000000 then return string.format("%.2f MFE", n / 1000000) end
   if a >= 1000 then return string.format("%.1f kFE", n / 1000) end
   return tostring(math.floor(n)) .. " FE"
+end
+
+local function fmtDuration(seconds)
+  seconds = math.max(0, math.floor(tonumber(seconds) or 0))
+  if seconds >= 86400 then return string.format("%.1fd", seconds / 86400) end
+  if seconds >= 3600 then return string.format("%.1fh", seconds / 3600) end
+  if seconds >= 60 then return string.format("%dm", math.floor(seconds / 60)) end
+  return tostring(seconds) .. "s"
+end
+
+local function estimateTime(energy, maxEnergy, net)
+  energy = tonumber(energy) or 0
+  maxEnergy = tonumber(maxEnergy) or 0
+  net = tonumber(net) or 0
+
+  if math.abs(net) < 1 then return "Time: stable", colors.gray end
+
+  if net < 0 then
+    return "Empty in " .. fmtDuration(energy / math.abs(net) / 20), colors.red
+  end
+
+  return "Full in  " .. fmtDuration((maxEnergy - energy) / net / 20), colors.lime
 end
 
 local function colorForPercent(p)
@@ -141,12 +172,79 @@ local function drawCompactGraph(y, pctHistory)
   mon.setBackgroundColor(colors.black)
 end
 
+local function maxAbsVisible(values, width)
+  local maxAbs = 1
+  for x = 1, width do
+    local sample = values[#values - width + x]
+    if sample then maxAbs = math.max(maxAbs, math.abs(sample)) end
+  end
+  return maxAbs
+end
+
+local function drawNetGraph(top, height, values)
+  if height < 3 then return end
+
+  local w = mon.getSize()
+  local left = 2
+  local width = w - 2
+  local mid = top + math.floor(height / 2)
+  local maxAbs = maxAbsVisible(values, width)
+
+  for x = 1, width do
+    local sample = values[#values - width + x]
+    local v = sample or 0
+    local positiveRows = math.max(1, mid - top)
+    local negativeRows = math.max(1, top + height - 1 - mid)
+    local rows = 0
+
+    if sample then
+      if v > 0 then rows = math.max(1, math.ceil((v / maxAbs) * positiveRows))
+      elseif v < 0 then rows = math.max(1, math.ceil((math.abs(v) / maxAbs) * negativeRows)) end
+    end
+
+    for y = top, top + height - 1 do
+      mon.setCursorPos(left + x - 1, y)
+      if y == mid then
+        mon.setBackgroundColor(colors.gray)
+      elseif sample and v > 0 and y >= mid - rows and y < mid then
+        mon.setBackgroundColor(colors.lime)
+      elseif sample and v < 0 and y <= mid + rows and y > mid then
+        mon.setBackgroundColor(colors.red)
+      else
+        mon.setBackgroundColor(colors.black)
+      end
+      mon.write(" ")
+    end
+  end
+
+  mon.setBackgroundColor(colors.black)
+end
+
+local function drawCompactNetGraph(y, values)
+  local w = mon.getSize()
+  if y < 1 then return end
+
+  mon.setCursorPos(1, y)
+  mon.clearLine()
+
+  for x = 1, w do
+    local sample = values[#values - w + x]
+    if sample and sample > 0 then mon.setBackgroundColor(colors.lime)
+    elseif sample and sample < 0 then mon.setBackgroundColor(colors.red)
+    elseif sample then mon.setBackgroundColor(colors.gray)
+    else mon.setBackgroundColor(colors.black) end
+    mon.write(" ")
+  end
+
+  mon.setBackgroundColor(colors.black)
+end
+
 local function draw()
   local _, h = mon.getSize()
   mon.setBackgroundColor(colors.black)
   mon.clear()
 
-  line(1, "ATM10 POWER MANAGEMENT", colors.cyan)
+  line(1, TITLE, colors.cyan)
 
   if not last then
     line(3, "Waiting for power computer...", colors.yellow)
@@ -157,33 +255,46 @@ local function draw()
   local pct = last.percent or 0
   local net = (last.input or 0) - (last.output or 0)
   local age = now() - (lastSeen or now())
+  local timeText, timeColor = estimateTime(last.energy, last.maxEnergy, net)
 
   line(3, "Stored: " .. fmt(last.energy) .. " / " .. fmt(last.maxEnergy), colors.white)
   drawBar(4, "Matrix", pct)
 
   line(6, "Full:   " .. string.format("%.2f%%", pct), colorForPercent(pct))
-  line(8, "Input:  " .. fmt(last.input) .. "/t", colors.lime)
-  line(9, "Output: " .. fmt(last.output) .. "/t", colors.red)
+  line(7, "Input:  " .. fmt(last.input) .. "/t", colors.lime)
+  line(8, "Output: " .. fmt(last.output) .. "/t", colors.red)
 
   local netColor = colors.white
   if net > 0 then netColor = colors.lime elseif net < 0 then netColor = colors.red end
-  line(10, "Net:    " .. fmt(net) .. "/t", netColor)
+  line(9, "Net:    " .. fmt(net) .. "/t", netColor)
+  line(10, timeText, timeColor)
 
   local status = "OK"
   local statusColor = colors.lime
-  if age > 10 then status, statusColor = "STALE DATA", colors.orange
-  elseif pct < 15 then status, statusColor = "CRITICAL", colors.red
-  elseif pct < 35 then status, statusColor = "LOW", colors.orange
+  if age > STALE_SECONDS then status, statusColor = "STALE DATA", colors.orange
+  elseif pct < CRITICAL_PERCENT then status, statusColor = "CRITICAL", colors.red
+  elseif pct < LOW_PERCENT then status, statusColor = "LOW", colors.orange
   elseif net < 0 then status, statusColor = "DRAINING", colors.yellow end
 
   line(12, "Status: " .. status .. "   age " .. math.floor(age) .. "s", statusColor)
 
-  if h >= 15 then
+  if SHOW_NET_GRAPH and SHOW_STORED_GRAPH and h >= 21 then
+    line(13, "Net Flow History", colors.cyan)
+    local netHeight = math.max(3, math.floor((h - 15) / 2))
+    drawNetGraph(14, netHeight, netHistory)
+
+    local storedLabel = 14 + netHeight
+    line(storedLabel, "Stored Energy History", colors.cyan)
+    drawGraph(storedLabel + 1, h - storedLabel, history)
+  elseif SHOW_NET_GRAPH and h >= 16 then
+    line(13, "Net Flow History", colors.cyan)
+    drawNetGraph(14, h - 13, netHistory)
+  elseif SHOW_STORED_GRAPH and h >= 15 then
     line(13, "Stored Energy History", colors.cyan)
-    local graphTop = 14
-    local graphHeight = h - 13
-    drawGraph(graphTop, graphHeight, history)
-  elseif h >= 13 then
+    drawGraph(14, h - 13, history)
+  elseif SHOW_NET_GRAPH and h >= 13 then
+    drawCompactNetGraph(13, netHistory)
+  elseif SHOW_STORED_GRAPH and h >= 13 then
     drawCompactGraph(13, history)
   else
     line(h, "Scale " .. tostring(textScale) .. " auto", colors.gray)
@@ -197,7 +308,10 @@ while true do
     lastSeen = now()
 
     history[#history + 1] = msg.percent or 0
-    while #history > 120 do table.remove(history, 1) end
+    netHistory[#netHistory + 1] = (msg.input or 0) - (msg.output or 0)
+
+    while #history > HISTORY_LIMIT do table.remove(history, 1) end
+    while #netHistory > HISTORY_LIMIT do table.remove(netHistory, 1) end
   end
 
   draw()

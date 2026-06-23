@@ -11,6 +11,9 @@ This setup uses two computers:
 
 The two ender modems should be on the same private band/color.
 
+The display shows stored energy, input/output, net FE/t, estimated time to
+empty/full, status, and history graphs.
+
 ### Install on display computer
 
 ```lua
@@ -30,3 +33,4 @@ startup
 - Label the computers with `label set atm10-power-display` and `label set atm10-power-probe`.
 - Keep both chunks loaded, or the dashboard can stop updating.
 - This reads total induction matrix input/output. Per-machine top users/producers require Energy Detectors on individual branches.
+- Display tuning lives at the top of `power-display.lua`: `TEXT_SCALE`, `SHOW_NET_GRAPH`, `SHOW_STORED_GRAPH`, warning thresholds, and history length.
