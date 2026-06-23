@@ -1,6 +1,14 @@
 return {
   mode = "dry-run",
 
+  itemDefaults = {
+    handling = "unmanaged",
+  },
+
+  -- Display-only selected items. These do not create warnings or craft plans.
+  listedItems = {
+  },
+
   lowStock = {
     { label = "Glass", name = "minecraft:glass", target = 512 },
     { label = "Redstone", name = "minecraft:redstone", target = 1024 },

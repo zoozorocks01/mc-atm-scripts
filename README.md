@@ -94,6 +94,21 @@ Low-stock watches and stock keeper dry-run settings live in `inventory-config`.
 The updater installs that config only if it is missing, so your edited values
 are preserved.
 
+Default item handling is unmanaged. Items can be shown in top lists, selected
+in `listedItems`, or used as low-stock warnings without becoming stock keeper
+targets. Only items explicitly listed under `stockKeeper.categories[].items`
+enter the planner.
+
+```lua
+itemDefaults = {
+  handling = "unmanaged",
+}
+
+listedItems = {
+  { label = "Nether Stars", name = "minecraft:nether_star" },
+}
+```
+
 The stock manager is organized by categories:
 
 ```lua

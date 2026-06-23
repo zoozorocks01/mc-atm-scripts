@@ -162,6 +162,7 @@ local function draw(data)
   elseif data.online == false then onlineText, onlineColor = "OFFLINE", colors.red end
 
   line(4, "Grid: " .. onlineText .. "   Types: " .. fmt(data.unique) .. "   Items: " .. fmt(data.totalAmount), onlineColor)
+  line(5, "Managed: " .. fmt(data.managedItemCount) .. "   Listed: " .. fmt(data.listedItemCount) .. "   Default: " .. tostring(data.defaultHandling or "unmanaged"), colors.gray)
 
   if data.usedItemStorage and data.totalItemStorage then
     line(6, "Item Storage: " .. fmt(data.usedItemStorage) .. " / " .. fmt(data.totalItemStorage), colors.white)

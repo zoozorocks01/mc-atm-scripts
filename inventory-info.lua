@@ -12,6 +12,10 @@ local LEDGER_FILE = ".atm10-stock-ledger"
 
 local DEFAULT_CONFIG = {
   mode = "dry-run",
+  itemDefaults = {
+    handling = "unmanaged",
+  },
+  listedItems = {},
   lowStock = {
     { label = "Glass", name = "minecraft:glass", target = 512 },
     { label = "Redstone", name = "minecraft:redstone", target = 1024 },
@@ -85,13 +89,30 @@ local function shallowCopyList(list)
   return copy
 end
 
+local function noteConfigError(message)
+  if configError then
+    configError = configError .. "; " .. message
+  else
+    configError = message
+  end
+end
+
 local function normalizeConfig(raw)
   local cfg = type(raw) == "table" and raw or {}
 
   if cfg.mode ~= "dry-run" then
     cfg.mode = "dry-run"
-    configError = "Mode forced to dry-run"
+    noteConfigError("Mode forced to dry-run")
   end
+
+  local hadItemDefaults = type(cfg.itemDefaults) == "table"
+  if not hadItemDefaults then cfg.itemDefaults = {} end
+  if hadItemDefaults and cfg.itemDefaults.handling ~= nil and cfg.itemDefaults.handling ~= "unmanaged" then
+    noteConfigError("Default handling forced unmanaged")
+  end
+  cfg.itemDefaults.handling = "unmanaged"
+
+  if type(cfg.listedItems) ~= "table" then cfg.listedItems = {} end
 
   if type(cfg.lowStock) ~= "table" then
     cfg.lowStock = shallowCopyList(DEFAULT_CONFIG.lowStock)
@@ -291,6 +312,30 @@ local function findStoredItem(items, registryName)
   return nil
 end
 
+local function buildManagedItemNames()
+  local names = {}
+  local stock = config.stockKeeper or {}
+  local categories = stock.categories or {}
+
+  if #categories == 0 and type(stock.items) == "table" then
+    categories = { { label = "Stock Keeper", items = stock.items } }
+  end
+
+  for _, category in ipairs(categories) do
+    for _, target in ipairs(category.items or {}) do
+      if target.name then names[target.name] = true end
+    end
+  end
+
+  return names
+end
+
+local function countKeys(map)
+  local count = 0
+  for _ in pairs(map or {}) do count = count + 1 end
+  return count
+end
+
 local function isCraftable(registryName, item)
   if type(item) == "table" and item.isCraftable ~= nil then return item.isCraftable end
 
@@ -299,6 +344,23 @@ local function isCraftable(registryName, item)
 
   result = call(bridge, "isItemCraftable", { name = registryName })
   return result == true
+end
+
+local function collectListedItems(items)
+  local listed = {}
+  for _, target in ipairs(config.listedItems or {}) do
+    if target.name then
+      local item = findStoredItem(items, target.name)
+      listed[#listed + 1] = {
+        label = target.label or target.name,
+        name = target.name,
+        amount = item and itemAmount(item) or 0,
+        handling = "unmanaged",
+        craftable = isCraftable(target.name, item),
+      }
+    end
+  end
+  return listed
 end
 
 local function isItemCrafting(registryName)
@@ -470,6 +532,8 @@ local function scan()
     end
   end
 
+  local managedNames = buildManagedItemNames()
+  local listedItems = collectListedItems(items)
   local stockPlans = planStockActions(items)
 
   return {
@@ -479,6 +543,11 @@ local function scan()
     unique = unique,
     totalAmount = totalAmount,
     craftableCount = craftableCount,
+    defaultHandling = config.itemDefaults.handling,
+    managedItemCount = countKeys(managedNames),
+    listedItemCount = #listedItems,
+    unmanagedItemCount = math.max(0, unique - countKeys(managedNames)),
+    listedItems = listedItems,
     warnings = warnings,
     usedItemStorage = call(bridge, "getUsedItemStorage"),
     totalItemStorage = call(bridge, "getTotalItemStorage") or call(bridge, "getMaxItemDiskStorage"),
@@ -519,6 +588,11 @@ local function broadcast(data)
     unique = data.unique,
     totalAmount = data.totalAmount,
     craftableCount = data.craftableCount,
+    defaultHandling = data.defaultHandling,
+    managedItemCount = data.managedItemCount,
+    listedItemCount = data.listedItemCount,
+    unmanagedItemCount = data.unmanagedItemCount,
+    listedItems = data.listedItems,
     warnings = data.warnings,
     topItems = compactItems(data.items, TOP_ITEM_COUNT),
     usedItemStorage = data.usedItemStorage,
@@ -563,6 +637,7 @@ local function draw(data)
   elseif data.online == false then onlineText, onlineColor = "OFFLINE", colors.red end
 
   line(4, "Grid: " .. onlineText .. "   Types: " .. fmt(data.unique) .. "   Items: " .. fmt(data.totalAmount), onlineColor)
+  line(5, "Managed: " .. fmt(data.managedItemCount) .. "   Listed: " .. fmt(data.listedItemCount) .. "   Default: " .. tostring(data.defaultHandling or "unmanaged"), colors.gray)
 
   if data.usedItemStorage and data.totalItemStorage then
     line(6, "Item Storage: " .. fmt(data.usedItemStorage) .. " / " .. fmt(data.totalItemStorage), colors.white)

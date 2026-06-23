@@ -1,6 +1,17 @@
 return {
   mode = "dry-run",
 
+  itemDefaults = {
+    handling = "unmanaged",
+  },
+
+  -- Display-only selected items. These can appear on future detail pages
+  -- without becoming low-stock warnings or stock keeper plans.
+  listedItems = {
+    { label = "Nether Stars", name = "minecraft:nether_star" },
+    { label = "Allthemodium Ingot", name = "allthemodium:allthemodium_ingot" },
+  },
+
   -- These low-stock watches are just warnings.
   lowStock = {
     { label = "Glass", name = "minecraft:glass", target = 512 },
