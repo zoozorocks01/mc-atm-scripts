@@ -58,6 +58,10 @@ These are compatibility mirrors for older in-game updater installs. Older
 updaters download role files from root before downloading the new updater, so
 removing root files immediately would strand those computers.
 
+Do not `git rm` these root mirrors as part of normal feature work. They can be
+removed only in an explicit compatibility cleanup release after all active
+computers have successfully run the nested-path updater.
+
 New versions of `atm10-update.lua` download from the canonical folders and
 install to the same simple local filenames used by CC:Tweaked computers.
 

@@ -36,10 +36,14 @@ pass:
 - `lib/atm10-draw.lua`: bars, gauges, panel boxes, and diff-buffer rendering
 - `lib/atm10-control.lua`: proposed-action records and execution-mode gates
 
-The current scripts still work independently. These modules are installed by
-the updater so future power, inventory, machine, and security systems can share
-one display/control language. See `docs/CONTROL_ARCHITECTURE.md` for the
-safety model.
+These modules are installed locally as `atm10-status.lua`,
+`atm10-palette.lua`, `atm10-draw.lua`, and `atm10-control.lua`. Scripts should
+require those exact `atm10-*` names.
+
+Inventory displays already use the shared status/draw/palette modules. Future
+power, dashboard, machine, and security systems should wire into the same
+display/control language. See `docs/CONTROL_ARCHITECTURE.md` for the safety
+model.
 
 Canonical source now lives in folders:
 
