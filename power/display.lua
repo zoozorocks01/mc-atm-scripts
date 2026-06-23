@@ -12,6 +12,7 @@ local CRITICAL_PERCENT = 15
 local LOW_PERCENT = 35
 local STALE_SECONDS = 10
 
+local uiStatus = require("atm10-status")
 local uiDraw = require("atm10-draw")
 local uiPalette = require("atm10-palette")
 
@@ -292,18 +293,19 @@ local function draw()
     line(10, timeText, timeColor)
   end
 
-  local status = "OK"
-  local statusColor = colors.lime
-  if age > STALE_SECONDS then status, statusColor = "STALE DATA", colors.orange
-  elseif pct < CRITICAL_PERCENT then status, statusColor = "CRITICAL", colors.red
-  elseif pct < LOW_PERCENT then status, statusColor = "LOW", colors.orange
-  elseif net < 0 then status, statusColor = "DRAINING", colors.yellow end
+  -- Status label and color come from the shared vocabulary (atm10-status), so
+  -- power and inventory speak one language. Thresholds are unchanged.
+  local statusText = "OK"
+  if age > STALE_SECONDS then statusText = "STALE DATA"
+  elseif pct < CRITICAL_PERCENT then statusText = "CRITICAL"
+  elseif pct < LOW_PERCENT then statusText = "LOW"
+  elseif net < 0 then statusText = "DRAINING" end
 
   if (last.input or 0) == 0 and (last.output or 0) == 0 and (lastNonzeroInput > 0 or lastNonzeroOutput > 0) then
     line(11, timeText, timeColor)
   end
 
-  line(12, "Status: " .. status .. "   age " .. math.floor(age) .. "s", statusColor)
+  line(12, "Status: " .. uiStatus.label(statusText) .. "   age " .. math.floor(age) .. "s", uiStatus.color(statusText))
 
   if SHOW_NET_GRAPH and SHOW_STORED_GRAPH and h >= 21 then
     line(13, "Net Flow History", colors.cyan)
