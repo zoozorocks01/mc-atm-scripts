@@ -2,6 +2,30 @@
 
 ComputerCraft/CC:Tweaked scripts for ATM10 base automation.
 
+## Updater
+
+Install the updater once:
+
+```lua
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/atm10-update.lua update
+```
+
+Set the computer role once:
+
+```lua
+update power-display
+update power-probe
+update inventory-source
+update inventory-remote
+```
+
+After that, future updates are just:
+
+```lua
+update
+reboot
+```
+
 ## Power Dashboard
 
 This setup uses two computers:
