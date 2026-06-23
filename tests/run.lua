@@ -471,6 +471,24 @@ t.eq(#suggest.analyze(stable, {}), 0, "stable item -> no suggestion")
 local quick = { y = { label = "Y", t0 = 0, a0 = 1000, tN = 1000, aN = 0, minA = 0 } }
 t.eq(#suggest.analyze(quick, {}), 0, "decline inside too-short window -> none")
 
+-- CAP: an unmanaged item that keeps ACCUMULATING -> suggest a compress ceiling
+local grow = { cobble = { label = "Cobble", t0 = 0, a0 = 1000, tN = 120000, aN = 5000, minA = 1000 } }
+local gs = suggest.analyze(grow, { managed = {} })
+t.eq(#gs, 1, "accumulating item -> one suggestion")
+t.eq(gs[1].kind, "cap", "growth suggestion is a cap/ceiling")
+t.check(gs[1].ceiling and gs[1].ceiling > 0, "cap suggestion seeds a ceiling")
+
+-- RAISE: a managed item stuck below target while still draining -> raise craftTo
+local low = { steel = { label = "Steel", t0 = 0, a0 = 200, tN = 120000, aN = 100, minA = 100 } }
+local rs2 = suggest.analyze(low, { quotas = { steel = { target = 256, craftTo = 300 } } })
+t.eq(#rs2, 1, "managed item below target + draining -> one suggestion")
+t.eq(rs2[1].kind, "raise", "it is a raise suggestion")
+t.check(rs2[1].craftTo > 300, "raise proposes a higher craftTo")
+-- a managed item comfortably above target gets no raise
+local ok2 = { steel = { label = "Steel", t0 = 0, a0 = 900, tN = 120000, aN = 800, minA = 800 } }
+t.eq(#suggest.analyze(ok2, { quotas = { steel = { target = 256, craftTo = 300 } } }), 0,
+  "managed item above target -> no raise suggestion")
+
 -- ---------------------------------------------------------------------------
 print("overflow balancer (compress above ceiling)")
 local function ovItem(over) local i = { name = "dust", label = "Steel Dust",

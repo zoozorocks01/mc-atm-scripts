@@ -742,7 +742,11 @@ local function scan()
       end
     end
     suggest.record(trendHistory, snapshot, nowMs())
-    suggestions = suggest.analyze(trendHistory, { managed = managedNames, max = 8 })
+    local quotasMap = {}
+    for _, e in ipairs(managed.list(managedStore)) do
+      quotasMap[e.name] = { target = e.target, craftTo = e.craftTo }
+    end
+    suggestions = suggest.analyze(trendHistory, { managed = managedNames, quotas = quotasMap, max = 8 })
   end
   local stockTally = uiStatus.tally(stockPlans)
 
@@ -1152,14 +1156,18 @@ local function drawSmartPage(data)
   line(9, "Suggested quotas (tap to review + save):", colors.cyan)
   local start = 10
   local rows = math.min(#sugg, math.max(0, h - start - 1))
+  local kindTag = { quota = "STOCK", raise = "RAISE", cap = "CAP" }
   for i = 1, rows do
     local s = sugg[i]
     local y = start + (i - 1)
-    line(y, uiDraw.fit(s.label .. " -> keep " .. fmt(s.target) .. "/" .. fmt(s.craftTo) ..
+    local detail = (s.kind == "cap")
+      and ("cap " .. fmt(s.ceiling))
+      or ("keep " .. fmt(s.target) .. "/" .. fmt(s.craftTo))
+    line(y, uiDraw.fit("[" .. (kindTag[s.kind] or "?") .. "] " .. s.label .. " -> " .. detail ..
       "  (" .. tostring(s.reason) .. ")", w), colors.white)
     smartRowRegions[#smartRowRegions + 1] = { y = y, entry = s }
   end
-  line(h, "Tapping opens the editor pre-filled; SAVE to set the quota.", colors.gray)
+  line(h, "Tapping opens the editor pre-filled; SAVE to apply.", colors.gray)
 end
 
 local function draw(data)
@@ -1287,14 +1295,17 @@ end
 local function openEditor(entry)
   local existing = managed.get(managedStore or loadManaged(), entry.name)
   local target, craftTo, ceiling, into, ratio
-  if existing then
+  if entry.seeded then
+    -- accepting a smart-mode suggestion: seed its fields, keep any existing
+    -- overflow config, and let the operator review before saving
+    target = math.max(0, math.floor(entry.target or (existing and existing.target) or 0))
+    craftTo = math.max(target, math.floor(entry.craftTo or (existing and existing.craftTo) or (target + BROWSE_CRAFT_AMOUNT)))
+    ceiling = math.max(0, math.floor(entry.ceiling or (existing and existing.ceiling) or 0))
+    into = existing and existing.into or nil
+    ratio = (existing and existing.ratio) or 1
+  elseif existing then
     target, craftTo = existing.target, existing.craftTo
     ceiling, into, ratio = existing.ceiling or 0, existing.into, existing.ratio or 1
-  elseif entry.target then
-    -- seeded (e.g. accepting a smart-mode suggestion): review before saving
-    target = math.max(0, math.floor(entry.target))
-    craftTo = math.max(target, math.floor(entry.craftTo or (target + BROWSE_CRAFT_AMOUNT)))
-    ceiling, into, ratio = 0, nil, 1
   else
     target = math.max(0, math.floor(entry.amount or 0))
     craftTo = target + BROWSE_CRAFT_AMOUNT
@@ -1464,8 +1475,8 @@ local function handleTouch(x, y)
   end
   local smartEntry = console.rowHit(smartRowRegions, y)
   if smartEntry then
-    openEditor({ name = smartEntry.name, label = smartEntry.label, craftable = true,
-      target = smartEntry.target, craftTo = smartEntry.craftTo })
+    openEditor({ name = smartEntry.name, label = smartEntry.label, craftable = true, seeded = true,
+      target = smartEntry.target, craftTo = smartEntry.craftTo, ceiling = smartEntry.ceiling })
     renderCurrent()
     return
   end

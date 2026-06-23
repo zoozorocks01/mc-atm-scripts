@@ -32,38 +32,60 @@ function suggest.record(history, snapshot, now)
   return history
 end
 
--- analyze(history, ctx) -> array of suggestions:
---   { kind = "quota", name, label, target, craftTo, reason }
--- ctx: { managed = {[name]=true}, dismissed = {[name]=true},
---        minDrain = 64, minWindowMs = 60000, max = 8 }
--- A suggestion fires when an UNMANAGED item has net-declined by >= minDrain over a
--- window of >= minWindowMs. Proposed quota holds near the observed low with a
--- ~5-minute refill buffer above it.
+local function mins(span) return math.max(1, math.floor(span / 60000)) end
+
+-- analyze(history, ctx) -> array of suggestions (each seeded for the editor):
+--   { kind, name, label, seeded=true, target, craftTo, ceiling?, reason }
+-- ctx: { managed = {[name]=true}, quotas = {[name]={target,craftTo}},
+--        dismissed = {[name]=true}, minDrain = 64, minWindowMs = 60000, max = 8 }
+--
+-- Over a window of >= minWindowMs:
+--   * UNMANAGED + net decline >= minDrain  -> "quota": keep it stocked.
+--   * UNMANAGED + net growth  >= minDrain  -> "cap":   set a compress ceiling.
+--   * MANAGED (has quota) + below target the whole window + still draining
+--                                          -> "raise": refill can't keep up.
 function suggest.analyze(history, ctx)
   ctx = ctx or {}
   local managedSet = ctx.managed or {}
+  local quotas = ctx.quotas or {}
   local dismissed = ctx.dismissed or {}
   local minDrain = tonumber(ctx.minDrain) or 64
   local minWindow = tonumber(ctx.minWindowMs) or 60000
 
   local out = {}
   for name, h in pairs(history or {}) do
-    if not managedSet[name] and not dismissed[name] then
+    if not dismissed[name] then
       local span = (h.tN or 0) - (h.t0 or 0)
-      local decline = (h.a0 or 0) - (h.aN or 0)
-      if span >= minWindow and decline >= minDrain then
-        local perMin = decline / (span / 60000)
-        local target = math.max(0, math.floor(h.minA or 0))
-        local craftTo = target + math.max(minDrain, math.floor(perMin * 5))
-        out[#out + 1] = {
-          kind = "quota",
-          name = name,
-          label = h.label or name,
-          target = target,
-          craftTo = craftTo,
-          reason = "down " .. decline .. " in " .. math.max(1, math.floor(span / 60000)) .. "m",
-          _rank = decline,
-        }
+      if span >= minWindow then
+        local decline = (h.a0 or 0) - (h.aN or 0)
+        local perMin = math.abs(decline) / (span / 60000)
+        local q = quotas[name]
+        local isManaged = managedSet[name] == true or q ~= nil
+
+        if not isManaged and decline >= minDrain then
+          local target = math.max(0, math.floor(h.minA or 0))
+          out[#out + 1] = {
+            kind = "quota", name = name, label = h.label or name, seeded = true,
+            target = target, craftTo = target + math.max(minDrain, math.floor(perMin * 5)),
+            reason = "down " .. decline .. " in " .. mins(span) .. "m", _rank = decline,
+          }
+        elseif not isManaged and -decline >= minDrain then
+          out[#out + 1] = {
+            kind = "cap", name = name, label = h.label or name, seeded = true,
+            target = 0, craftTo = 0, ceiling = math.max(0, math.floor(h.aN or 0)),
+            reason = "up " .. (-decline) .. " in " .. mins(span) .. "m", _rank = -decline,
+          }
+        elseif q and decline >= minDrain
+            and (h.aN or 0) < (q.target or 0) and (h.a0 or 0) < (q.target or 0) then
+          local proposed = (q.target or 0) + math.max(minDrain, math.floor(perMin * 5))
+          if proposed > (q.craftTo or 0) then
+            out[#out + 1] = {
+              kind = "raise", name = name, label = h.label or name, seeded = true,
+              target = q.target, craftTo = proposed,
+              reason = "below target, still draining", _rank = decline,
+            }
+          end
+        end
       end
     end
   end
