@@ -15,6 +15,7 @@ local stockplan = require("atm10-stockplan")
 local cqueue = require("atm10-queue")
 local craftrunner = require("atm10-craftrunner")
 local managed = require("atm10-managed")
+local presets = require("atm10-presets")
 local console = require("atm10-console")
 
 -- ---------------------------------------------------------------------------
@@ -418,6 +419,33 @@ t.check(#merged >= 1, "managed quotas produce plan rows")
 t.eq(merged[1].action, "WOULD CRAFT", "a below-target managed quota plans a craft")
 
 -- ---------------------------------------------------------------------------
+print("quota presets (Zoozo bundles)")
+local plist = presets.list()
+t.check(#plist >= 4, "at least the four stage presets exist")
+t.eq(plist[1].id, "early", "first preset is early game")
+t.check(plist[1].count > 0, "presets carry items")
+t.eq(presets.get("nope"), nil, "unknown preset id -> nil")
+
+-- apply merges a preset's quotas into the managed store
+local pstore = managed.new()
+local _, n = presets.apply(pstore, "early", 1000)
+t.eq(n, #presets.get("early").items, "apply writes every preset item")
+t.eq(managed.count(pstore), n, "store holds the applied quotas")
+local first = presets.get("early").items[1]
+t.eq(managed.get(pstore, first.name).target, first.target, "applied quota carries the preset target")
+
+-- applying a second preset adds its items without dropping the first
+presets.apply(pstore, "mid", 2000)
+t.check(managed.count(pstore) > n, "a second preset adds more quotas")
+t.check(managed.has(pstore, first.name), "earlier preset quotas survive a later apply")
+
+-- unknown preset is a no-op
+local before = managed.count(pstore)
+local _, n0 = presets.apply(pstore, "nope", 3000)
+t.eq(n0, 0, "applying an unknown preset writes nothing")
+t.eq(managed.count(pstore), before, "store unchanged by an unknown preset")
+
+-- ---------------------------------------------------------------------------
 print("console hit-testing")
 local strip = console.tabs({ "PLAN", "QUEUE" }, 2)
 t.eq(strip.text, "[PLAN] [QUEUE]", "tab strip renders as [PLAN] [QUEUE]")
@@ -459,7 +487,7 @@ print("all scripts compile")
 local luaFiles = {
   "lib/atm10-status.lua", "lib/atm10-draw.lua", "lib/atm10-palette.lua",
   "lib/atm10-control.lua", "lib/atm10-stockplan.lua", "lib/atm10-queue.lua",
-  "lib/atm10-craftrunner.lua", "lib/atm10-managed.lua",
+  "lib/atm10-craftrunner.lua", "lib/atm10-managed.lua", "lib/atm10-presets.lua",
   "lib/atm10-console.lua", "atm10-console.lua",
   "inventory/manager.lua", "inventory/remote.lua",
   "inventory/config.lua", "inventory/config-example.lua",
@@ -468,7 +496,7 @@ local luaFiles = {
   "inventory-info.lua", "inventory-remote.lua", "power-display.lua",
   "atm10-status.lua", "atm10-palette.lua", "atm10-control.lua",
   "atm10-draw.lua", "atm10-stockplan.lua", "atm10-queue.lua",
-  "atm10-craftrunner.lua", "atm10-managed.lua",
+  "atm10-craftrunner.lua", "atm10-managed.lua", "atm10-presets.lua",
 }
 for _, f in ipairs(luaFiles) do
   local chunk, err = loadfile(f)

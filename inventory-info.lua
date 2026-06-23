@@ -13,7 +13,7 @@ local QUEUE_FILE = ".atm10-craft-queue"
 local MANAGED_FILE = ".atm10-managed" -- operator-set quotas (tap-to-manage store)
 local EDIT_STEPS = { 64, 8, 1 }       -- +/- step buttons in the quota editor
 local PAGE_SECONDS = 10
-local PAGES = { "PLAN", "QUEUE", "BROWSE" }
+local PAGES = { "PLAN", "QUEUE", "BROWSE", "PRESETS" }
 local QUEUE_MAX_AGE_MS = 30 * 60 * 1000 -- prune approvals older than 30 minutes
 local PAGE_BUTTON_SIDE = "back"          -- a redstone pulse here flips to the next page ("none" disables)
 local BROWSE_CRAFT_AMOUNT = 64           -- default quantity when approving a craft from the Browse page
@@ -25,6 +25,7 @@ local stockplan = require("atm10-stockplan")
 local cqueue = require("atm10-queue")
 local craftrunner = require("atm10-craftrunner")
 local managed = require("atm10-managed")
+local presets = require("atm10-presets")
 local console = require("atm10-console")
 
 local DEFAULT_CONFIG = {
@@ -69,6 +70,8 @@ local planRowRegions = {}
 local queueRowRegions = {}
 local browseRowRegions = {}
 local browseNavRegions = {}
+local presetRowRegions = {}
+local presetStatus = nil   -- short confirmation line after applying a preset
 local browsePage = 1
 local editing = nil       -- when set, the Browse page shows the quota editor for this item
 local editorRows = {}     -- button rows in the editor, for touch hit-testing
@@ -1021,6 +1024,28 @@ local function drawEditor()
   end
 end
 
+-- Apply a stage preset's quotas in one tap. Quotas merge into the managed store.
+local function drawPresetsPage(data)
+  local w, h = monitor.getSize()
+  local list = presets.list()
+
+  line(6, "Quota Presets   tap one to apply its stock targets", colors.cyan)
+
+  local start = 8
+  local rows = math.min(#list, math.max(0, h - start - 2))
+  for i = 1, rows do
+    local p = list[i]
+    local y = start + (i - 1)
+    line(y, uiDraw.fit(p.label .. "  (" .. p.count .. " items)  - " .. p.description, w), colors.white)
+    presetRowRegions[#presetRowRegions + 1] = { y = y, entry = p }
+  end
+
+  if presetStatus then
+    line(start + rows + 1, uiDraw.fit(presetStatus, w), colors.lime)
+  end
+  line(h, "Applied quotas appear on Plan; approve them there (or use auto mode).", colors.gray)
+end
+
 local function draw(data)
   if not monitor then return end
 
@@ -1035,6 +1060,7 @@ local function draw(data)
   queueRowRegions = {}
   browseRowRegions = {}
   browseNavRegions = {}
+  presetRowRegions = {}
   editorRows = {}
 
   local pageName = PAGES[pageIndex]
@@ -1070,6 +1096,8 @@ local function draw(data)
     drawQueuePage(data)
   elseif pageName == "BROWSE" then
     if editing then drawEditor() else drawBrowsePage(data) end
+  elseif pageName == "PRESETS" then
+    drawPresetsPage(data)
   else
     drawPlanPage(data)
   end
@@ -1081,18 +1109,21 @@ local function setPage(i)
   pageShownAt = nowMs() -- a manual page change resets the auto-rotate timer
 end
 
+-- Only the dashboard pages auto-rotate; Browse/Presets are interactive and held.
+local AUTO_PAGES = { PLAN = true, QUEUE = true }
+
 local function advancePageIfDue()
   local nowT = nowMs()
   if not pageShownAt then pageShownAt = nowT end
-  -- Browsing is manual: never auto-rotate away from (or into) the Browse page.
-  if PAGES[pageIndex] == "BROWSE" then
-    pageShownAt = nowT
+  if not AUTO_PAGES[PAGES[pageIndex]] then
+    pageShownAt = nowT -- manual page: don't auto-rotate away
     return
   end
   if nowT - pageShownAt >= PAGE_SECONDS * 1000 then
-    local nextIndex = pageIndex % #PAGES + 1
-    if PAGES[nextIndex] == "BROWSE" then
-      nextIndex = nextIndex % #PAGES + 1 -- skip Browse in the auto-rotation
+    local nextIndex = pageIndex
+    for _ = 1, #PAGES do
+      nextIndex = nextIndex % #PAGES + 1
+      if AUTO_PAGES[PAGES[nextIndex]] then break end
     end
     pageIndex = nextIndex
     pageShownAt = nowT
@@ -1159,6 +1190,17 @@ local function removeEditing()
   editing = nil
 end
 
+-- Apply a stage preset: merge its quotas into the managed store and persist.
+local function applyPreset(p)
+  if not p or not p.id then return end
+  managedStore = managedStore or loadManaged()
+  local _, n = presets.apply(managedStore, p.id, nowMs())
+  saveManaged(managedStore)
+  presetStatus = "Applied " .. tostring(p.label) .. ": " .. n .. " quotas set."
+  pageShownAt = nowMs()
+  print("Applied preset " .. tostring(p.label) .. " (" .. n .. " quotas)")
+end
+
 -- Touch handling while the quota editor is open.
 local function handleEditorTouch(x, y)
   -- tabs still navigate (and exit the editor)
@@ -1211,6 +1253,13 @@ local function handleTouch(x, y)
   local queueEntry = console.rowHit(queueRowRegions, y)
   if queueEntry then
     cancelEntry(queueEntry)
+    renderCurrent()
+    return
+  end
+
+  local presetEntry = console.rowHit(presetRowRegions, y)
+  if presetEntry then
+    applyPreset(presetEntry)
     renderCurrent()
     return
   end

@@ -160,6 +160,14 @@ planner alongside your hand-edited `inventory-config`** — the config is never
 overwritten, and either source (or both) can drive crafting. Having any quota is
 enough to start planning even if `stockKeeper.enabled` is false in config.
 
+### Presets
+
+The **Presets** tab offers stage bundles (Early / Mid / Late / Mega Late) defined
+in `lib/atm10-presets.lua`. Tap one to apply its stock targets in a single step
+(they merge into the managed quotas). Preset item IDs are best-effort ATM10
+names; anything that doesn't match your pack reads `NOT CRAFTABLE` on the Plan
+page — fix it by tapping the real item on Browse. Edit the lib to curate your own.
+
 The computer needs access to:
 
 - an advanced monitor
