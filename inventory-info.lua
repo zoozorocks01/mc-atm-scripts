@@ -13,7 +13,7 @@ local QUEUE_FILE = ".atm10-craft-queue"
 local MANAGED_FILE = ".atm10-managed" -- operator-set quotas (tap-to-manage store)
 local EDIT_STEPS = { 1, 10, 100, 1000, 10000 } -- cycleable +/- step sizes in the quota editor
 local PAGE_SECONDS = 10
-local PAGES = { "PLAN", "QUEUE", "BROWSE", "PRESETS" }
+local PAGES = { "PLAN", "QUEUE", "BROWSE", "PRESETS", "SMART" }
 local QUEUE_MAX_AGE_MS = 30 * 60 * 1000 -- prune approvals older than 30 minutes
 local PAGE_BUTTON_SIDE = "back"          -- a redstone pulse here flips to the next page ("none" disables)
 local BROWSE_CRAFT_AMOUNT = 64           -- default quantity when approving a craft from the Browse page
@@ -26,6 +26,7 @@ local cqueue = require("atm10-queue")
 local craftrunner = require("atm10-craftrunner")
 local managed = require("atm10-managed")
 local balance = require("atm10-balance")
+local suggest = require("atm10-suggest")
 local presets = require("atm10-presets")
 local console = require("atm10-console")
 
@@ -73,6 +74,9 @@ local browseRowRegions = {}
 local browseNavRegions = {}
 local presetRowRegions = {}
 local presetStatus = nil   -- short confirmation line after applying a preset
+local smartRowRegions = {} -- tappable suggestion rows on the Smart page
+local smartButtons = nil   -- enable/disable toggle row on the Smart page
+local trendHistory = {}    -- in-memory consumption history for smart mode
 local browsePage = 1
 local editing = nil       -- when set, the Browse page shows the quota editor for this item
 local editorRows = {}     -- button rows in the editor, for touch hit-testing
@@ -726,6 +730,20 @@ local function scan()
   local stockPlans = planStockActions(items)
   -- append overflow/compress plans so they render + approve like refill rows
   for _, r in ipairs(planOverflowActions(items)) do stockPlans[#stockPlans + 1] = r end
+
+  -- smart mode (opt-in): record consumption trends and compute quota suggestions
+  local smartOn = managed.getSetting(managedStore, "smartMode") == true
+  local suggestions = {}
+  if smartOn then
+    local snapshot = {}
+    for _, item in ipairs(sorted) do
+      if item.isCraftable then
+        snapshot[#snapshot + 1] = { name = item.name, label = itemName(item), amount = itemAmount(item) }
+      end
+    end
+    suggest.record(trendHistory, snapshot, nowMs())
+    suggestions = suggest.analyze(trendHistory, { managed = managedNames, max = 8 })
+  end
   local stockTally = uiStatus.tally(stockPlans)
 
   -- keep the in-memory queue tidy: drop now-satisfied items, age out stale ones
@@ -765,6 +783,8 @@ local function scan()
     stockTally = stockTally,
     categorySummaries = summarizeCategories(stockPlans),
     craftQueue = cqueue.list(craftQueue),
+    smartMode = smartOn,
+    suggestions = suggestions,
   }
 end
 
@@ -1103,6 +1123,45 @@ local function drawPresetsPage(data)
   line(h, "Applied quotas appear on Plan; approve them there (or use auto mode).", colors.gray)
 end
 
+-- Smart mode (opt-in): suggests recurring quotas from observed drain.
+local function drawSmartPage(data)
+  local w, h = monitor.getSize()
+  local on = data.smartMode == true
+
+  line(6, "Smart Mode: " .. (on and "ON" or "OFF") .. "   (suggests quotas from drain)",
+    on and colors.lime or colors.gray)
+  do
+    local r = console.buttonRow({ { label = on and "DISABLE" or "ENABLE", key = "smarttoggle" } }, 7, 1)
+    for _, b in ipairs(r.buttons) do uiDraw.write(monitor, b.x1, 7, b.text, colors.cyan, colors.black) end
+    smartButtons = r
+  end
+
+  if not on then
+    line(9, "Off by default. Enable here, or apply the zoozo-late-game profile.", colors.gray)
+    line(10, "When on, items that keep draining are suggested as recurring quotas.", colors.gray)
+    return
+  end
+
+  local sugg = data.suggestions or {}
+  if #sugg == 0 then
+    line(9, "No suggestions yet - watching consumption...", colors.gray)
+    line(10, "Items that decline over time will appear here to review + accept.", colors.gray)
+    return
+  end
+
+  line(9, "Suggested quotas (tap to review + save):", colors.cyan)
+  local start = 10
+  local rows = math.min(#sugg, math.max(0, h - start - 1))
+  for i = 1, rows do
+    local s = sugg[i]
+    local y = start + (i - 1)
+    line(y, uiDraw.fit(s.label .. " -> keep " .. fmt(s.target) .. "/" .. fmt(s.craftTo) ..
+      "  (" .. tostring(s.reason) .. ")", w), colors.white)
+    smartRowRegions[#smartRowRegions + 1] = { y = y, entry = s }
+  end
+  line(h, "Tapping opens the editor pre-filled; SAVE to set the quota.", colors.gray)
+end
+
 local function draw(data)
   if not monitor then return end
 
@@ -1118,6 +1177,8 @@ local function draw(data)
   browseRowRegions = {}
   browseNavRegions = {}
   presetRowRegions = {}
+  smartRowRegions = {}
+  smartButtons = nil
   editorRows = {}
 
   local pageName = PAGES[pageIndex]
@@ -1149,13 +1210,20 @@ local function draw(data)
       "   autocraft: " .. (craftLive and "ON" or "off"), craftLive and colors.lime or colors.gray)
   end
 
-  if pageName == "QUEUE" then
+  -- the quota editor is a modal: it renders over any tab when open (unless we're
+  -- picking a compress target, which needs the grid list)
+  if editing and not editing.pickingInto then
+    drawEditor()
+  elseif editing and editing.pickingInto then
+    drawBrowsePage(data)
+  elseif pageName == "QUEUE" then
     drawQueuePage(data)
   elseif pageName == "BROWSE" then
-    -- editing shows the editor, unless we're picking a compress target from the grid
-    if editing and not editing.pickingInto then drawEditor() else drawBrowsePage(data) end
+    drawBrowsePage(data)
   elseif pageName == "PRESETS" then
     drawPresetsPage(data)
+  elseif pageName == "SMART" then
+    drawSmartPage(data)
   else
     drawPlanPage(data)
   end
@@ -1222,6 +1290,11 @@ local function openEditor(entry)
   if existing then
     target, craftTo = existing.target, existing.craftTo
     ceiling, into, ratio = existing.ceiling or 0, existing.into, existing.ratio or 1
+  elseif entry.target then
+    -- seeded (e.g. accepting a smart-mode suggestion): review before saving
+    target = math.max(0, math.floor(entry.target))
+    craftTo = math.max(target, math.floor(entry.craftTo or (target + BROWSE_CRAFT_AMOUNT)))
+    ceiling, into, ratio = 0, nil, 1
   else
     target = math.max(0, math.floor(entry.amount or 0))
     craftTo = target + BROWSE_CRAFT_AMOUNT
@@ -1266,10 +1339,27 @@ local function applyPreset(p)
   if not p or not p.id then return end
   managedStore = managedStore or loadManaged()
   local _, n = presets.apply(managedStore, p.id, nowMs())
+  -- a profile may also enable behavior (e.g. smart mode); apply those settings
+  local settings = presets.settings(p.id)
+  local extra = ""
+  if settings.smartMode then
+    managed.setSetting(managedStore, "smartMode", true)
+    extra = "  + smart mode ON"
+  end
   saveManaged(managedStore)
-  presetStatus = "Applied " .. tostring(p.label) .. ": " .. n .. " quotas set."
+  presetStatus = "Applied " .. tostring(p.label) .. ": " .. n .. " quotas." .. extra
   pageShownAt = nowMs()
-  print("Applied preset " .. tostring(p.label) .. " (" .. n .. " quotas)")
+  print("Applied preset " .. tostring(p.label) .. " (" .. n .. " quotas)" .. extra)
+end
+
+-- Toggle smart mode on/off (persisted on the managed store).
+local function toggleSmart()
+  managedStore = managedStore or loadManaged()
+  local on = not (managed.getSetting(managedStore, "smartMode") == true)
+  managed.setSetting(managedStore, "smartMode", on)
+  saveManaged(managedStore)
+  pageShownAt = nowMs()
+  print("Smart mode " .. (on and "ENABLED" or "disabled"))
 end
 
 -- Touch handling while the quota editor is open.
@@ -1362,6 +1452,20 @@ local function handleTouch(x, y)
   local presetEntry = console.rowHit(presetRowRegions, y)
   if presetEntry then
     applyPreset(presetEntry)
+    renderCurrent()
+    return
+  end
+
+  -- Smart page: enable/disable toggle, then tap a suggestion to review + save
+  if console.buttonHit(smartButtons, x, y) == "smarttoggle" then
+    toggleSmart()
+    renderCurrent()
+    return
+  end
+  local smartEntry = console.rowHit(smartRowRegions, y)
+  if smartEntry then
+    openEditor({ name = smartEntry.name, label = smartEntry.label, craftable = true,
+      target = smartEntry.target, craftTo = smartEntry.craftTo })
     renderCurrent()
     return
   end

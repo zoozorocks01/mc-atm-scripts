@@ -65,6 +65,19 @@ function managed.remove(store, name)
   return store
 end
 
+-- Profile-level settings (e.g. smartMode), persisted alongside the quotas.
+function managed.getSetting(store, key)
+  store = managed.normalize(store)
+  return type(store.settings) == "table" and store.settings[key] or nil
+end
+
+function managed.setSetting(store, key, value)
+  store = managed.normalize(store)
+  if type(store.settings) ~= "table" then store.settings = {} end
+  store.settings[key] = value
+  return store
+end
+
 -- Drop just the overflow/compress config, keeping the floor quota.
 function managed.clearOverflow(store, name)
   store = managed.normalize(store)

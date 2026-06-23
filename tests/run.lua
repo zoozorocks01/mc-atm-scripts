@@ -16,6 +16,7 @@ local cqueue = require("atm10-queue")
 local craftrunner = require("atm10-craftrunner")
 local managed = require("atm10-managed")
 local balance = require("atm10-balance")
+local suggest = require("atm10-suggest")
 local presets = require("atm10-presets")
 local console = require("atm10-console")
 
@@ -435,6 +436,41 @@ managed.clearOverflow(os2, "iron")
 t.eq(managed.get(os2, "iron").ceiling, nil, "clearOverflow drops the ceiling")
 t.eq(#managed.overflowItems(os2), 0, "clearOverflow removes it from overflowItems")
 
+-- profile settings (smart-mode flag) persist on the store
+local ss = managed.new()
+t.eq(managed.getSetting(ss, "smartMode"), nil, "no settings by default")
+managed.setSetting(ss, "smartMode", true)
+t.eq(managed.getSetting(ss, "smartMode"), true, "setSetting/getSetting round-trips")
+t.check(managed.normalize(ss).settings ~= nil, "normalize preserves settings")
+
+-- ---------------------------------------------------------------------------
+print("smart-mode suggestions (consumption trends)")
+-- record builds per-item trend stats across snapshots
+local hist = {}
+suggest.record(hist, { { name = "steel", label = "Steel", amount = 1000 } }, 0)
+suggest.record(hist, { { name = "steel", label = "Steel", amount = 200 } }, 120000)
+t.eq(hist.steel.a0, 1000, "record keeps the first amount")
+t.eq(hist.steel.aN, 200, "record tracks the latest amount")
+t.eq(hist.steel.minA, 200, "record tracks the minimum seen")
+
+-- a declining unmanaged item -> a quota suggestion
+local sg = suggest.analyze(hist, { managed = {}, minDrain = 64, minWindowMs = 60000 })
+t.eq(#sg, 1, "declining unmanaged item -> one suggestion")
+t.eq(sg[1].name, "steel", "suggestion names the draining item")
+t.check(sg[1].target >= 0 and sg[1].craftTo > sg[1].target, "suggestion proposes a sane quota")
+
+-- managed or dismissed items are not suggested
+t.eq(#suggest.analyze(hist, { managed = { steel = true } }), 0, "managed item not suggested")
+t.eq(#suggest.analyze(hist, { dismissed = { steel = true } }), 0, "dismissed item not suggested")
+
+-- stable items and too-short windows produce nothing
+local stable = {}
+suggest.record(stable, { { name = "x", amount = 500 } }, 0)
+suggest.record(stable, { { name = "x", amount = 500 } }, 120000)
+t.eq(#suggest.analyze(stable, {}), 0, "stable item -> no suggestion")
+local quick = { y = { label = "Y", t0 = 0, a0 = 1000, tN = 1000, aN = 0, minA = 0 } }
+t.eq(#suggest.analyze(quick, {}), 0, "decline inside too-short window -> none")
+
 -- ---------------------------------------------------------------------------
 print("overflow balancer (compress above ceiling)")
 local function ovItem(over) local i = { name = "dust", label = "Steel Dust",
@@ -559,7 +595,8 @@ local luaFiles = {
   "lib/atm10-status.lua", "lib/atm10-draw.lua", "lib/atm10-palette.lua",
   "lib/atm10-control.lua", "lib/atm10-stockplan.lua", "lib/atm10-queue.lua",
   "lib/atm10-craftrunner.lua", "lib/atm10-managed.lua", "lib/atm10-balance.lua",
-  "lib/atm10-presets.lua", "lib/atm10-console.lua", "atm10-console.lua",
+  "lib/atm10-suggest.lua", "lib/atm10-presets.lua",
+  "lib/atm10-console.lua", "atm10-console.lua",
   "inventory/manager.lua", "inventory/remote.lua",
   "inventory/config.lua", "inventory/config-example.lua",
   "power/display.lua", "power/probe.lua",
@@ -568,7 +605,7 @@ local luaFiles = {
   "atm10-status.lua", "atm10-palette.lua", "atm10-control.lua",
   "atm10-draw.lua", "atm10-stockplan.lua", "atm10-queue.lua",
   "atm10-craftrunner.lua", "atm10-managed.lua", "atm10-balance.lua",
-  "atm10-presets.lua",
+  "atm10-suggest.lua", "atm10-presets.lua",
 }
 for _, f in ipairs(luaFiles) do
   local chunk, err = loadfile(f)

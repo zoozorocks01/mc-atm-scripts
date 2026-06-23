@@ -11,6 +11,7 @@ local commonFiles = {
   { remote = "lib/atm10-craftrunner.lua", localName = "atm10-craftrunner.lua" },
   { remote = "lib/atm10-managed.lua", localName = "atm10-managed.lua" },
   { remote = "lib/atm10-balance.lua", localName = "atm10-balance.lua" },
+  { remote = "lib/atm10-suggest.lua", localName = "atm10-suggest.lua" },
   { remote = "lib/atm10-presets.lua", localName = "atm10-presets.lua" },
   { remote = "lib/atm10-console.lua", localName = "atm10-console.lua" },
   { remote = "atm10-theme", localName = "atm10-theme", onlyIfMissing = true },

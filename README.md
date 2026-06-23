@@ -178,6 +178,19 @@ in `lib/atm10-presets.lua`. Tap one to apply its stock targets in a single step
 names; anything that doesn't match your pack reads `NOT CRAFTABLE` on the Plan
 page — fix it by tapping the real item on Browse. Edit the lib to curate your own.
 
+A profile marked `★` (e.g. `zoozo-late-game`) is a **personal** profile: it can
+carry behavior settings (like enabling smart mode) and the full compress chain,
+not just floors. Generic presets stay neutral.
+
+### Smart mode (opt-in)
+
+The **Smart** tab is **off by default**. Enable it there, or apply a profile
+whose settings turn it on. When on, the manager tracks consumption over time and
+suggests **recurring quotas** for items that keep draining — tap a suggestion to
+open the editor pre-filled, then SAVE. Nothing is auto-applied; suggestions are
+advisory. With smart mode off, the tool behaves exactly as a plain stock manager,
+so it stays generic for anyone to use.
+
 The computer needs access to:
 
 - an advanced monitor
