@@ -641,4 +641,32 @@ for _, f in ipairs(luaFiles) do
   t.check(chunk ~= nil, "compiles: " .. f .. (chunk and "" or "  (" .. tostring(err) .. ")"))
 end
 
+-- ---------------------------------------------------------------------------
+print("required-lib guard")
+-- A shipped program must require() every lib it uses. loadfile above only parses
+-- (an undefined global like `control` is valid syntax), and the program body
+-- never runs in these tests, so a missing require would otherwise crash only
+-- in-game. This guards the known lib set for the entrypoint programs.
+local function readFile(path)
+  local fh = io.open(path, "r")
+  if not fh then return "" end
+  local s = fh:read("*a")
+  fh:close()
+  return s or ""
+end
+local requireGuards = {
+  ["inventory/manager.lua"] = {
+    "atm10-status", "atm10-draw", "atm10-palette", "atm10-stockplan", "atm10-control",
+    "atm10-queue", "atm10-craftrunner", "atm10-managed", "atm10-balance",
+    "atm10-suggest", "atm10-presets", "atm10-console",
+  },
+  ["inventory/remote.lua"] = { "atm10-status", "atm10-draw", "atm10-palette", "atm10-console" },
+}
+for file, libs in pairs(requireGuards) do
+  local src = readFile(file)
+  for _, lib in ipairs(libs) do
+    t.check(src:find('require("' .. lib .. '")', 1, true) ~= nil, file .. " requires " .. lib)
+  end
+end
+
 os.exit(t.summary() and 0 or 1)
