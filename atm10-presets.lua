@@ -80,30 +80,49 @@ presets.all = {
 -- above are neutral starting points anyone can use; this one is Zoozo's late-game
 -- setup and is the only thing that enables smart mode when applied.
 --
--- STARTER, NOT FINAL. Built from a PARTIAL base recon (Codex, 2026-06-23):
---   * Only confirmed registry IDs are used (alltheores:* metals/alloys,
---     modern_industrialization:*, enderio:* alloys, mysticalagriculture:*).
---   * The recon was truncated above "Zinc", so base metals (iron/copper/gold/
---     tin/lead/silver/nickel/aluminum/osmium/...) are NOT here yet, nor are
---     block IDs, MI components, or Mekanism alloys. Expand as Codex sends more.
---   * Numbers are starting points to tune in-game, not gospel.
---   * Nothing autocrafts until the RS pattern TREES exist for each item; until
---     then these act as monitor targets (run in manual/monitor mode).
+-- Built from Codex's base recon (2026-06-23/24), Zach's quota numbers.
+--   * Numbers are Zach's lines (264k dust band, 100k ingot, 35k alloys, etc.) -
+--     starting points to tune, not gospel.
+--   * IMPORTANT: the live RS export shows craftable_rows=0 (isCraftable=false for
+--     every item). So NOTHING autocrafts yet - run mode monitor/manual and treat
+--     these as targets to watch until craftItem/getCraftableItems is verified
+--     in-game and the RS pattern TREES exist.
+--   * Still out: MI components (rubber/motor/circuits) and Mekanism alloys - add
+--     once Zach picks numbers for them.
 do
   local items = {}
   local function add(x) items[#items + 1] = x end
   local function buf(name, label, target) add({ name = name, label = label, target = target, craftTo = target }) end
+  -- full chain: dust band (264k, compress surplus to ingot at 350k) -> ingot
+  -- (100k, compress surplus to block at 150k, 9:1) -> block (10k floor).
+  local function chain(dust, ingot, block, label)
+    add({ name = dust, label = label .. " Dust", target = 264000, craftTo = 264000,
+      ceiling = 350000, into = { name = ingot, label = label .. " Ingot" }, ratio = 1 })
+    add({ name = ingot, label = label .. " Ingot", target = 100000, craftTo = 100000,
+      ceiling = 150000, into = { name = block, label = label .. " Block" }, ratio = 9 })
+    add({ name = block, label = label .. " Block", target = 10000, craftTo = 10000 })
+  end
 
-  -- Normal metals: keep a big dust band (smelt the surplus up to ingots) and keep
-  -- 100k of the ingot. Zinc is the only normal metal in the partial recon; the
-  -- same 264k-dust / 100k-ingot pattern applies to iron/copper/gold/etc once Codex
-  -- sends their IDs (add an ingot->block compress when block ids land).
-  add({ name = "alltheores:zinc_dust", label = "Zinc Dust", target = 264000, craftTo = 264000,
-    ceiling = 350000, into = { name = "alltheores:zinc_ingot", label = "Zinc Ingot" }, ratio = 1 })
-  add({ name = "alltheores:zinc_ingot", label = "Zinc Ingot", target = 100000, craftTo = 100000 })
+  -- Normal metals: full dust->ingot->block chain (IDs from base recon; iron/gold/
+  -- copper/netherite use minecraft: ingot+block, the rest are alltheores:).
+  chain("alltheores:iron_dust", "minecraft:iron_ingot", "minecraft:iron_block", "Iron")
+  chain("alltheores:gold_dust", "minecraft:gold_ingot", "minecraft:gold_block", "Gold")
+  chain("alltheores:copper_dust", "minecraft:copper_ingot", "minecraft:copper_block", "Copper")
+  chain("alltheores:tin_dust", "alltheores:tin_ingot", "alltheores:tin_block", "Tin")
+  chain("alltheores:lead_dust", "alltheores:lead_ingot", "alltheores:lead_block", "Lead")
+  chain("alltheores:silver_dust", "alltheores:silver_ingot", "alltheores:silver_block", "Silver")
+  chain("alltheores:nickel_dust", "alltheores:nickel_ingot", "alltheores:nickel_block", "Nickel")
+  chain("alltheores:aluminum_dust", "alltheores:aluminum_ingot", "alltheores:aluminum_block", "Aluminum")
+  chain("alltheores:osmium_dust", "alltheores:osmium_ingot", "alltheores:osmium_block", "Osmium")
+  chain("alltheores:zinc_dust", "alltheores:zinc_ingot", "alltheores:zinc_block", "Zinc")
+  -- Steel has dust/block too; Zach wants it on the metal chain (264k dust / 100k ingot).
+  chain("alltheores:steel_dust", "alltheores:steel_ingot", "alltheores:steel_block", "Steel")
 
-  -- Steel: keep 100k (ingot-only in recon).
-  buf("alltheores:steel_ingot", "Steel", 100000)
+  -- Rarer/special metals: modest ingot buffers (NOT the 264k metal chain).
+  buf("alltheores:platinum_ingot", "Platinum", 5000)
+  buf("alltheores:iridium_ingot", "Iridium", 5000)
+  buf("alltheores:uranium_ingot", "Uranium", 5000)
+  buf("minecraft:netherite_ingot", "Netherite", 5000)
 
   -- Non-Mekanism alloys: keep >= 35k. Exceptions: enderium + stainless steel = 10k.
   buf("alltheores:bronze_ingot", "Bronze", 35000)
