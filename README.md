@@ -162,6 +162,11 @@ autocraft patterns** — see "Setting up RS autocrafting" in
 [`docs/INSTALLATION_AND_USE.md`](docs/INSTALLATION_AND_USE.md). It is a Minecraft
 setup task (Crafters + Patterns), not a script error.
 
+To see exactly what your RS Bridge exposes (method names, the item-table shape,
+how many items it reports craftable), run the read-only diagnostic on the manager
+computer: `atm10-bridge-probe`. It never crafts or moves anything — it just prints
+the bridge's API and saves it to `.atm10-bridge-probe.txt` for sharing.
+
 ### Setting quotas from the console (tap-to-manage)
 
 On the **Browse** page, tap any item to open its quota editor — no registry IDs
