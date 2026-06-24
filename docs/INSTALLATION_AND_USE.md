@@ -241,6 +241,25 @@ manager. They have no RS Bridge and no controls; they wait for the manager's
 draw the latest snapshot. If one waits forever: confirm the manager is running with
 a modem, both modems share a band/network, the remote has a monitor, and reboot it.
 
+### Display profiles (pick what each viewer shows)
+
+Each viewer renders one of three screens, set per computer in a one-line
+`atm10-display` file (installed once, survives `update`, like the theme file):
+
+- **`view`** (default) — inventory: item storage bar, RS energy, top stored items.
+- **`autocraft`** — category summary, stock-keeper plan, tally, and the craft queue.
+- **`alerts`** — errors, stale data, low stock, and craft problems only (a
+  glance-able wall board).
+
+```lua
+edit atm10-display
+```
+
+Put one profile name on a line (`view`, `autocraft`, or `alerts`) and reboot;
+an unknown/missing value falls back to `view`. So one manager can feed a storage
+viewer, a crafting-status board, and an alerts board — each its own computer +
+monitor.
+
 ## Troubleshooting
 
 - **`No such program`** — install the updater and run the role's `update`, then
