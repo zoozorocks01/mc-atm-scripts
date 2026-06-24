@@ -649,13 +649,23 @@ t.eq(pw.long.t0, 500000, "prune restarts an over-long window at the latest sampl
 t.eq(pw.long.a0, 30, "restarted window adopts the latest amount as the new baseline")
 t.eq(pw.long.n, 1, "restarted window resets the sample count")
 
--- maxEntries caps the table, dropping the least-recently-seen
+-- maxEntries caps the table, dropping the least-recently-seen (tN tiebreak when n equal)
 local pc = {
   a = { tN = 10 }, b = { tN = 30 }, c = { tN = 20 },
 }
 local _, capRemoved = suggest.prune(pc, 100, { maxEntries = 2 })
 t.eq(capRemoved, 1, "prune drops down to maxEntries")
 t.check(pc.a == nil and pc.b ~= nil and pc.c ~= nil, "prune keeps the most-recently-seen entries")
+
+-- maxEntries prefers the most-SAMPLED entries (n) over mere recency, so a busy item
+-- isn't evicted by a just-seen static one (bounds the CC-disk file by real signal)
+local pn = {
+  busy = { tN = 5, n = 100 },   -- old but heavily sampled -> keep
+  blip = { tN = 99, n = 1 },    -- just seen once -> drop
+  mid  = { tN = 50, n = 40 },   -- keep
+}
+suggest.prune(pn, 100, { maxEntries = 2 })
+t.check(pn.busy ~= nil and pn.mid ~= nil and pn.blip == nil, "prune keeps high-sample entries, evicts a one-off blip")
 
 -- ---------------------------------------------------------------------------
 print("overflow balancer (compress above ceiling)")

@@ -117,9 +117,13 @@ local trendHistory = {}    -- consumption history for smart mode (persisted to d
 local trendsLoaded = false -- lazily load the persisted history on first smart cycle
 local lastTrendsSaveMs = 0 -- throttle trend persistence (history is large; don't save every cycle)
 local TRENDS_SAVE_INTERVAL_MS = 120000 -- persist smart-mode history at most every 2 min
-local TREND_MAX_AGE_MS = 86400000     -- drop trend entries not seen in 24h (item left the grid)
+local TREND_MAX_AGE_MS = 43200000     -- drop trend entries not seen in 12h (item left the grid)
 local TREND_MAX_WINDOW_MS = 21600000  -- restart a trend window after 6h so drain stays recent
-local TREND_MAX_ENTRIES = 4000        -- hard cap on persisted trend entries (bounds the file)
+-- Hard cap on persisted trend entries. CC computers have a ~1MB disk and atomicWrite
+-- needs ~2x transiently (tmp + original), so the file must stay well under ~250KB. A
+-- base has thousands of items but only a fraction move; 800 most-sampled is plenty for
+-- suggestions and keeps the file ~150KB. (Bloat here caused an out-of-space lockup.)
+local TREND_MAX_ENTRIES = 800
 local dismissedSuggestions = {} -- names the operator cleared (persisted to disk)
 local dismissedLoaded = false   -- lazily load persisted dismissals on first smart cycle
 local browsePage = 1

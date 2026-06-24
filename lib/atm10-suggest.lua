@@ -60,9 +60,15 @@ function suggest.prune(history, now, opts)
 
   if maxEntries > 0 then
     local arr = {}
-    for name, h in pairs(history) do arr[#arr + 1] = { name = name, tN = h.tN or 0 } end
+    for name, h in pairs(history) do arr[#arr + 1] = { name = name, tN = h.tN or 0, n = h.n or 0 } end
     if #arr > maxEntries then
-      table.sort(arr, function(a, b) return a.tN > b.tN end) -- newest first
+      -- keep the most-SAMPLED entries (consistently-present items carry the real
+      -- drain signal); recency breaks ties. This bounds the persisted file on the
+      -- CC computer's ~1MB disk -- a base has thousands of items, only a fraction move.
+      table.sort(arr, function(a, b)
+        if a.n ~= b.n then return a.n > b.n end
+        return a.tN > b.tN
+      end)
       for i = maxEntries + 1, #arr do
         history[arr[i].name] = nil
         removed = removed + 1
