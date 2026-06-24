@@ -1,0 +1,7 @@
+# ATM10 viewer display profile (inventory-remote screens only).
+# Options: view (default), autocraft, alerts
+#   view      - inventory: storage, RS energy, top stored items
+#   autocraft - category summary, stock plan, tally, craft queue
+#   alerts    - errors, stale data, low stock, craft problems
+# Put one profile name on a line. Installed once; NOT overwritten by `update`.
+view

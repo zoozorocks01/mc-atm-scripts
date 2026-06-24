@@ -8,6 +8,11 @@ local STALE_SECONDS = 15
 local uiStatus = require("atm10-status")
 local uiDraw = require("atm10-draw")
 local uiPalette = require("atm10-palette")
+local console = require("atm10-console")
+
+-- Which screen this viewer shows: view (inventory) / autocraft / alerts.
+-- Set per computer in a one-line `atm10-display` file; defaults to "view".
+local PROFILE = console.resolveProfile()
 
 local monitor = nil
 local last = nil
@@ -210,112 +215,152 @@ local function drawWaiting(message)
   line(5, "Needs modem on " .. PROTOCOL, colors.gray)
 end
 
+-- VIEW profile: the inventory viewer (storage, RS energy, top stored items).
+local function drawView(data)
+  local w, h = monitor.getSize()
+  line(4, "Managed: " .. fmt(data.managedItemCount) .. "   Listed: " .. fmt(data.listedItemCount) ..
+    "   Default: " .. tostring(data.defaultHandling or "unmanaged"), colors.gray)
+
+  if data.usedItemStorage and data.totalItemStorage then
+    line(5, "Item Storage: " .. fmt(data.usedItemStorage) .. " / " .. fmt(data.totalItemStorage), colors.white)
+    bar(6, "Items", data.usedItemStorage, data.totalItemStorage)
+  else
+    line(5, "Item Storage: capacity unavailable", colors.gray)
+  end
+
+  if data.storedEnergy and data.energyCapacity then
+    line(8, "RS Energy: " .. fmt(data.storedEnergy) .. " / " .. fmt(data.energyCapacity) .. " FE", colors.white)
+  end
+  if data.energyUsage then
+    line(9, "RS Usage:  " .. fmt(data.energyUsage) .. " FE/t", colors.white)
+  end
+
+  line(11, "Top Stored Items", colors.cyan)
+  local maxRows = math.max(0, h - 12)
+  for i = 1, maxRows do
+    local item = data.topItems and data.topItems[i]
+    if item then
+      line(11 + i, tostring(i) .. ". " .. tostring(item.name) .. "  " .. fmt(item.amount), colors.white)
+    end
+  end
+end
+
+-- AUTOCRAFT profile: category summary, stock plan, tally, and the craft queue.
+local function drawAutocraft(data)
+  local w, h = monitor.getSize()
+  line(4, "Mode: " .. tostring(data.configMode or "manual") ..
+    (data.configError and ("   " .. data.configError) or ""),
+    data.configError and colors.orange or colors.gray)
+
+  line(5, "Category  + ok > would ~ craft . wait x recipe # block", colors.cyan)
+  local summaries = data.categorySummaries or {}
+  local sRows = math.min(4, #summaries)
+  for i = 1, sRows do
+    line(5 + i, formatCategorySummary(summaries[i], w), uiStatus.color(categorySummaryStatus(summaries[i])))
+  end
+
+  local planY = 5 + sRows + 1
+  line(planY, "Stock Keeper Plan", colors.cyan)
+  local headerRows = 0
+  if w >= 72 then
+    line(planY + 1, uiDraw.fit("ITEM", math.max(18, w - 39)) .. "     HAVE   TARGET    PLAN   STATUS", colors.gray)
+    headerRows = 1
+  end
+
+  local plans = data.stockPlans or {}
+  local queue = data.craftQueue or {}
+  local planStart = planY + 1 + headerRows
+  local reserve = 1 + (#queue > 0 and (1 + math.min(3, #queue)) or 0) -- tally + queue block
+  local planRows = math.max(0, math.min(#plans, h - planStart - reserve))
+  for i = 1, planRows do
+    line(planStart + i - 1, formatPlanRow(plans[i], w), uiStatus.color(plans[i].action))
+  end
+
+  local tally = data.stockTally or {}
+  local tallyY = planStart + planRows
+  line(tallyY, "+ " .. fmt(tally.OK) .. "  > " .. fmt(tally.WOULD) .. "  ~ " .. fmt(tally.CRAFTING) ..
+    "  . " .. fmt(tally.COOLDOWN) .. "  x " .. fmt(tally.NO_RECIPE) .. "  # " .. fmt(tally.BLOCKED), colors.gray)
+
+  if #queue > 0 then
+    local qy = tallyY + 1
+    line(qy, "Queue: " .. #queue .. " approved", colors.cyan)
+    for i = 1, math.min(3, #queue) do
+      if qy + i > h then break end
+      local e = queue[i]
+      line(qy + i, uiDraw.fit(tostring(e.label or e.name) .. " +" .. fmt(e.request) .. " " .. tostring(e.state), w),
+        uiStatus.color(uiStatus.WOULD))
+    end
+  end
+end
+
+-- ALERTS profile: errors, stale data, low stock, and craft problems only.
+local function drawAlerts(data)
+  local w, h = monitor.getSize()
+  local y = 5
+
+  if data.configError then line(y, "CONFIG: " .. data.configError, colors.orange); y = y + 1 end
+  if data.ledgerError then line(y, "LEDGER: " .. data.ledgerError, colors.red); y = y + 1 end
+  local age = os.clock() - (lastSeen or os.clock())
+  if age > STALE_SECONDS then line(y, "STALE: no update for " .. math.floor(age) .. "s", colors.orange); y = y + 1 end
+
+  line(y, "Low Stock", colors.cyan); y = y + 1
+  local warnings = data.warnings or {}
+  if #warnings == 0 then
+    line(y, "All watched items above target.", colors.lime); y = y + 1
+  else
+    for i = 1, #warnings do
+      if y > h then break end
+      local warn = warnings[i]
+      local craft = warn.craftable and " (craftable)" or ""
+      line(y, warn.label .. ": " .. fmt(warn.amount) .. " / " .. fmt(warn.target) .. craft, colors.orange)
+      y = y + 1
+    end
+  end
+
+  local probs = {}
+  for _, p in ipairs(data.stockPlans or {}) do
+    local n = uiStatus.normalize(p.action)
+    if n == uiStatus.NO_RECIPE or n == uiStatus.BLOCKED then probs[#probs + 1] = p end
+  end
+  if y < h then
+    y = y + 1
+    line(y, "Craft Problems (" .. #probs .. ")", colors.cyan); y = y + 1
+    for i = 1, #probs do
+      if y > h then break end
+      line(y, uiDraw.fit(uiStatus.label(probs[i].action) .. "  " .. tostring(probs[i].label), w),
+        uiStatus.color(probs[i].action))
+      y = y + 1
+    end
+  end
+end
+
 local function draw(data)
   if not monitor then return end
-
-  monitor.setBackgroundColor(colors.black)
-  monitor.clear()
-
-  line(1, TITLE, colors.cyan)
 
   if not data then
     drawWaiting("Waiting for inventory source...")
     return
   end
 
+  monitor.setBackgroundColor(colors.black)
+  monitor.clear()
+  line(1, TITLE .. "  [" .. PROFILE .. "]", colors.cyan)
+
   local age = os.clock() - (lastSeen or os.clock())
   local ageColor = age > STALE_SECONDS and colors.orange or colors.gray
   line(2, "Source: " .. tostring(data.source or "?") .. "   age " .. math.floor(age) .. "s", ageColor)
 
-  local onlineText = "unknown"
-  local onlineColor = colors.yellow
+  local onlineText, onlineColor = "unknown", colors.yellow
   if data.online == true then onlineText, onlineColor = "ONLINE", colors.lime
   elseif data.online == false then onlineText, onlineColor = "OFFLINE", colors.red end
+  line(3, "Grid: " .. onlineText .. "   Types: " .. fmt(data.unique) .. "   Items: " .. fmt(data.totalAmount), onlineColor)
 
-  line(4, "Grid: " .. onlineText .. "   Types: " .. fmt(data.unique) .. "   Items: " .. fmt(data.totalAmount), onlineColor)
-  line(5, "Managed: " .. fmt(data.managedItemCount) .. "   Listed: " .. fmt(data.listedItemCount) .. "   Default: " .. tostring(data.defaultHandling or "unmanaged"), colors.gray)
-
-  if data.usedItemStorage and data.totalItemStorage then
-    line(6, "Item Storage: " .. fmt(data.usedItemStorage) .. " / " .. fmt(data.totalItemStorage), colors.white)
-    bar(7, "Items", data.usedItemStorage, data.totalItemStorage)
+  if PROFILE == "autocraft" then
+    drawAutocraft(data)
+  elseif PROFILE == "alerts" then
+    drawAlerts(data)
   else
-    line(6, "Item Storage: capacity unavailable", colors.gray)
-  end
-
-  if data.storedEnergy and data.energyCapacity then
-    line(9, "RS Energy: " .. fmt(data.storedEnergy) .. " / " .. fmt(data.energyCapacity) .. " FE", colors.white)
-  end
-  if data.energyUsage then
-    line(10, "RS Usage:  " .. fmt(data.energyUsage) .. " FE/t", colors.white)
-  end
-
-  if data.configError then
-    line(11, data.configError, colors.orange)
-  else
-    line(11, "Mode: " .. tostring(data.configMode or "dry-run"), colors.gray)
-  end
-
-  local _, h = monitor.getSize()
-  local w = monitor.getSize()
-
-  line(12, "Category Summary   + ok  > would  ~ craft  . wait  x recipe  # block", colors.cyan)
-  local summaryRows = math.min(4, h - 12)
-  for i = 1, summaryRows do
-    local summary = data.categorySummaries and data.categorySummaries[i]
-    if summary then
-      line(12 + i, formatCategorySummary(summary, w), uiStatus.color(categorySummaryStatus(summary)))
-    end
-  end
-
-  local planY = 18
-  line(planY, "Stock Keeper Plan [dry-run]", colors.cyan)
-  if w >= 72 then
-    line(planY + 1, uiDraw.fit("ITEM", math.max(18, w - 39)) .. "     HAVE   TARGET    PLAN   STATUS", colors.gray)
-  end
-
-  local planStart = w >= 72 and planY + 2 or planY + 1
-  local planRows = math.min(7, h - planStart)
-  for i = 1, planRows do
-    local plan = data.stockPlans and data.stockPlans[i]
-    if plan then
-      line(planStart + i - 1, formatPlanRow(plan, w), uiStatus.color(plan.action))
-    end
-  end
-
-  local tally = data.stockTally or {}
-  local tallyY = planStart + planRows
-  if tallyY < h then
-    line(tallyY, "+ " .. fmt(tally.OK) ..
-      "  > " .. fmt(tally.WOULD) ..
-      "  ~ " .. fmt(tally.CRAFTING) ..
-      "  . " .. fmt(tally.COOLDOWN) ..
-      "  x " .. fmt(tally.NO_RECIPE) ..
-      "  # " .. fmt(tally.BLOCKED) ..
-      "   apply disabled", colors.gray)
-  end
-
-  local lowY = 28
-  if h < lowY + 2 then lowY = tallyY + 2 end
-
-  line(lowY, "Low Stock", colors.cyan)
-  if not data.warnings or #data.warnings == 0 then
-    line(lowY + 1, "All watched items are above target.", colors.lime)
-  else
-    for i = 1, math.min(4, #data.warnings) do
-      local warn = data.warnings[i]
-      local craft = warn.craftable and " craftable" or ""
-      line(lowY + i, warn.label .. ": " .. fmt(warn.amount) .. " / " .. fmt(warn.target) .. craft, colors.orange)
-    end
-  end
-
-  local topY = lowY + math.min(5, data.warnings and #data.warnings + 1 or 1) + 1
-  line(topY, "Top Stored Items", colors.cyan)
-  local maxRows = math.min(8, h - topY)
-  for i = 1, maxRows do
-    local item = data.topItems and data.topItems[i]
-    if item then
-      line(topY + i, tostring(i) .. ". " .. tostring(item.name) .. "  " .. fmt(item.amount), colors.white)
-    end
+    drawView(data)
   end
 end
 

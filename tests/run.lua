@@ -582,6 +582,17 @@ local hitRows = { { y = 5, entry = "a" }, { y = 6, entry = "b" } }
 t.eq(console.rowHit(hitRows, 6), "b", "rowHit returns the entry at that y")
 t.eq(console.rowHit(hitRows, 9), nil, "rowHit miss -> nil")
 
+-- display profile resolver (viewer screens), mirrors the theme resolver
+t.clearFiles()
+t.eq(console.resolveProfile(nil), "view", "missing file -> default view profile")
+t.eq(console.resolveProfile("autocraft"), "autocraft", "valid override wins")
+t.eq(console.resolveProfile("nonsense"), "view", "invalid override + no file -> default")
+t.setFile("atm10-display", "alerts\n")
+t.eq(console.resolveProfile(nil), "alerts", "file value is used")
+t.setFile("atm10-display", "# comment\nbadname\nautocraft\n")
+t.eq(console.resolveProfile(nil), "autocraft", "comments + invalid lines skipped")
+t.clearFiles()
+
 -- paginate: clamp, slice, and handle empty / overflow pages
 local p1 = console.paginate(25, 10, 1)
 t.eq(p1.pages, 3, "25 items / 10 per page -> 3 pages")

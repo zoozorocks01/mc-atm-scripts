@@ -838,6 +838,7 @@ local function broadcast(data)
     stockPlans = data.stockPlans,
     stockTally = data.stockTally,
     categorySummaries = data.categorySummaries,
+    craftQueue = data.craftQueue,
   }, BROADCAST_PROTOCOL)
 end
 

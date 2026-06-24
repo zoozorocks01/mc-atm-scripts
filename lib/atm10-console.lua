@@ -69,6 +69,36 @@ function console.buttonHit(row, x, y)
   return nil
 end
 
+-- Display profiles for read-only viewer (inventory-remote) screens. A viewer
+-- computer picks one via a one-line `atm10-display` file (installed once, survives
+-- updates), like the theme file. Resolves to the default ("view") when missing or
+-- invalid; comment lines (# or --) are skipped.
+console.PROFILES = { view = true, autocraft = true, alerts = true }
+console.defaultProfile = "view"
+console.profileFile = "atm10-display"
+
+function console.resolveProfile(override)
+  if type(override) == "string" and console.PROFILES[override] then
+    return override
+  end
+
+  if fs and fs.exists and fs.exists(console.profileFile) then
+    local file = fs.open(console.profileFile, "r")
+    if file then
+      local raw = file.readAll() or ""
+      file.close()
+      for chunk in string.gmatch(raw, "[^\r\n]+") do
+        local name = chunk:gsub("%-%-.*$", ""):gsub("#.*$", ""):gsub("%s+", "")
+        if name ~= "" and console.PROFILES[name] then
+          return name
+        end
+      end
+    end
+  end
+
+  return console.defaultProfile
+end
+
 -- Page math for a scrollable list. Clamps `page` into range and returns the
 -- 1-based slice [from, to] to render (an empty list yields from=1, to=0 so a
 -- `for i = from, to` loop runs zero times).

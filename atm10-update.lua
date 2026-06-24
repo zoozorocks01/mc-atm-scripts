@@ -46,6 +46,7 @@ local roles = {
     files = {
       { remote = "inventory/remote.lua", localName = "inventory-remote" },
       { remote = "inventory/remote-startup.lua", localName = "startup" },
+      { remote = "atm10-display", localName = "atm10-display", onlyIfMissing = true },
     },
   },
 }
