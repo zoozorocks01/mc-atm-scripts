@@ -1,360 +1,271 @@
 # ATM10 Scripts Installation And Use Guide
 
-This guide covers the current live systems:
+ComputerCraft/CC:Tweaked scripts for an ATM10 base:
 
-- Power dashboard for a Mekanism induction matrix.
-- Inventory source/manager for a Refined Storage grid through an RS Bridge.
-- Inventory remote monitors that mirror the inventory source.
+- **Inventory manager** — a touchscreen console over a Refined Storage grid (via
+  an Advanced Peripherals RS Bridge): stock quotas, a compress/overflow balancer,
+  gated autocrafting, presets, and an opt-in smart mode.
+- **Inventory remotes** — read-only mirror screens.
+- **Power dashboard** — a Mekanism induction-matrix monitor.
 
-The scripts are written for ComputerCraft/CC:Tweaked in ATM10. They use the
-repo updater so you only paste one install command per computer, then use
-`update` and `reboot` for future changes.
+One updater installs each computer; after that it's `update` + `reboot`.
 
-## Current Safety State
+## What this system can and cannot control
 
-The current public build is mostly read-only:
+Be clear-eyed about scope:
 
-- Power scripts read Mekanism induction data and draw it on monitors.
-- Inventory scripts read RS Bridge data, show stock information, and build a
-  dry-run stock keeper plan.
-- Inventory `WOULD CRAFT` lines are previews only. The current inventory
-  manager does not call RS autocrafting.
-- Remote inventory monitors are display-only.
-- Shared control gates exist for future autocraft/export/redstone/security
-  work, but no real actuator is wired yet.
+- **Can control now:** RS **autocrafting** — it calls `craftItem` on the RS
+  Bridge to ask Refined Storage to craft an item. That is the only actuator wired.
+- **Architected but NOT built:** item **export** (push exact amounts to a chest),
+  **redstone** outputs (machines/lights/doors), and **security**. The safety gate
+  (`lib/atm10-control.lua`) defines capabilities for these, but no actuator is
+  connected. See `docs/CONTROL_ARCHITECTURE.md`.
+- **Cannot control:** Modern Industrialization (and other multiblock) machines
+  directly — Refined Storage can't drive them without a bridge, so MI-only items
+  are kept as monitor/buffer targets, not autocraft.
 
-## Required Blocks
+Everything that isn't "request an RS craft" is, today, a **display/monitor**.
 
-Power dashboard:
+## Control modes (the master safety switch)
 
-- 1 advanced computer for the power probe.
-- 1 advanced computer for the power display.
-- 1 advanced monitor for the display computer.
-- 1 modem on each computer, on the same modem network.
-- A Mekanism induction port available to the power probe computer.
+Set in `inventory-config` as `mode`:
 
-Inventory manager:
+| Mode | Behavior |
+| --- | --- |
+| `monitor` | read-only; never crafts |
+| `dry-run` | plans deficits; never crafts |
+| `manual` | plans, and **you approve each craft** on the console (default) |
+| `auto` | crafts approved deficits unattended |
 
-- 1 advanced computer for the inventory source.
-- 1 advanced monitor for the source display.
-- 1 Advanced Peripherals RS Bridge connected to the Refined Storage grid.
-- 1 modem if you want remote inventory monitors.
+`allowAutocraft = false` hard-disables crafting regardless of mode. Nothing crafts
+unless: the mode allows it **and** the capability is on **and** (in manual) you've
+approved it **and** RS actually has a pattern for it. Keep `manual` while you set
+up patterns.
 
-Inventory remote display:
+## Required blocks
 
-- 1 advanced computer per remote display.
-- 1 advanced monitor per remote display.
-- 1 modem on the same modem network as the inventory source.
+**Inventory manager (the console):**
 
-## Modem And Chunk Setup
+- 1 Advanced Computer
+- 1 Advanced Monitor (advanced = color **and** touch; touch is required)
+- 1 Advanced Peripherals **RS Bridge** on your Refined Storage network
+- 1 modem (only if you want remote mirror screens)
 
-All computers that talk to each other must share the same modem network.
+**Inventory remote display:** 1 Advanced Computer + 1 Advanced Monitor + 1 modem
+on the same network as the manager.
 
-If you are using Ender Modems with color/band settings, set the matching
-color/band on the modem blocks/items themselves. The scripts do not change
-modem bands in Lua.
+**Power dashboard:** 1 computer + induction port for the probe; 1 computer +
+monitor for the display; a modem on each (same network).
 
-Keep these chunks loaded if you want the screens to recover cleanly after
-everyone leaves the area:
+## Wiring
 
-- the computers
-- the monitors
-- the modems
-- the RS Bridge
-- the induction matrix or induction port
+- Place the **monitor** against the manager computer (a 3×2 or larger advanced
+  monitor reads well). Right-clicking the monitor in-game **is a touch/tap**.
+- Connect the **RS Bridge** to the computer (adjacent, or on the same wired-modem
+  network) and to the Refined Storage network.
+- Inventory scripts **auto-detect** the monitor, modem, and RS Bridge sides.
+- Keep these chunks loaded so screens recover after you leave: computers,
+  monitors, modems, RS Bridge, induction port.
 
-Each installed computer gets a `startup` watchdog. If the chunk unloads or the
-script crashes, the computer should restart the right script on reboot.
+Check the computer sees its peripherals:
 
-## Default Peripheral Sides
+```lua
+lua
+for _, n in ipairs(peripheral.getNames()) do print(n, peripheral.getType(n)) end
+exit()
+```
 
-Power scripts currently use fixed sides:
+You should see a `monitor` and an `rs_bridge` (or `rsBridge`).
 
-- power probe modem: `top`
-- power probe induction port: `bottom`
-- power display modem: `top`
-- power display monitor: `right`
+## Install
 
-Inventory scripts auto-detect their monitor, modem, and RS Bridge by default.
-
-If you edit side constants inside a downloaded script, remember that `update`
-will replace that script. Long-term side/profile customization should move into
-config files.
-
-## Role Layout
-
-Use one role per computer.
-
-| Role | Goes On | Needs | Local Program |
-| --- | --- | --- | --- |
-| `power-probe` | computer at the induction port | modem + Mekanism induction port | `power-probe` |
-| `power-display` | monitor computer for power wall | modem + monitor | `power-display` |
-| `inventory-source` | main inventory computer | RS Bridge + monitor + optional modem | `inventory-info` |
-| `inventory-remote` | inventory mirror display | modem + monitor | `inventory-remote` |
-
-The role is stored in `.atm10-role`, so after the first install that computer
-knows what to download when you run `update`.
-
-## First Install
-
-On every new computer, paste this once:
+On every new computer, once:
 
 ```lua
 wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/atm10-update.lua update
 ```
 
-Then run the role command for that specific computer.
+Then the role for that computer:
 
-Power display computer:
+| Role | Command |
+| --- | --- |
+| Inventory manager | `update inventory-source` then `reboot` |
+| Inventory remote | `update inventory-remote` then `reboot` |
+| Power display | `update power-display` then `reboot` |
+| Power probe | `update power-probe` then `reboot` |
 
-```lua
-update power-display
-reboot
-```
+The role is saved in `.atm10-role`. Future updates on any computer are just
+`update` then `reboot`. `inventory-config` is only installed if missing, so your
+edits survive updates.
 
-Power probe computer:
+## The console (touchscreen tabs)
 
-```lua
-update power-probe
-reboot
-```
+Right-click the monitor to tap. Tabs (tap a tab, or pulse the page-button
+redstone side to cycle):
 
-Inventory source computer:
+- **PLAN** — stock deficits and overflow/compress jobs. Tap a `WOULD CRAFT` row
+  to approve it into the queue.
+- **QUEUE** — approved / in-flight crafts. Tap a row to cancel it.
+- **BROWSE** — the live grid, paginated (`[< PREV]` / `[NEXT >]`). Tap any item to
+  open its quota editor.
+- **PRESETS** — one-tap quota bundles (see below).
+- **SMART** — opt-in suggestions (see below).
 
-```lua
-update inventory-source
-reboot
-```
+PLAN and QUEUE auto-rotate on a wall; BROWSE and PRESETS/SMART are manual.
 
-Inventory remote display computer:
+## Quotas (the core idea)
 
-```lua
-update inventory-remote
-reboot
-```
+Every managed item has up to three independent lines:
 
-Do not install multiple roles on the same computer unless you intentionally
-want to replace its `startup` file.
+- **TARGET** — the floor: when stock drops below this, craft to refill.
+- **CRAFTTO** — refill up to this, then stop. (`TARGET` < `CRAFTTO` gives a
+  hysteresis band; `TARGET` = `CRAFTTO` is a hard line.)
+- **CEILING** — the max: if stock rises above this, **compress** the surplus into
+  a denser item (the `compress into` target) at a `ratio` (e.g. 9 ingots → 1
+  block). `0` = no ceiling.
 
-## Normal Updates
+Set quotas three ways:
 
-After the first install, future updates on each computer are:
+1. **Browse editor** — tap an item, use `[STEP]` to pick a step size
+   (1→10→…→10000), then `[-]/[+]` on TARGET / CRAFTTO / CEILING. `SET INTO` then
+   tap the denser item to choose the compress target; set its `x` ratio.
+   `SAVE` / `REMOVE` / `CRAFT` (one-off) / `BACK`.
+2. **Presets** — apply a bundle (below).
+3. **Config** — `stockKeeper.categories[].items` in `inventory-config`.
 
-```lua
-update
-reboot
-```
+Quotas you set on the console persist in `.atm10-managed` and **merge with** your
+hand-edited `inventory-config` — config is never overwritten.
 
-The updater downloads shared libraries first, then the role-specific script,
-then a fresh copy of the updater.
+A compress chain (e.g. dust→ingot→block) is just ceilings: dust has a ceiling that
+compresses into ingot, ingot has a ceiling that compresses into block.
 
-For inventory source computers, `inventory-config` is only installed if missing.
-Your local edits are preserved by normal updates.
+## Presets
 
-## Power Dashboard Use
+The **PRESETS** tab applies a bundle of quotas in one tap (they merge into your
+managed quotas). Generic stage presets (Early/Mid/Late/Mega) are neutral starting
+points. A `★` profile (e.g. **Zoozo Late-Game**) is **personal**: it carries the
+full late-game metal chains and turns on smart mode when applied. Preset item IDs
+must match your pack; anything that doesn't reads `NOT CRAFTABLE` on PLAN
+(harmless) — fix it by tapping the real item on BROWSE. Edit
+`lib/atm10-presets.lua` to curate your own.
 
-The power probe reads the induction peripheral and broadcasts snapshots. The
-power display receives those snapshots and renders:
+## Smart mode (opt-in)
 
-- stored energy
-- total capacity
-- fill percent
-- input FE/t
-- output FE/t
-- net FE/t
-- estimated time to empty or full
-- recent history graph
-- status line
+The **SMART** tab is **off by default**. Enable it there, or apply a profile that
+turns it on. When on, the manager tracks consumption over time and suggests:
 
-Current limitations:
+- **STOCK** — an unmanaged item that keeps draining → set a recurring quota.
+- **RAISE** — a managed item stuck below target while still draining → raise its
+  `craftTo`.
+- **CAP** — an item that keeps accumulating → set a compress ceiling.
 
-- Input and output are total induction matrix values.
-- The script cannot show the top 5 power users/producers by itself yet.
-- Per-machine or per-branch rankings will need extra sensors, such as energy
-  detectors on individual branches.
+Tap a suggestion to open the editor pre-filled, then SAVE. Nothing is auto-applied.
+`CLEAR` dismisses the current suggestions. With smart mode off, the tool is a plain
+stock manager — so it stays generic for anyone.
 
-If the power screen is running but input/output show `0 FE/t`, check:
+## Setting up RS autocrafting (required before anything crafts)
 
-- the power probe computer is loaded and running
-- the modem network is connected
-- the induction port is on the bottom of the probe computer
-- the Mekanism peripheral exposes input/output values at that moment
+The script only **requests** crafts; **Refined Storage does the crafting**, and
+only for recipes it has a **Pattern** for. If the RS Bridge reports
+`craftable_rows = 0` (nothing craftable), it means **RS has no patterns yet** —
+that is a Refined Storage setup task, not a script issue.
 
-Some differences between the monitor and the Mekanism block UI are normal
-because the script reads peripheral methods and formats/rounds values for the
-wall display.
+1. Place a **Crafter** block touching your RS network (a cable or the controller).
+2. Make a **Pattern** for each recipe you want auto-made:
+   - **Crafting Pattern** (Pattern Grid) for table recipes, e.g. `9 ingot → 1
+     block`.
+   - **Processing Pattern** for machine recipes (e.g. `dust → ingot` smelting):
+     it defines inputs and the expected outputs, and the Crafter pushes inputs
+     into the machine and pulls the result back.
+3. Put the Pattern(s) into the Crafter.
+4. **Connect the Crafter to its machine** for processing patterns: face the
+   Crafter at the machine's input (or route with conduits/external-storage so the
+   inputs go in and the output returns to the RS network).
 
-## Inventory Source Use
+The instant a pattern exists, that item becomes craftable: it stops showing
+`NOT CRAFTABLE` on PLAN, and `craftItem` can fulfill it.
 
-The inventory source reads the RS Bridge and renders:
+**Start with one pattern** (e.g. 9 iron → iron block, or zinc dust → zinc ingot)
+to validate the loop before building the whole tree. RS resolves dependency
+**trees** automatically — if every sub-step has a pattern, requesting the top item
+crafts everything beneath it; a missing sub-pattern makes the whole thing
+uncraftable.
 
-- RS/grid online status
-- item storage usage when available
-- RS energy and RS usage when available
-- low-stock warnings
-- top stored items
-- category summaries
-- dry-run stock keeper plan
+## Testing the craft loop
 
-The source also broadcasts compact snapshots over `atm10-inventory-v1` for
-remote displays.
+With at least one pattern in place and `mode = manual`:
 
-The inventory source needs an RS Bridge peripheral named or typed as one of:
+1. On **PLAN**, tap that item's `WOULD CRAFT` row to approve it.
+2. Watch the computer terminal for `Craft requested: <item> x<n>`, and confirm RS
+   starts crafting.
+3. If you see `Craft failed (<reason>)`, the bridge rejected it — note the reason
+   (e.g. missing pattern / wrong call shape) and adjust.
 
-- `rs_bridge`
-- `rsBridge`
-- a peripheral whose type is exposed as an RS Bridge by Advanced Peripherals
+Once you trust it, switch the most hands-off items to `mode = auto`.
 
-## Inventory Remote Use
-
-Inventory remotes are read-only mirrors. They wait for broadcasts from the
-inventory source and draw the latest snapshot.
-
-If a remote says it is waiting for an inventory source:
-
-- confirm the inventory source computer is running
-- confirm both modems are on the same network/band
-- confirm the remote has a monitor
-- reboot the remote after updating
-
-## Editing Inventory Config
-
-On the inventory source computer:
+## Config reference (`inventory-config`)
 
 ```lua
 edit inventory-config
 ```
 
-The default rule is unmanaged. Items do not become managed just because they
-exist in the RS grid.
+Key fields:
 
-Items can be used in three different ways:
+- `mode` — `monitor` / `dry-run` / `manual` / `auto` (default `manual`).
+- `allowAutocraft` — `true`/`false`; master craft capability (default `true`).
+- `listedItems` — display-only watched items.
+- `lowStock` — warning-only thresholds (never craft).
+- `stockKeeper.enabled`, `cooldownSeconds`, `maxCraftsPerCycle`, `maxRequest`,
+  `categories[].items[] = { name, label, target, craftTo, maxRequest }`.
 
-- top stored item lists: automatic, display-only
-- `listedItems`: selected display/watch items
-- `stockKeeper.categories[].items`: dry-run managed stock planner entries
+Machine-written state files (do not hand-edit): `.atm10-managed` (console quotas +
+settings), `.atm10-craft-queue`, `.atm10-stock-ledger`.
 
-Only `stockKeeper.categories[].items` enter the stock planner.
+At large quotas, raise `maxRequest` (per-craft cap) and lower `cooldownSeconds` so
+the planner refills faster — the real bottleneck is your RS crafting throughput.
 
-Example:
+## Power dashboard
 
-```lua
-stockKeeper = {
-  enabled = true,
-  categories = {
-    {
-      label = "Mekanism",
-      items = {
-        {
-          label = "Infused Alloy",
-          name = "mekanism:alloy_infused",
-          target = 128,
-          craftTo = 256,
-          maxRequest = 128,
-        },
-      },
-    },
-  },
-}
-```
+Install the two power roles as above. The probe reads the induction port
+(`bottom`) and broadcasts; the display (`monitor` on `right`, modem on `top`)
+renders stored/in/out/net FE, time-to-full/empty, and history. If input/output
+read `0 FE/t`, check the probe is loaded, the modems share a network, and the
+induction port is under the probe.
 
-Field meanings:
+## Inventory remotes
 
-- `label`: text shown on the monitor.
-- `name`: exact item id, such as `minecraft:glass`.
-- `target`: the low line.
-- `craftTo`: the planned refill line.
-- `maxRequest`: cap for a single planned craft request.
-
-If an item is below target and craftable, the manager can show `WOULD CRAFT`.
-That is still dry-run only in the current build.
-
-## Useful In-Game Commands
-
-Show attached peripherals:
-
-```lua
-lua
-for _, name in ipairs(peripheral.getNames()) do print(name, peripheral.getType(name)) end
-```
-
-Exit the Lua prompt:
-
-```lua
-exit()
-```
-
-Rerun the current role manually:
-
-```lua
-startup
-```
-
-Force a fresh update for the current role:
-
-```lua
-update
-reboot
-```
-
-Change a computer to a different role:
-
-```lua
-update inventory-remote
-reboot
-```
-
-Replace `inventory-remote` with the role you want.
+Read-only mirrors. They wait for the manager's `atm10-inventory-v1` broadcasts and
+draw the latest snapshot. If one waits forever: confirm the manager is running with
+a modem, both modems share a band/network, the remote has a monitor, and reboot it.
 
 ## Troubleshooting
 
-`No such program`
+- **`No such program`** — install the updater and run the role's `update`, then
+  `reboot`.
+- **Blank monitor** — `reboot`; if needed `update` then `reboot`; confirm the
+  monitor/bridge chunks are loaded and the monitor is advanced.
+- **Can't find RS Bridge** — confirm it's connected to the computer/network and
+  typed `rs_bridge`/`rsBridge` (peripheral listing command above).
+- **Everything reads `NOT CRAFTABLE` / `craftable_rows=0`** — RS has no patterns;
+  set up Crafters + Patterns (see above). Not a script bug.
+- **A craft never fires in manual** — did you tap to approve on PLAN? Is `mode`
+  manual/auto and `allowAutocraft` true? Does the item have a pattern?
+- **Config edit broke the manager** — check commas/braces/quotes; it fails closed.
+  Compare against `inventory-config-example`.
 
-- The program has not been downloaded onto that computer yet.
-- Install the updater, run the correct `update <role>`, then `reboot`.
+## Useful commands
 
-Blank monitor after login
+```lua
+startup          -- rerun this computer's role
+update; reboot   -- force a fresh update
+update <role>; reboot   -- change role (inventory-source/-remote/power-*)
+```
 
-- Click the computer and run `reboot`.
-- If it still fails, run `update`, then `reboot`.
-- Confirm the monitor, modem, and watched peripheral chunks are loaded.
+## Development
 
-Inventory source cannot find RS Bridge
+Off-CC unit tests cover the pure libs (planner, balancer, control gate, queue,
+managed quotas, suggestions, presets, console hit-testing). From the repo root:
 
-- Confirm the RS Bridge is connected to the computer or wired network.
-- Run the peripheral listing command above.
-- Make sure the source computer has the `inventory-source` role.
-
-Inventory remote waits forever
-
-- Confirm the source says it is running and has a modem.
-- Confirm source and remote modems share the same band/network.
-- Confirm the remote role is `inventory-remote`.
-
-Power display has stale age or old values
-
-- Reboot the power probe computer first.
-- Then reboot the power display computer.
-- Confirm both modems are on the same network.
-
-Config edit broke inventory source
-
-- Reopen `inventory-config` and check commas, braces, and quotes.
-- The source should fail closed to dry-run if config mode is invalid.
-- Use `inventory-config-example` as a reference.
-
-## What To Install Next
-
-A practical base layout is:
-
-1. Power probe near the induction port.
-2. Power display on the main wall.
-3. Inventory source beside the RS Bridge.
-4. One inventory remote on the control wall.
-5. More inventory remotes wherever they are useful.
-
-Future control systems should follow the same pattern:
-
-- one source/controller computer close to the real peripheral
-- any number of display-only remote monitors
-- no real action unless the controller gates explicitly allow it
+```sh
+lua tests/run.lua
+```
