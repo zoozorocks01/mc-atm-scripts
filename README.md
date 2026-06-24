@@ -259,13 +259,17 @@ startup
 
 ## Development
 
-Off-CC unit tests cover the pure logic in the shared libs (the control-mode
-safety gate, the theme resolver, and the status vocabulary). They stub the
-CC:Tweaked globals, so they run anywhere Lua is installed. From the repo root:
+Off-CC tests cover the pure logic in the shared libs and now also execute the
+manager itself against a stubbed CC:Tweaked environment. They stub the globals,
+so they run anywhere Lua is installed. From the repo root:
 
 ```sh
-lua tests/run.lua
+lua tests/run.lua    # pure-logic unit tests + a required-lib guard
+lua tests/smoke.lua  # runs inventory/manager.lua end-to-end (scan + every page + touches)
 ```
 
-The tests are dev-only and are not distributed by the updater. They do not
-exercise display rendering or the RS Bridge, which still need an in-game check.
+`run.lua` only parses the programs (a missing `require`/undefined global is valid
+syntax), so `smoke.lua` actually executes the manager's event loop against fake
+peripherals to catch runtime bugs that would otherwise only surface in-game. The
+tests are dev-only and not distributed by the updater; they still don't exercise
+real display rendering or the RS Bridge, which need an in-game check.

@@ -3,6 +3,12 @@ local MONITOR_SIDE = "auto"
 local BRIDGE_NAME = "auto"
 local TEXT_SCALE = "auto"
 local REFRESH_SECONDS = 5
+-- Craftability/crafting are expensive RS Bridge calls; cache them across scans to
+-- stay responsive on a laggy server. A NOT-craftable result expires fast (so a
+-- newly-added pattern shows quickly); a craftable result is held longer.
+local CRAFTABLE_TRUE_TTL_MS = 60000
+local CRAFTABLE_FALSE_TTL_MS = 10000
+local CRAFTING_TTL_MS = 6000
 local TOP_ITEM_COUNT = 8
 local BROADCAST_ENABLED = true
 local BROADCAST_MODEM_SIDE = "auto"
@@ -67,6 +73,9 @@ local pageIndex = 1
 local pageShownAt = nil
 local craftQueue = nil
 local managedStore = nil
+local itemsByName = {}      -- name -> item, rebuilt each scan (avoids per-item bridge.getItem)
+local craftableCache = {}   -- name -> { v = bool, at = ms } (TTL'd, see constants)
+local craftingCache = {}    -- name -> { v = bool, at = ms }
 local lastData = nil
 local tabStrip = nil
 local planRowRegions = {}
@@ -363,10 +372,13 @@ local function itemName(item)
 end
 
 local function findStoredItem(items, registryName)
-  local direct = call(bridge, "getItem", { name = registryName })
-  if type(direct) == "table" then return direct end
+  -- itemsByName is built once per scan from getItems(); look up locally instead
+  -- of a bridge.getItem round-trip per item. Falls back to a scan if the map is
+  -- not built yet (e.g. first call before a scan completes).
+  local mapped = itemsByName[registryName]
+  if mapped ~= nil then return mapped end
 
-  for _, item in pairs(items) do
+  for _, item in pairs(items or {}) do
     if item.name == registryName then return item end
   end
 
@@ -466,13 +478,19 @@ local function formatPlanRow(plan, width)
 end
 
 local function isCraftable(registryName, item)
-  if type(item) == "table" and item.isCraftable ~= nil then return item.isCraftable end
+  if type(item) == "table" and item.isCraftable ~= nil then return item.isCraftable == true end
+
+  local cached = craftableCache[registryName]
+  if cached then
+    local ttl = cached.v and CRAFTABLE_TRUE_TTL_MS or CRAFTABLE_FALSE_TTL_MS
+    if (nowMs() - cached.at) < ttl then return cached.v end
+  end
 
   local result = call(bridge, "isCraftable", { name = registryName })
-  if result ~= nil then return result == true end
-
-  result = call(bridge, "isItemCraftable", { name = registryName })
-  return result == true
+  if result == nil then result = call(bridge, "isItemCraftable", { name = registryName }) end
+  local v = result == true
+  craftableCache[registryName] = { v = v, at = nowMs() }
+  return v
 end
 
 local function collectListedItems(items)
@@ -493,13 +511,14 @@ local function collectListedItems(items)
 end
 
 local function isItemCrafting(registryName)
+  local cached = craftingCache[registryName]
+  if cached and (nowMs() - cached.at) < CRAFTING_TTL_MS then return cached.v end
+
   local result = call(bridge, "isItemCrafting", { name = registryName })
-  if result ~= nil then return result == true end
-
-  result = call(bridge, "isCrafting", { name = registryName })
-  if result ~= nil then return result == true end
-
-  return false
+  if result == nil then result = call(bridge, "isCrafting", { name = registryName }) end
+  local v = result == true
+  craftingCache[registryName] = { v = v, at = nowMs() }
+  return v
 end
 
 local function summarizeCategories(plans)
@@ -702,11 +721,13 @@ local function scan()
   local craftableCount = 0
   local sorted = {}
 
+  itemsByName = {} -- rebuilt each scan so findStoredItem is a local lookup
   for _, item in pairs(items) do
     local amount = itemAmount(item)
     unique = unique + 1
     totalAmount = totalAmount + amount
     if item.isCraftable then craftableCount = craftableCount + 1 end
+    if item.name then itemsByName[item.name] = item end
     sorted[#sorted + 1] = item
   end
 

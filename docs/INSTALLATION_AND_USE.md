@@ -285,9 +285,11 @@ update <role>; reboot   -- change role (inventory-source/-remote/power-*)
 
 ## Development
 
-Off-CC unit tests cover the pure libs (planner, balancer, control gate, queue,
-managed quotas, suggestions, presets, console hit-testing). From the repo root:
+Off-CC tests cover the pure libs (planner, balancer, control gate, queue, managed
+quotas, suggestions, presets, console hit-testing) and run the manager end-to-end
+against a stubbed CC environment. From the repo root:
 
 ```sh
-lua tests/run.lua
+lua tests/run.lua    # unit tests + required-lib guard
+lua tests/smoke.lua  # executes inventory/manager.lua (scan + every page + touches)
 ```
