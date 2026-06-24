@@ -98,6 +98,9 @@ local craftableCache = {}   -- name -> { v = bool, at = ms } (TTL'd, see constan
 local craftingCache = {}    -- name -> { v = bool, at = ms }
 local lastData = nil
 local lastUnique = 0       -- last good unique-item count; guards transient empty bridge reads
+local bridgeStats = nil    -- cached storage/energy snapshot (display-only, polled on a throttle)
+local bridgeStatsAt = 0    -- last bridgeStats refresh (ms)
+local STATS_INTERVAL_MS = 30000 -- refresh storage/energy stats at most every 30s (cuts RS-bridge calls)
 local tabStrip = nil
 local planRowRegions = {}
 local planNavRegions = {}
@@ -993,6 +996,23 @@ local function scan()
   cqueue.prune(craftQueue, nowMs(), QUEUE_MAX_AGE_MS)
   if cqueue.count(craftQueue) ~= beforeCount then saveQueue(craftQueue) end
 
+  -- Bridge storage/energy stats are display-only and change slowly. Polling them
+  -- every cycle is 6 extra RS-bridge calls; throttle to STATS_INTERVAL_MS to cut the
+  -- bridge-call load (each call is a chance to hit the AP NotAttachedException that
+  -- crashed the server). Reuse the cached snapshot between refreshes.
+  local statNow = nowMs()
+  if not bridgeStats or (statNow - bridgeStatsAt) >= STATS_INTERVAL_MS then
+    bridgeStats = {
+      usedItemStorage = call(bridge, "getUsedItemStorage"),
+      totalItemStorage = call(bridge, "getTotalItemStorage") or call(bridge, "getMaxItemDiskStorage"),
+      availableItemStorage = call(bridge, "getAvailableItemStorage"),
+      storedEnergy = call(bridge, "getStoredEnergy") or call(bridge, "getEnergyStorage"),
+      energyCapacity = call(bridge, "getEnergyCapacity") or call(bridge, "getMaxEnergyStorage"),
+      energyUsage = call(bridge, "getEnergyUsage"),
+    }
+    bridgeStatsAt = statNow
+  end
+
   return {
     connected = connected,
     online = online,
@@ -1006,12 +1026,12 @@ local function scan()
     unmanagedItemCount = math.max(0, unique - countKeys(managedNames)),
     listedItems = listedItems,
     warnings = warnings,
-    usedItemStorage = call(bridge, "getUsedItemStorage"),
-    totalItemStorage = call(bridge, "getTotalItemStorage") or call(bridge, "getMaxItemDiskStorage"),
-    availableItemStorage = call(bridge, "getAvailableItemStorage"),
-    storedEnergy = call(bridge, "getStoredEnergy") or call(bridge, "getEnergyStorage"),
-    energyCapacity = call(bridge, "getEnergyCapacity") or call(bridge, "getMaxEnergyStorage"),
-    energyUsage = call(bridge, "getEnergyUsage"),
+    usedItemStorage = bridgeStats.usedItemStorage,
+    totalItemStorage = bridgeStats.totalItemStorage,
+    availableItemStorage = bridgeStats.availableItemStorage,
+    storedEnergy = bridgeStats.storedEnergy,
+    energyCapacity = bridgeStats.energyCapacity,
+    energyUsage = bridgeStats.energyUsage,
     configMode = effectiveMode(),
     configError = configError,
     ledgerError = ledgerError,
