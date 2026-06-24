@@ -100,7 +100,7 @@ local lastData = nil
 local lastUnique = 0       -- last good unique-item count; guards transient empty bridge reads
 local bridgeStats = nil    -- cached storage/energy snapshot (display-only, polled on a throttle)
 local bridgeStatsAt = 0    -- last bridgeStats refresh (ms)
-local STATS_INTERVAL_MS = 30000 -- refresh storage/energy stats at most every 30s (cuts RS-bridge calls)
+local STATS_INTERVAL_MS = 10000 -- refresh storage/energy stats at most every 10s (cuts RS-bridge calls)
 local tabStrip = nil
 local planRowRegions = {}
 local planNavRegions = {}
@@ -114,6 +114,9 @@ local browseRowRegions = {}
 local browseNavRegions = {}
 local presetRowRegions = {}
 local presetStatus = nil   -- short confirmation line after applying a preset
+local flashMsg = nil       -- transient confirmation shown on the active page's hint line
+local flashAt = 0          -- when flashMsg was set (ms)
+local FLASH_MS = 4000      -- how long an approve/cancel confirmation stays up
 local smartRowRegions = {} -- tappable suggestion rows on the Smart page
 local smartButtons = nil   -- enable/disable + clear toggle row on the Smart page
 local trendHistory = {}    -- consumption history for smart mode (persisted to disk)
@@ -1170,9 +1173,10 @@ local function drawPlanPage(data)
       " ~" .. fmt(tally.CRAFTING) .. " x" .. fmt(tally.NO_RECIPE) .. " #" .. fmt(tally.BLOCKED), colors.gray)
   end
 
-  -- footer hint: what is tappable here (and why it might not be)
+  -- footer hint: a recent action flashes a confirmation here, else the tap hint
+  local flashing = flashMsg and (nowMs() - flashAt < FLASH_MS)
   if (tally.WOULD or 0) > 0 then
-    line(h, "Tap a > WOULD row to approve.", colors.lime)
+    line(h, flashing and flashMsg or "Tap a > WOULD row to approve.", flashing and colors.white or colors.lime)
     -- bulk: one tap approves EVERY WOULD CRAFT row (all pages), right-aligned so
     -- it never collides with the hint text
     local label = "[APPROVE ALL]"
@@ -1242,7 +1246,8 @@ local function drawQueuePage(data)
 
   local hintY = start + rows
   if hintY <= h then
-    line(hintY, "Tap a row to cancel its approval.", colors.gray)
+    local flashing = flashMsg and (nowMs() - flashAt < FLASH_MS)
+    line(hintY, flashing and flashMsg or "Tap a row to cancel its approval.", flashing and colors.white or colors.gray)
     -- bulk: one tap cancels every approval, right-aligned past the hint text
     local label = "[CLEAR QUEUE]"
     local bx = w - #label + 1
@@ -1640,6 +1645,7 @@ local function approve(entry)
       craftTo = entry.craftTo, banded = entry.banded, adjusted = entry.adjusted, reason = entry.reason }, nowMs())
   saveQueue(craftQueue)
   pageShownAt = nowMs()
+  flashMsg = "+ Approved " .. tostring(entry.label or entry.name); flashAt = nowMs()
   print("Approved: " .. tostring(entry.label or entry.name) .. " x" .. tostring(entry.request))
 end
 
@@ -1650,6 +1656,7 @@ local function cancelEntry(entry)
   craftQueue = cqueue.cancel(craftQueue or loadQueue(), entry.key or entry.name)
   saveQueue(craftQueue)
   pageShownAt = nowMs()
+  flashMsg = "x Canceled " .. tostring(entry.label or entry.name); flashAt = nowMs()
   print("Canceled approval: " .. tostring(entry.label or entry.name))
 end
 
@@ -1668,6 +1675,7 @@ local function approveAllPlans()
   craftQueue = q
   saveQueue(craftQueue)
   pageShownAt = nowMs()
+  flashMsg = "+ Approved all (" .. n .. ")"; flashAt = nowMs()
   print("Approved all WOULD CRAFT: " .. n)
 end
 
@@ -1677,6 +1685,7 @@ local function clearQueue()
   craftQueue = cqueue.new()
   saveQueue(craftQueue)
   pageShownAt = nowMs()
+  flashMsg = "x Queue cleared"; flashAt = nowMs()
   print("Cleared craft queue")
 end
 
