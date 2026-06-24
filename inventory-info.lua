@@ -17,6 +17,7 @@ local CONFIG_FILE = "inventory-config"
 local LEDGER_FILE = ".atm10-stock-ledger"
 local QUEUE_FILE = ".atm10-craft-queue"
 local MANAGED_FILE = ".atm10-managed" -- operator-set quotas (tap-to-manage store)
+local TRENDS_FILE = ".atm10-trends" -- smart-mode consumption history (survives reboot)
 -- Cycleable +/- step sizes in the quota editor: by count AND by stacks (a stack
 -- is 64), so big late-game numbers are quick to dial in. {value, label}.
 local STACK = 64
@@ -108,7 +109,10 @@ local presetRowRegions = {}
 local presetStatus = nil   -- short confirmation line after applying a preset
 local smartRowRegions = {} -- tappable suggestion rows on the Smart page
 local smartButtons = nil   -- enable/disable + clear toggle row on the Smart page
-local trendHistory = {}    -- in-memory consumption history for smart mode
+local trendHistory = {}    -- consumption history for smart mode (persisted to disk)
+local trendsLoaded = false -- lazily load the persisted history on first smart cycle
+local lastTrendsSaveMs = 0 -- throttle trend persistence (history is large; don't save every cycle)
+local TRENDS_SAVE_INTERVAL_MS = 120000 -- persist smart-mode history at most every 2 min
 local dismissedSuggestions = {} -- names the operator cleared this session
 local browsePage = 1
 local browseFilter = false  -- false = whole grid; true = managed (quota'd) items only
@@ -315,6 +319,24 @@ end
 
 local function saveQueue(q)
   return atomicWrite(QUEUE_FILE, textutils.serialize(q))
+end
+
+-- Smart-mode trend history is wall-clock based (os.epoch), so persisting it lets
+-- the drain window survive a reboot instead of restarting from zero each boot.
+-- Fail-safe: any problem yields an empty history (smart mode just relearns).
+local function loadTrends()
+  if not fs.exists(TRENDS_FILE) then return {} end
+  local file = fs.open(TRENDS_FILE, "r")
+  if not file then return {} end
+  local text = file.readAll()
+  file.close()
+  local ok, data = pcall(textutils.unserialize, text)
+  if not ok or type(data) ~= "table" then return {} end
+  return data
+end
+
+local function saveTrends(history)
+  return atomicWrite(TRENDS_FILE, textutils.serialize(history or {}))
 end
 
 local function openBroadcastModems()
@@ -862,6 +884,12 @@ local function scan()
   local smartOn = managed.getSetting(managedStore, "smartMode") == true
   local suggestions = {}
   if smartOn then
+    -- lazily restore the persisted drain window the first time smart mode runs, so
+    -- a reboot continues learning instead of starting from zero
+    if not trendsLoaded then
+      trendHistory = loadTrends()
+      trendsLoaded = true
+    end
     -- track drain for ALL items, not just craftable ones: with the live grid
     -- reporting craftable=0, gating on isCraftable would learn nothing.
     local snapshot = {}
@@ -870,7 +898,14 @@ local function scan()
         snapshot[#snapshot + 1] = { name = item.name, label = itemName(item), amount = itemAmount(item) }
       end
     end
-    suggest.record(trendHistory, snapshot, nowMs())
+    local now = nowMs()
+    suggest.record(trendHistory, snapshot, now)
+    -- persist on a throttle: the history spans thousands of items, so writing it
+    -- every 5s cycle would thrash the disk; every couple minutes is plenty
+    if now - lastTrendsSaveMs >= TRENDS_SAVE_INTERVAL_MS then
+      saveTrends(trendHistory)
+      lastTrendsSaveMs = now
+    end
     local quotasMap = {}
     for _, e in ipairs(managed.list(managedStore)) do
       quotasMap[e.name] = { target = e.target, craftTo = e.craftTo }
