@@ -13,10 +13,11 @@ return {
   -- computer regardless of mode.
   allowAutocraft = true,
 
-  -- Bridge poll interval (seconds, floored at 2). This is the manager's main
-  -- per-tick server cost: each scan does a full getItems() over the whole RS
-  -- network. Raise to 10-15 if server TPS is low; lower (min 2) for snappier
-  -- refresh on a healthy server. Touch input stays responsive regardless.
+  -- Bridge poll interval (seconds, floored at 2). A tuning knob, NOT a TPS fix:
+  -- live /spark profiling found the once-per-poll getItems() is not a measurable
+  -- server cost (an entity cull, not a slower poll, is what restored TPS). Lower
+  -- for snappier refresh; raise only if you ever profile the bridge as a real cost
+  -- on a very large network. Touch input stays responsive regardless.
   refreshSeconds = 5,
 
   itemDefaults = {

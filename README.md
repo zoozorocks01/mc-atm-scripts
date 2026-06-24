@@ -272,21 +272,24 @@ Industrialization, Mystical Agriculture, and RS starter list to copy from.
 
 ### Server TPS / performance
 
-The manager is the only computer that polls the RS Bridge; the remote viewers are
-push-driven (they read broadcasts, never call the bridge). So the manager's load
-is the lever:
+**The CC system is almost never the TPS cause.** Live `/spark` profiling on a real
+ATM10 base showed the manager's once-per-5s `getItems()` over ~5.9k items was *not*
+a measurable tick cost — an entity cull alone took that server from ~12 → 20 TPS
+while the poll ran unchanged. The manager is also the only computer that polls the
+bridge (remote viewers are push-driven — they read broadcasts, never call it). So:
 
-- **`refreshSeconds`** (config, default 5, floored at 2) — each scan does one full
-  `getItems()` over the whole network, so this is the dominant per-tick cost. If
-  `/spark` shows the RS Bridge / peripheral calls as a tick hog, raise it to
-  `10`–`15`. Touch input stays responsive regardless (taps redraw from cached data).
-- **`maxCraftsPerCycle` / `maxRequest`** — in `auto` mode every cycle can kick off
-  up to `maxCraftsPerCycle` RS craft-tree calculations of up to `maxRequest` each,
-  which is real RS work. If TPS dips while auto is grinding a big backlog, lower
-  these (e.g. `3` / `16384`) — slower fills, lighter server.
-- Most ATM10 TPS loss is **not** the computer: profile with `/spark profiler
-  --timeout 60` and look at force-loaded chunks, Mekanism/MI machines, mob farms,
-  and item/fluid pipes first.
+- **Find the real hog first:** `/spark tps` then `/spark profiler --timeout 60`.
+  ATM10 TPS loss is almost always **force-loaded chunks that keep a mob/AFK farm
+  ticking 24/7** (a spawner whose kill-rate < spawn-rate piles up entities), loose
+  items/XP on the ground, oversized MineColonies, or many always-on machines
+  crammed in one chunk. Fix those, not the computer.
+- **`refreshSeconds`** (config, default 5, floored at 2) — a tuning knob, *not* a
+  TPS fix. Raise it only if you ever profile the bridge as an actual cost on a very
+  large network; otherwise leave it. Touch input stays responsive regardless.
+- **`maxCraftsPerCycle` / `maxRequest`** — in `auto` each cycle can kick off up to
+  `maxCraftsPerCycle` RS craft-tree calculations of up to `maxRequest` each (real
+  RS work). If a healthy server dips only while auto grinds a big backlog, lower
+  these (e.g. `3` / `16384`).
 
 ### Install on remote inventory display
 

@@ -1,8 +1,9 @@
 return {
   mode = "manual",
 
-  -- Bridge poll interval (seconds). Raise to 10-15 if server TPS is low: the scan
-  -- does a full getItems() over the whole RS network each time it fires.
+  -- Bridge poll interval (seconds). Tuning knob, not a TPS fix -- live profiling
+  -- showed the poll is not a measurable server cost. Lower for snappier refresh,
+  -- raise only if you ever profile the bridge as a real cost on a huge network.
   refreshSeconds = 5,
 
   itemDefaults = {
