@@ -94,33 +94,35 @@ do
   local function add(x) items[#items + 1] = x end
   local function buf(name, label, target) add({ name = name, label = label, target = target, craftTo = target }) end
 
-  -- Zinc: the one metal in the partial recon with a confirmed dust + ingot.
-  -- Keep dust in a band; smelt the surplus up to ingots. (No block id in recon
-  -- yet -> no ingot->block step; add when confirmed.)
-  add({ name = "alltheores:zinc_dust", label = "Zinc Dust", target = 65536, craftTo = 131072,
-    ceiling = 131072, into = { name = "alltheores:zinc_ingot", label = "Zinc Ingot" }, ratio = 1 })
-  add({ name = "alltheores:zinc_ingot", label = "Zinc Ingot", target = 65536, craftTo = 131072 })
+  -- Normal metals: keep a big dust band (smelt the surplus up to ingots) and keep
+  -- 100k of the ingot. Zinc is the only normal metal in the partial recon; the
+  -- same 264k-dust / 100k-ingot pattern applies to iron/copper/gold/etc once Codex
+  -- sends their IDs (add an ingot->block compress when block ids land).
+  add({ name = "alltheores:zinc_dust", label = "Zinc Dust", target = 264000, craftTo = 264000,
+    ceiling = 350000, into = { name = "alltheores:zinc_ingot", label = "Zinc Ingot" }, ratio = 1 })
+  add({ name = "alltheores:zinc_ingot", label = "Zinc Ingot", target = 100000, craftTo = 100000 })
 
-  -- Alloys / processed metals (ingot buffers; confirmed IDs).
-  buf("alltheores:steel_ingot", "Steel", 65536)
-  buf("alltheores:bronze_ingot", "Bronze", 32768)
-  buf("alltheores:brass_ingot", "Brass", 16384)
-  buf("alltheores:invar_ingot", "Invar", 16384)
-  buf("alltheores:electrum_ingot", "Electrum", 16384)
-  buf("alltheores:enderium_ingot", "Enderium", 4096)
-  buf("modern_industrialization:stainless_steel_ingot", "Stainless Steel", 8000)
-  buf("modern_industrialization:battery_alloy_ingot", "Battery Alloy", 8000)
-  buf("modern_industrialization:cupronickel_ingot", "Cupronickel", 2000)
-  buf("modern_industrialization:kanthal_ingot", "Kanthal", 2000)
-  buf("enderio:conductive_alloy_ingot", "Conductive Alloy", 2048)
-  buf("enderio:redstone_alloy_ingot", "Redstone Alloy", 2048)
-  buf("enderio:pulsating_alloy_ingot", "Pulsating Alloy", 2048)
-  buf("enderio:vibrant_alloy_ingot", "Vibrant Alloy", 1024)
-  buf("enderio:dark_steel_ingot", "Dark Steel", 2048)
+  -- Steel: keep 100k (ingot-only in recon).
+  buf("alltheores:steel_ingot", "Steel", 100000)
 
-  -- Mystical Agriculture tier essences (floors; confirmed IDs). Inferium is
-  -- massively overflowing (2.1M) - capping it needs a compress-to-prudentium or
-  -- void rule once the recipe/ratio is confirmed.
+  -- Non-Mekanism alloys: keep >= 35k. Exceptions: enderium + stainless steel = 10k.
+  buf("alltheores:bronze_ingot", "Bronze", 35000)
+  buf("alltheores:brass_ingot", "Brass", 35000)
+  buf("alltheores:invar_ingot", "Invar", 35000)
+  buf("alltheores:electrum_ingot", "Electrum", 35000)
+  buf("alltheores:enderium_ingot", "Enderium", 10000)
+  buf("modern_industrialization:stainless_steel_ingot", "Stainless Steel", 10000)
+  buf("modern_industrialization:battery_alloy_ingot", "Battery Alloy", 35000)
+  buf("modern_industrialization:cupronickel_ingot", "Cupronickel", 35000)
+  buf("modern_industrialization:kanthal_ingot", "Kanthal", 35000)
+  buf("enderio:conductive_alloy_ingot", "Conductive Alloy", 35000)
+  buf("enderio:redstone_alloy_ingot", "Redstone Alloy", 35000)
+  buf("enderio:pulsating_alloy_ingot", "Pulsating Alloy", 35000)
+  buf("enderio:vibrant_alloy_ingot", "Vibrant Alloy", 35000)
+  buf("enderio:dark_steel_ingot", "Dark Steel", 35000)
+
+  -- Mystical Agriculture: inferium left UNCAPPED (base feedstock, ~2.1M, fine to
+  -- pool). Higher tiers kept as floors only (no ceiling - extras are valuable).
   buf("mysticalagriculture:prudentium_essence", "Prudentium Essence", 16000)
   buf("mysticalagriculture:tertium_essence", "Tertium Essence", 8000)
   buf("mysticalagriculture:imperium_essence", "Imperium Essence", 2000)
