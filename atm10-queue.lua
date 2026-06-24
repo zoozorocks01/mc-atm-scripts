@@ -84,6 +84,33 @@ function queue.get(q, name)
   return q.entries[name]
 end
 
+-- AUTO MODE: approve every craftable deficit in one pass. For each plan row whose
+-- action is "WOULD CRAFT" with a positive request, approve it UNLESS it is already
+-- APPROVED-and-waiting (re-approving would only churn its timestamp + reorder the
+-- queue every cycle). An absent entry is approved; a CRAFTING entry is re-armed --
+-- a row that reads WOULD CRAFT again means RS finished it and the quota still wants
+-- the next batch. Returns the queue and the number of entries (re)approved.
+--
+-- Pure: the manager owns the mode gate, the ledger COOLDOWN (which keeps an item
+-- from reading WOULD CRAFT again until its window passes, bounding re-fire), and
+-- persistence. plans rows are the stock/balance planner shape {action,name,label,
+-- request,key?}.
+function queue.autoApprove(q, plans, now)
+  q = queue.normalize(q)
+  local n = 0
+  for _, p in ipairs(plans or {}) do
+    if p and p.action == "WOULD CRAFT" and p.name and (tonumber(p.request) or 0) > 0 then
+      local key = p.key or p.name
+      local cur = q.entries[key]
+      if not cur or cur.state ~= queue.APPROVED then
+        queue.approve(q, { name = p.name, label = p.label, request = p.request, key = p.key }, now)
+        n = n + 1
+      end
+    end
+  end
+  return q, n
+end
+
 function queue.count(q)
   q = queue.normalize(q)
   local n = 0

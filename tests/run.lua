@@ -281,6 +281,35 @@ t.eq(cqueue.get(q, "x").state, cqueue.APPROVED, "get returns the entry")
 t.eq(cqueue.get(q, "missing"), nil, "get returns nil for absent key")
 t.eq(cqueue.get(q, nil), nil, "get(nil) is nil")
 
+-- autoApprove: auto mode enqueues craftable deficits with a skip/re-arm guard
+local aq = cqueue.new()
+local autoPlans = {
+  { action = "WOULD CRAFT", name = "iron", label = "Iron", request = 100 },
+  { action = "OK", name = "gold", request = 50 },             -- satisfied, skip
+  { action = "NOT CRAFTABLE", name = "tin", request = 50 },   -- no pattern, skip
+  { action = "ON COOLDOWN", name = "lead", request = 50 },    -- backing off, skip
+  { action = "WOULD CRAFT", name = "zinc", request = 0 },     -- nothing to craft, skip
+  { action = "WOULD CRAFT", name = "copper", label = "Copper", key = "compress:copper", request = 9 },
+}
+local _, an1 = cqueue.autoApprove(aq, autoPlans, 100)
+t.eq(an1, 2, "autoApprove approves only WOULD CRAFT rows with a positive request")
+t.check(cqueue.has(aq, "iron"), "autoApprove enqueued the refill deficit")
+t.check(cqueue.has(aq, "compress:copper"), "autoApprove enqueued the overflow deficit under its compress key")
+t.eq(cqueue.has(aq, "gold"), false, "autoApprove skipped the OK row")
+t.eq(cqueue.has(aq, "zinc"), false, "autoApprove skipped the zero-request row")
+
+local _, an2 = cqueue.autoApprove(aq, autoPlans, 200)
+t.eq(an2, 0, "autoApprove skips entries already APPROVED and waiting")
+t.eq(cqueue.get(aq, "iron").approvedAt, 100, "skip leaves the original timestamp untouched")
+
+cqueue.markCrafting(aq, "iron", 150)
+local _, an3 = cqueue.autoApprove(aq, autoPlans, 300)
+t.eq(an3, 1, "autoApprove re-arms a CRAFTING entry that is WOULD CRAFT again (next batch)")
+t.eq(cqueue.get(aq, "iron").state, cqueue.APPROVED, "re-armed entry is APPROVED again")
+
+local _, an4 = cqueue.autoApprove(aq, nil, 400)
+t.eq(an4, 0, "autoApprove(nil plans) is a no-op")
+
 q = cqueue.cancel(q, "y")
 t.check(cqueue.has(q, "y") == false, "cancel removes an entry")
 t.eq(cqueue.count(q), 1, "cancel decrements count")

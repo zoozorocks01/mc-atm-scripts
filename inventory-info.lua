@@ -18,6 +18,7 @@ local LEDGER_FILE = ".atm10-stock-ledger"
 local QUEUE_FILE = ".atm10-craft-queue"
 local MANAGED_FILE = ".atm10-managed" -- operator-set quotas (tap-to-manage store)
 local TRENDS_FILE = ".atm10-trends" -- smart-mode consumption history (survives reboot)
+local DISMISSED_FILE = ".atm10-dismissed" -- smart suggestions the operator cleared (survives reboot)
 -- Cycleable +/- step sizes in the quota editor: by count AND by stacks (a stack
 -- is 64), so big late-game numbers are quick to dial in. {value, label}.
 local STACK = 64
@@ -113,7 +114,8 @@ local trendHistory = {}    -- consumption history for smart mode (persisted to d
 local trendsLoaded = false -- lazily load the persisted history on first smart cycle
 local lastTrendsSaveMs = 0 -- throttle trend persistence (history is large; don't save every cycle)
 local TRENDS_SAVE_INTERVAL_MS = 120000 -- persist smart-mode history at most every 2 min
-local dismissedSuggestions = {} -- names the operator cleared this session
+local dismissedSuggestions = {} -- names the operator cleared (persisted to disk)
+local dismissedLoaded = false   -- lazily load persisted dismissals on first smart cycle
 local browsePage = 1
 local browseFilter = false  -- false = whole grid; true = managed (quota'd) items only
 local browseFilterBtn = nil -- hit region for the Browse ALL/MANAGED toggle
@@ -337,6 +339,23 @@ end
 
 local function saveTrends(history)
   return atomicWrite(TRENDS_FILE, textutils.serialize(history or {}))
+end
+
+-- Dismissed smart suggestions persist too: now that the trend window survives a
+-- reboot, suggestions would otherwise reappear after every restart. Fail-safe.
+local function loadDismissed()
+  if not fs.exists(DISMISSED_FILE) then return {} end
+  local file = fs.open(DISMISSED_FILE, "r")
+  if not file then return {} end
+  local text = file.readAll()
+  file.close()
+  local ok, data = pcall(textutils.unserialize, text)
+  if not ok or type(data) ~= "table" then return {} end
+  return data
+end
+
+local function saveDismissed(set)
+  return atomicWrite(DISMISSED_FILE, textutils.serialize(set or {}))
 end
 
 local function openBroadcastModems()
@@ -790,22 +809,8 @@ local function autoApprovePlans(plans)
   if effectiveMode() ~= control.MODE_AUTO then return end
   if type(plans) ~= "table" then return end
   craftQueue = craftQueue or loadQueue()
-  local changed = false
-  for _, p in ipairs(plans) do
-    if p.action == "WOULD CRAFT" and p.name and (tonumber(p.request) or 0) > 0 then
-      -- Skip an entry that is already APPROVED and waiting (re-approving would just
-      -- reset its timestamp and churn the queue file every cycle). Re-arm one that
-      -- is CRAFTING (RS finished it but the item is WOULD CRAFT again, i.e. a still-
-      -- unmet quota needing the next batch) or one that is absent.
-      local cur = cqueue.get(craftQueue, p.key or p.name)
-      if not cur or cur.state ~= cqueue.APPROVED then
-        craftQueue = cqueue.approve(craftQueue,
-          { name = p.name, label = p.label, request = p.request, key = p.key }, nowMs())
-        changed = true
-      end
-    end
-  end
-  if changed then saveQueue(craftQueue) end
+  local _, n = cqueue.autoApprove(craftQueue, plans, nowMs())
+  if n > 0 then saveQueue(craftQueue) end
 end
 
 local function scan()
@@ -889,6 +894,10 @@ local function scan()
     if not trendsLoaded then
       trendHistory = loadTrends()
       trendsLoaded = true
+    end
+    if not dismissedLoaded then
+      dismissedSuggestions = loadDismissed()
+      dismissedLoaded = true
     end
     -- track drain for ALL items, not just craftable ones: with the live grid
     -- reporting craftable=0, gating on isCraftable would learn nothing.
@@ -1815,6 +1824,7 @@ local function handleTouch(x, y)
     for _, s in ipairs((lastData and lastData.suggestions) or {}) do
       if s.name then dismissedSuggestions[s.name] = true end
     end
+    saveDismissed(dismissedSuggestions)
     pageShownAt = nowMs()
     renderCurrent()
     return
