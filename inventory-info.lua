@@ -12,7 +12,7 @@ local LEDGER_FILE = ".atm10-stock-ledger"
 local QUEUE_FILE = ".atm10-craft-queue"
 local MANAGED_FILE = ".atm10-managed" -- operator-set quotas (tap-to-manage store)
 local EDIT_STEPS = { 1, 10, 100, 1000, 10000 } -- cycleable +/- step sizes in the quota editor
-local PAGE_SECONDS = 10
+local PAGE_SECONDS = 0 -- auto page-rotation seconds; 0 = off (the manager is interactive)
 local PAGES = { "PLAN", "QUEUE", "BROWSE", "PRESETS", "SMART" }
 local QUEUE_MAX_AGE_MS = 30 * 60 * 1000 -- prune approvals older than 30 minutes
 local PAGE_BUTTON_SIDE = "back"          -- a redstone pulse here flips to the next page ("none" disables)
@@ -893,8 +893,17 @@ local function drawPlanPage(data)
       "  ~ " .. fmt(tally.CRAFTING) ..
       "  . " .. fmt(tally.COOLDOWN) ..
       "  x " .. fmt(tally.NO_RECIPE) ..
-      "  # " .. fmt(tally.BLOCKED) ..
-      "   apply disabled", colors.gray)
+      "  # " .. fmt(tally.BLOCKED), colors.gray)
+  end
+
+  -- footer hint: tells you exactly what is tappable here (and why it might not be)
+  local hintY = tallyY + 1
+  if hintY <= h then
+    if (tally.WOULD or 0) > 0 then
+      line(hintY, "Tap a cyan > WOULD CRAFT row to approve it.", colors.lime)
+    else
+      line(hintY, "Nothing craftable yet - RS reports no patterns (set up Crafters).", colors.orange)
+    end
   end
 end
 
@@ -1205,9 +1214,11 @@ local function draw(data)
   monitor.setCursorPos(1, 2)
   monitor.setBackgroundColor(colors.black)
   monitor.clearLine()
+  -- active tab is highlighted (inverted) so "you are here" + tap targets are clear
   for _, tab in ipairs(tabStrip.tabs) do
+    local active = tab.page == pageIndex
     uiDraw.write(monitor, tab.x1, tabStrip.y, "[" .. tab.label .. "]",
-      tab.page == pageIndex and colors.cyan or colors.gray, colors.black)
+      active and colors.black or colors.lightGray, active and colors.cyan or colors.black)
   end
 
   local onlineText, onlineColor = "unknown", colors.yellow
@@ -1254,6 +1265,7 @@ end
 local AUTO_PAGES = { PLAN = true, QUEUE = true }
 
 local function advancePageIfDue()
+  if PAGE_SECONDS <= 0 then return end -- auto-rotation disabled
   local nowT = nowMs()
   if not pageShownAt then pageShownAt = nowT end
   if not AUTO_PAGES[PAGES[pageIndex]] then
