@@ -5,7 +5,8 @@ ComputerCraft/CC:Tweaked scripts for an ATM10 base:
 - **Inventory manager** — a touchscreen console over a Refined Storage grid (via
   an Advanced Peripherals RS Bridge): stock quotas, a compress/overflow balancer,
   gated autocrafting, presets, and an opt-in smart mode.
-- **Inventory remotes** — read-only mirror screens.
+- **Inventory remotes (viewers)** — read-only mirror screens, separate from the
+  manager (different role / computer).
 - **Power dashboard** — a Mekanism induction-matrix monitor.
 
 One updater installs each computer; after that it's `update` + `reboot`.
@@ -232,9 +233,11 @@ renders stored/in/out/net FE, time-to-full/empty, and history. If input/output
 read `0 FE/t`, check the probe is loaded, the modems share a network, and the
 induction port is under the probe.
 
-## Inventory remotes
+## Inventory remotes (viewers)
 
-Read-only mirrors. They wait for the manager's `atm10-inventory-v1` broadcasts and
+These are the read-only **inventory viewers** — a different role/computer from the
+manager. They have no RS Bridge and no controls; they wait for the manager's
+`atm10-inventory-v1` broadcasts and
 draw the latest snapshot. If one waits forever: confirm the manager is running with
 a modem, both modems share a band/network, the remote has a monitor, and reboot it.
 
