@@ -849,8 +849,9 @@ local function drawWaiting(message)
   line(5, "Attach monitor + RS Bridge to this computer.", colors.gray)
 end
 
--- The manager monitor is a management-only console. Inventory browsing lives on
--- the separate read-only viewers; here we show the stock Plan and the craft Queue.
+-- The manager monitor is the control console (Plan / Queue / Browse / Presets /
+-- Smart). The Browse tab here is for picking items to manage; the separate
+-- inventory-remote computers are the read-only viewers. This is the Plan page.
 local function drawPlanPage(data)
   local w, h = monitor.getSize()
 
