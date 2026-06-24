@@ -44,6 +44,11 @@ return {
     cooldownSeconds = 300,
     maxCraftsPerCycle = 8,
     maxRequest = 65536,
+    -- If an item has craftTo <= target, the planner refills above the floor by
+    -- max(target * refillMarginRatio, minRefillMargin). Existing explicit
+    -- craftTo values above target are preserved exactly.
+    refillMarginRatio = 0.25,
+    minRefillMargin = 4,
 
     categories = {
       {

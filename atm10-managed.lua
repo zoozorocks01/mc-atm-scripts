@@ -55,6 +55,22 @@ function managed.set(store, entry, now)
     item.ratio = math.max(1, math.floor(tonumber(entry.ratio) or prev.ratio or 1))
   end
 
+  item.adjusted = nil
+  item.invalid = nil
+  if item.ceiling and item.ceiling > 0 and item.into and item.into.name then
+    if item.ceiling <= item.target then
+      item.invalid = "ceiling must be greater than target"
+    elseif item.craftTo >= item.ceiling then
+      item.adjusted = {
+        field = "craftTo",
+        from = item.craftTo,
+        to = item.ceiling - 1,
+        reason = "craftTo lowered below ceiling",
+      }
+      item.craftTo = item.ceiling - 1
+    end
+  end
+
   store.items[name] = item
   return store
 end
@@ -82,7 +98,7 @@ end
 function managed.clearOverflow(store, name)
   store = managed.normalize(store)
   local e = store.items[name]
-  if e then e.ceiling, e.into, e.ratio = nil, nil, nil end
+  if e then e.ceiling, e.into, e.ratio, e.adjusted, e.invalid = nil, nil, nil, nil, nil end
   return store
 end
 
@@ -90,7 +106,7 @@ end
 function managed.overflowItems(store)
   local out = {}
   for _, e in ipairs(managed.list(store)) do
-    if e.ceiling and type(e.into) == "table" and e.into.name then out[#out + 1] = e end
+    if not e.invalid and e.ceiling and type(e.into) == "table" and e.into.name then out[#out + 1] = e end
   end
   return out
 end
@@ -132,6 +148,8 @@ function managed.toCategory(store, label)
   for _, e in ipairs(items) do
     categoryItems[#categoryItems + 1] = {
       name = e.name, label = e.label, target = e.target, craftTo = e.craftTo,
+      ceiling = e.ceiling, into = e.into, ratio = e.ratio,
+      adjusted = e.adjusted, invalid = e.invalid,
     }
   end
   return { label = label or "Tapped", items = categoryItems }

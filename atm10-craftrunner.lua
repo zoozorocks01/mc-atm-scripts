@@ -50,7 +50,7 @@ function runner.run(q, deps)
   local fired = 0
   local requestedThisRun = {} -- item names already requested this run (avoid double-fire)
 
-  for _, e in ipairs(cqueue.list(q)) do
+  for _, e in ipairs(cqueue.list(q, { priority = true })) do
     local ekey = e.key or e.name -- queue identity (refill vs compress can share a name)
     if e.state == cqueue.APPROVED then
       if e.triedAt and cooldownMs > 0 and (now - e.triedAt) < cooldownMs then

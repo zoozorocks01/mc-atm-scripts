@@ -180,6 +180,13 @@ numbers are reachable), then use `[-]` / `[+]` on each field:
   set the `x` **ratio** (source units per crafted unit, e.g. 9 ingots → 1 block).
   `CLR OVF` removes the overflow rule.
 
+If `CRAFTTO` is equal to `TARGET`, the planner keeps the saved numbers but uses
+an effective refill band so a dip by one item does not craft one item forever.
+The default band is `max(target * 0.25, 4)` above the floor, tunable in
+`stockKeeper.refillMarginRatio` and `stockKeeper.minRefillMargin`. If a quota
+also has a compress `CEILING`, the refill target is kept below that ceiling; an
+impossible band is shown as blocked instead of silently refill/compress thrashing.
+
 `SAVE` stores it; `CRAFT` queues a one-off craft; `REMOVE` deletes the quota;
 `BACK` exits. Items with a quota show `Q <target>` in the grid. Overflow/compress
 crafts appear on the Plan page under the **Overflow** category and approve like
@@ -251,6 +258,8 @@ The stock manager is organized by categories:
 ```lua
 stockKeeper = {
   enabled = true,
+  refillMarginRatio = 0.25,
+  minRefillMargin = 4,
   categories = {
     {
       label = "Mekanism",
@@ -262,13 +271,15 @@ stockKeeper = {
 }
 ```
 
-`target` is the low line. `craftTo` is the planned refill line. `maxRequest`
-caps a single planned craft request (default `65536`) and `maxCraftsPerCycle`
-caps how many new craft requests fire per cycle (default `8`) — both tuned for
-late-game bulk; lower them if a big batch strains your machines. Existing installs
-keep their `inventory-config` on update, so `edit inventory-config` to adopt new
-defaults. `inventory-config-example` contains a larger Mekanism, Modern
-Industrialization, Mystical Agriculture, and RS starter list to copy from.
+`target` is the low line. `craftTo` is the planned refill line. When `craftTo`
+is not above `target`, the refill-margin defaults above create an effective batch
+above the floor without rewriting the quota. `maxRequest` caps a single planned
+craft request (default `65536`) and `maxCraftsPerCycle` caps how many new craft
+requests fire per cycle (default `8`); under that cap, the most-deficient approved
+quotas fire first. Existing installs keep their `inventory-config` on update, so
+`edit inventory-config` to adopt new defaults. `inventory-config-example` contains
+a larger Mekanism, Modern Industrialization, Mystical Agriculture, and RS starter
+list to copy from.
 
 ### Server TPS / performance
 

@@ -224,6 +224,31 @@ t.eq(wcP[1].name, "x", "plan row carries the registry name (for approve/reconcil
 t.check(wcP[1].capped == false, "not capped below maxRequest")
 t.eq(wcP[1].category, "Stock Keeper", "items-only config falls back to Stock Keeper category")
 
+-- target==craftTo gets an effective refill band without rewriting the configured value
+local bandP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100, craftTo = 100 } }),
+  ledger = emptyLedger, resolve = function() return 99, true, false end })
+t.eq(bandP[1].action, "WOULD CRAFT", "target==craftTo still plans a refill")
+t.eq(bandP[1].craftTo, 125, "default refill band is 25% above the floor")
+t.eq(bandP[1].configuredCraftTo, 100, "configured craftTo is preserved on the row")
+t.eq(bandP[1].request, 26, "dip by one still refills the full band, not one item")
+t.check(bandP[1].banded == true, "row marks that the refill band was inferred")
+local tinyBand = stockplan.plan({ stockKeeper = SK({ { name = "star", target = 4, craftTo = 4 } }),
+  ledger = emptyLedger, resolve = function() return 3, true, false end })
+t.eq(tinyBand[1].request, 5, "tiny quotas get a minimum refill margin")
+
+-- a refill band must not fight an overflow ceiling
+local guardBand = stockplan.plan({ stockKeeper = SK({
+    { name = "x", target = 100, craftTo = 200, ceiling = 150, into = { name = "block" } },
+  }), ledger = emptyLedger, resolve = function() return 90, true, false end })
+t.eq(guardBand[1].craftTo, 149, "craftTo is lowered below the ceiling")
+t.eq(guardBand[1].request, 59, "request uses the adjusted craftTo")
+t.check(guardBand[1].adjusted == true, "row marks the adjustment")
+local badBand = stockplan.plan({ stockKeeper = SK({
+    { name = "x", target = 100, craftTo = 100, ceiling = 100, into = { name = "block" } },
+  }), ledger = emptyLedger, resolve = function() return 50, true, false end })
+t.eq(badBand[1].action, "BLOCKED", "ceiling at/below target blocks instead of thrashing")
+t.eq(badBand[1].reason, "ceiling must be greater than target", "blocked row explains the band problem")
+
 -- request capped at maxRequest
 local capP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100, craftTo = 10000, maxRequest = 500 } }), ledger = emptyLedger,
   resolve = function() return 0, true, false end })
@@ -253,6 +278,19 @@ local cyc = stockplan.plan({ stockKeeper = SK({
 t.eq(cyc[1].action, "WOULD CRAFT", "1st within cycle cap")
 t.eq(cyc[2].action, "WOULD CRAFT", "2nd within cycle cap")
 t.eq(cyc[3].action, "CYCLE CAP", "3rd exceeds cycle cap")
+local urgentCap = stockplan.plan({ stockKeeper = SK({
+    { name = "low", target = 100, craftTo = 150 },
+    { name = "urgent", target = 100, craftTo = 150 },
+    { name = "mid", target = 100, craftTo = 150 },
+  }, { maxCraftsPerCycle = 2 }), ledger = emptyLedger,
+  resolve = function(name)
+    if name == "low" then return 90, true, false end
+    if name == "urgent" then return 10, true, false end
+    return 50, true, false
+  end })
+t.eq(urgentCap[1].action, "CYCLE CAP", "least-deficient row loses the planner cycle cap")
+t.eq(urgentCap[2].action, "WOULD CRAFT", "most-deficient row survives the planner cycle cap")
+t.eq(urgentCap[3].action, "WOULD CRAFT", "next-most-deficient row survives the planner cycle cap")
 
 -- ---------------------------------------------------------------------------
 print("craft queue (manual mode, inert)")
@@ -275,6 +313,12 @@ t.eq(cqueue.count(q), 1, "approve without a name is a no-op")
 q = cqueue.approve(q, { name = "y", request = 16 }, 40)
 local listed = cqueue.list(q)
 t.eq(listed[1].name, "y", "list is newest-approval first")
+local pqOrder = cqueue.new()
+pqOrder = cqueue.approve(pqOrder, { name = "old-urgent", request = 1, priority = 0.9 }, 10)
+pqOrder = cqueue.approve(pqOrder, { name = "new-low", request = 1, priority = 0.1 }, 20)
+t.eq(cqueue.list(pqOrder)[1].name, "new-low", "default queue list stays newest first")
+t.eq(cqueue.list(pqOrder, { priority = true })[1].name, "old-urgent",
+  "priority queue list puts urgent approved entries first")
 
 -- get: read-only lookup used by auto-approve to branch on entry state
 t.eq(cqueue.get(q, "x").state, cqueue.APPROVED, "get returns the entry")
@@ -301,6 +345,13 @@ t.eq(cqueue.has(aq, "zinc"), false, "autoApprove skipped the zero-request row")
 local _, an2 = cqueue.autoApprove(aq, autoPlans, 200)
 t.eq(an2, 0, "autoApprove skips entries already APPROVED and waiting")
 t.eq(cqueue.get(aq, "iron").approvedAt, 100, "skip leaves the original timestamp untouched")
+local _, an2b = cqueue.autoApprove(aq, {
+  { action = "WOULD CRAFT", name = "iron", label = "Iron", request = 200, priority = 0.9 },
+}, 250)
+t.eq(an2b, 0, "refreshing an APPROVED auto row does not count as a new approval")
+t.eq(cqueue.get(aq, "iron").approvedAt, 100, "refresh keeps the original approval time")
+t.eq(cqueue.get(aq, "iron").request, 200, "refresh updates the planned request size")
+t.eq(cqueue.get(aq, "iron").priority, 0.9, "refresh updates urgency for runner ordering")
 
 cqueue.markCrafting(aq, "iron", 150)
 local _, an3 = cqueue.autoApprove(aq, autoPlans, 300)
@@ -431,11 +482,16 @@ t.eq(tries, 2, "retries after the backoff cooldown elapses")
 
 -- maxPerCycle caps NEW bridge requests per run; the rest stay APPROVED
 local fired = {}
-local qcap = mkQ({ { name = "a", request = 1 }, { name = "b", request = 1 }, { name = "c", request = 1 } })
+local qcap = cqueue.new()
+qcap = cqueue.approve(qcap, { name = "low", request = 1, priority = 0.1 }, 30)
+qcap = cqueue.approve(qcap, { name = "urgent", request = 1, priority = 0.9 }, 10)
+qcap = cqueue.approve(qcap, { name = "mid", request = 1, priority = 0.5 }, 20)
 craftrunner.run(qcap, { policy = pManualCraft, mode = "manual", now = 1, maxPerCycle = 2,
   isCrafting = function() return false end,
   craft = function(name) fired[#fired + 1] = name; return true end })
 t.eq(#fired, 2, "maxPerCycle=2 fires only two requests this cycle")
+t.eq(fired[1], "urgent", "runner fires the most-deficient approved item first")
+t.eq(fired[2], "mid", "runner uses priority before approval age under the cap")
 local approvedLeft = 0
 for _, e in pairs(qcap.entries) do if e.state == cqueue.APPROVED then approvedLeft = approvedLeft + 1 end end
 t.eq(approvedLeft, 1, "the third entry stays APPROVED for next cycle")
@@ -503,9 +559,25 @@ managed.set(os2, { name = "iron", label = "Iron", target = 150, craftTo = 250 },
 t.eq(managed.get(os2, "iron").target, 150, "floor edit updates target")
 t.eq(managed.get(os2, "iron").ceiling, 1000, "floor edit preserves the overflow config")
 t.eq(#managed.overflowItems(os2), 1, "overflowItems lists configured items")
+managed.set(os2, { name = "guard", label = "Guard", target = 100, craftTo = 200,
+  ceiling = 150, into = { name = "guard_block" }, ratio = 9 }, 3)
+t.eq(managed.get(os2, "guard").craftTo, 149, "managed set lowers craftTo below a compress ceiling")
+t.check(managed.get(os2, "guard").adjusted ~= nil, "managed set records the ceiling adjustment")
+managed.set(os2, { name = "bad", label = "Bad", target = 100, craftTo = 100,
+  ceiling = 100, into = { name = "bad_block" }, ratio = 9 }, 4)
+t.eq(managed.get(os2, "bad").invalid, "ceiling must be greater than target",
+  "managed set marks an impossible ceiling/floor band invalid")
+local guardCat = managed.toCategory(os2)
+local sawGuardCeiling = false
+for _, e in ipairs(guardCat.items) do
+  if e.name == "guard" and e.ceiling == 150 and e.into and e.into.name == "guard_block" then
+    sawGuardCeiling = true
+  end
+end
+t.check(sawGuardCeiling, "managed category carries overflow metadata to the stock planner")
 managed.clearOverflow(os2, "iron")
 t.eq(managed.get(os2, "iron").ceiling, nil, "clearOverflow drops the ceiling")
-t.eq(#managed.overflowItems(os2), 0, "clearOverflow removes it from overflowItems")
+t.eq(#managed.overflowItems(os2), 1, "clearOverflow removes only the selected valid overflow item")
 
 -- profile settings (smart-mode flag) persist on the store
 local ss = managed.new()

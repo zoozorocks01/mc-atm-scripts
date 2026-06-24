@@ -73,6 +73,8 @@ local DEFAULT_CONFIG = {
     cooldownSeconds = 300,
     maxCraftsPerCycle = 8,    -- new craft requests issued per cycle (late-game default)
     maxRequest = 65536,       -- cap per single craft request (bigger batches)
+    refillMarginRatio = 0.25, -- when craftTo<=target, refill this margin above target
+    minRefillMargin = 4,      -- minimum above-target refill margin for tiny quotas
     items = {},
     categories = {},
   },
@@ -227,6 +229,10 @@ local function normalizeConfig(raw)
   cfg.stockKeeper.cooldownSeconds = (cd and cd > 0) and cd or 300
   cfg.stockKeeper.maxCraftsPerCycle = tonumber(cfg.stockKeeper.maxCraftsPerCycle) or 8
   cfg.stockKeeper.maxRequest = tonumber(cfg.stockKeeper.maxRequest) or 65536
+  local ratio = tonumber(cfg.stockKeeper.refillMarginRatio)
+  cfg.stockKeeper.refillMarginRatio = (ratio and ratio > 0) and ratio or 0.25
+  local minMargin = tonumber(cfg.stockKeeper.minRefillMargin)
+  cfg.stockKeeper.minRefillMargin = (minMargin and minMargin > 0) and math.floor(minMargin) or 4
   if type(cfg.stockKeeper.items) ~= "table" then cfg.stockKeeper.items = {} end
   if type(cfg.stockKeeper.categories) ~= "table" then cfg.stockKeeper.categories = {} end
 
@@ -500,11 +506,17 @@ local function planDelta(plan)
   if plan.action == "WOULD CRAFT" then
     local text = "+" .. fmt(plan.request)
     if plan.capped then text = text .. "*" end
+    if plan.adjusted then text = text .. "!" end
+    if plan.banded and not plan.adjusted then text = text .. "~" end
     return text
   end
 
   if plan.action == "ON COOLDOWN" then
     return tostring(plan.secondsLeft or "?") .. "s"
+  end
+
+  if plan.action == "BLOCKED" and plan.reason then
+    return "band!"
   end
 
   return "-"
@@ -663,6 +675,8 @@ local function effectiveStockKeeper()
     -- the craft runner per cycle, not on the plan display.
     maxCraftsPerCycle = math.huge,
     maxRequest = stock.maxRequest,
+    refillMarginRatio = stock.refillMarginRatio,
+    minRefillMargin = stock.minRefillMargin,
     categories = categories,
   }
 end
@@ -1086,6 +1100,10 @@ local function drawPlanPage(data)
   table.sort(plans, function(a, b)
     local ka, kb = planKey(a), planKey(b)
     if ka ~= kb then return ka < kb end
+    if a.action == "WOULD CRAFT" and b.action == "WOULD CRAFT" then
+      local pa, pb = tonumber(a.priority) or 0, tonumber(b.priority) or 0
+      if pa ~= pb then return pa > pb end
+    end
     return tostring(a.label) < tostring(b.label)
   end)
 
@@ -1593,7 +1611,9 @@ end
 local function approve(entry)
   if not entry or not entry.name then return end
   craftQueue = cqueue.approve(craftQueue or loadQueue(),
-    { name = entry.name, label = entry.label, request = entry.request, key = entry.key }, nowMs())
+    { name = entry.name, label = entry.label, request = entry.request, key = entry.key,
+      priority = entry.priority, amount = entry.amount, target = entry.target, category = entry.category,
+      craftTo = entry.craftTo, banded = entry.banded, adjusted = entry.adjusted, reason = entry.reason }, nowMs())
   saveQueue(craftQueue)
   pageShownAt = nowMs()
   print("Approved: " .. tostring(entry.label or entry.name) .. " x" .. tostring(entry.request))
@@ -1617,7 +1637,7 @@ local function approveAllPlans()
   local n = 0
   for _, p in ipairs(lastData.stockPlans or {}) do
     if p.action == "WOULD CRAFT" and p.name and (tonumber(p.request) or 0) > 0 then
-      q = cqueue.approve(q, { name = p.name, label = p.label, request = p.request, key = p.key }, nowMs())
+      q = cqueue.approve(q, p, nowMs())
       n = n + 1
     end
   end

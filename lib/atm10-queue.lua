@@ -9,6 +9,20 @@ local queue = {}
 queue.APPROVED = "APPROVED" -- operator approved; awaiting the craft request
 queue.CRAFTING = "CRAFTING" -- craft request accepted by RS; awaiting completion
 
+local function copyPlanFields(dest, entry)
+  dest.label = entry.label or dest.label or entry.name or dest.name
+  dest.request = tonumber(entry.request) or dest.request or 0
+  dest.priority = tonumber(entry.priority) or 0
+  dest.amount = tonumber(entry.amount)
+  dest.target = tonumber(entry.target)
+  dest.category = entry.category
+  dest.craftTo = tonumber(entry.craftTo)
+  dest.banded = entry.banded == true
+  dest.adjusted = entry.adjusted == true
+  dest.reason = entry.reason
+  return dest
+end
+
 function queue.new()
   return { entries = {} }
 end
@@ -31,14 +45,12 @@ function queue.approve(q, entry, now)
   if not name then return q end
   local key = entry.key or name
 
-  q.entries[key] = {
+  q.entries[key] = copyPlanFields({
     key = key,
     name = name,
-    label = entry.label or name,
-    request = tonumber(entry.request) or 0,
     state = queue.APPROVED,
     approvedAt = tonumber(now) or 0,
-  }
+  }, entry)
   return q
 end
 
@@ -103,8 +115,10 @@ function queue.autoApprove(q, plans, now)
       local key = p.key or p.name
       local cur = q.entries[key]
       if not cur or cur.state ~= queue.APPROVED then
-        queue.approve(q, { name = p.name, label = p.label, request = p.request, key = p.key }, now)
+        queue.approve(q, p, now)
         n = n + 1
+      else
+        copyPlanFields(cur, p)
       end
     end
   end
@@ -118,12 +132,23 @@ function queue.count(q)
   return n
 end
 
--- Entries as an array, newest approvals first (stable tiebreak by name).
-function queue.list(q)
+-- Entries as an array, newest approvals first (stable tiebreak by name). When
+-- opts.priority is true, APPROVED entries with a higher deficit priority sort
+-- first so the craft runner's per-cycle cap fires the most urgent quotas.
+function queue.list(q, opts)
   q = queue.normalize(q)
+  opts = opts or {}
   local out = {}
   for _, e in pairs(q.entries) do out[#out + 1] = e end
   table.sort(out, function(a, b)
+    if opts.priority == true then
+      local aa, ba = a.state == queue.APPROVED, b.state == queue.APPROVED
+      if aa ~= ba then return aa end
+      if aa and ba then
+        local ap, bp = tonumber(a.priority) or 0, tonumber(b.priority) or 0
+        if ap ~= bp then return ap > bp end
+      end
+    end
     if (a.approvedAt or 0) ~= (b.approvedAt or 0) then
       return (a.approvedAt or 0) > (b.approvedAt or 0)
     end
