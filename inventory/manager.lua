@@ -96,10 +96,12 @@ local lastUnique = 0       -- last good unique-item count; guards transient empt
 local tabStrip = nil
 local planRowRegions = {}
 local planNavRegions = {}
+local planActionRegion = nil -- [APPROVE ALL] bulk button on the Plan nav row
 local planPage = 1
 local modeChip = nil       -- hit region for the header mode-cycle chip
 local modeConfirm = nil    -- mode awaiting a confirm tap (auto only)
 local queueRowRegions = {}
+local queueActionRegion = nil -- [CLEAR QUEUE] bulk button on the Queue page
 local browseRowRegions = {}
 local browseNavRegions = {}
 local presetRowRegions = {}
@@ -1044,7 +1046,15 @@ local function drawPlanPage(data)
 
   -- footer hint: what is tappable here (and why it might not be)
   if (tally.WOULD or 0) > 0 then
-    line(h, "Tap a cyan > WOULD CRAFT row to approve.", colors.lime)
+    line(h, "Tap a > WOULD row to approve.", colors.lime)
+    -- bulk: one tap approves EVERY WOULD CRAFT row (all pages), right-aligned so
+    -- it never collides with the hint text
+    local label = "[APPROVE ALL]"
+    local bx = w - #label + 1
+    if bx > 30 then
+      uiDraw.write(monitor, bx, h, label, colors.lime, colors.black)
+      planActionRegion = { x1 = bx, x2 = w, y = h }
+    end
   else
     line(h, "Nothing craftable yet - RS reports no patterns (set up Crafters).", colors.gray)
   end
@@ -1107,6 +1117,13 @@ local function drawQueuePage(data)
   local hintY = start + rows
   if hintY <= h then
     line(hintY, "Tap a row to cancel its approval.", colors.gray)
+    -- bulk: one tap cancels every approval, right-aligned past the hint text
+    local label = "[CLEAR QUEUE]"
+    local bx = w - #label + 1
+    if bx > 34 then
+      uiDraw.write(monitor, bx, hintY, label, colors.orange, colors.black)
+      queueActionRegion = { x1 = bx, x2 = w, y = hintY }
+    end
   end
 end
 
@@ -1372,8 +1389,10 @@ local function draw(data)
   monitor.clear()
   planRowRegions = {} -- rebuilt each render for touch hit-testing
   planNavRegions = {}
+  planActionRegion = nil
   modeChip = nil
   queueRowRegions = {}
+  queueActionRegion = nil
   browseRowRegions = {}
   browseNavRegions = {}
   browseFilterBtn = nil
@@ -1504,6 +1523,33 @@ local function cancelEntry(entry)
   saveQueue(craftQueue)
   pageShownAt = nowMs()
   print("Canceled approval: " .. tostring(entry.label or entry.name))
+end
+
+-- Bulk approve: enqueue every WOULD CRAFT row in the current plan (all pages, not
+-- just the visible slice) in one tap. Same per-item path as a manual tap.
+local function approveAllPlans()
+  if not lastData then return end
+  local q = craftQueue or loadQueue()
+  local n = 0
+  for _, p in ipairs(lastData.stockPlans or {}) do
+    if p.action == "WOULD CRAFT" and p.name and (tonumber(p.request) or 0) > 0 then
+      q = cqueue.approve(q, { name = p.name, label = p.label, request = p.request, key = p.key }, nowMs())
+      n = n + 1
+    end
+  end
+  craftQueue = q
+  saveQueue(craftQueue)
+  pageShownAt = nowMs()
+  print("Approved all WOULD CRAFT: " .. n)
+end
+
+-- Bulk cancel: clear every approval at once. Removes intent only (an item already
+-- requested keeps crafting in RS); the runner fires at most once per approval.
+local function clearQueue()
+  craftQueue = cqueue.new()
+  saveQueue(craftQueue)
+  pageShownAt = nowMs()
+  print("Cleared craft queue")
 end
 
 -- Open the quota editor for a browsed item, seeding from an existing quota or
@@ -1689,9 +1735,23 @@ local function handleTouch(x, y)
     end
   end
 
+  if planActionRegion and y == planActionRegion.y
+    and x >= planActionRegion.x1 and x <= planActionRegion.x2 then
+    approveAllPlans()
+    renderCurrent()
+    return
+  end
+
   local planEntry = console.rowHit(planRowRegions, y)
   if planEntry then
     approve(planEntry)
+    renderCurrent()
+    return
+  end
+
+  if queueActionRegion and y == queueActionRegion.y
+    and x >= queueActionRegion.x1 and x <= queueActionRegion.x2 then
+    clearQueue()
     renderCurrent()
     return
   end
