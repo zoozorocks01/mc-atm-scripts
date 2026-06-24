@@ -1194,12 +1194,16 @@ end
 -- Shows the EXACT integer (not fmt-rounded) so a small step on a big number is
 -- visible (e.g. +100 on 264000 must not display as unchanged "264.0k").
 local function renderFieldRow(label, value, field, y)
+  -- placed left-to-right with no hardcoded x: [-] LABEL: value [+]. The [+] sits
+  -- right after the (exact-integer) value, so it never overlaps a big number.
+  local text = label .. ": " .. tostring(math.floor(tonumber(value) or 0))
   uiDraw.write(monitor, 1, y, "[-]", colors.cyan, colors.black)
-  uiDraw.write(monitor, 5, y, label .. ": " .. tostring(math.floor(tonumber(value) or 0)), colors.white, colors.black)
-  uiDraw.write(monitor, 30, y, "[+]", colors.cyan, colors.black)
+  uiDraw.write(monitor, 5, y, text, colors.white, colors.black)
+  local plusX = 5 + #text + 1
+  uiDraw.write(monitor, plusX, y, "[+]", colors.cyan, colors.black)
   editorRows[#editorRows + 1] = { y = y, buttons = {
     { key = field .. ":-", x1 = 1, x2 = 3 },
-    { key = field .. ":+", x1 = 30, x2 = 32 },
+    { key = field .. ":+", x1 = plusX, x2 = plusX + 2 },
   } }
 end
 
