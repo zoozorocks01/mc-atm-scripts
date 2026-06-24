@@ -114,6 +114,9 @@ local trendHistory = {}    -- consumption history for smart mode (persisted to d
 local trendsLoaded = false -- lazily load the persisted history on first smart cycle
 local lastTrendsSaveMs = 0 -- throttle trend persistence (history is large; don't save every cycle)
 local TRENDS_SAVE_INTERVAL_MS = 120000 -- persist smart-mode history at most every 2 min
+local TREND_MAX_AGE_MS = 86400000     -- drop trend entries not seen in 24h (item left the grid)
+local TREND_MAX_WINDOW_MS = 21600000  -- restart a trend window after 6h so drain stays recent
+local TREND_MAX_ENTRIES = 4000        -- hard cap on persisted trend entries (bounds the file)
 local dismissedSuggestions = {} -- names the operator cleared (persisted to disk)
 local dismissedLoaded = false   -- lazily load persisted dismissals on first smart cycle
 local browsePage = 1
@@ -209,7 +212,12 @@ local function normalizeConfig(raw)
 
   if type(cfg.stockKeeper) ~= "table" then cfg.stockKeeper = {} end
   if cfg.stockKeeper.enabled ~= true then cfg.stockKeeper.enabled = false end
-  cfg.stockKeeper.cooldownSeconds = tonumber(cfg.stockKeeper.cooldownSeconds) or 300
+  -- floor at a positive value: cooldownSeconds = 0 is reachable (0 is truthy in
+  -- Lua) and would collapse BOTH re-fire guards -- the planner's ON COOLDOWN check
+  -- and the runner's failed-craft backoff -- letting auto mode re-fire an item
+  -- every cycle. A non-positive/garbage value falls back to the safe default.
+  local cd = tonumber(cfg.stockKeeper.cooldownSeconds)
+  cfg.stockKeeper.cooldownSeconds = (cd and cd > 0) and cd or 300
   cfg.stockKeeper.maxCraftsPerCycle = tonumber(cfg.stockKeeper.maxCraftsPerCycle) or 8
   cfg.stockKeeper.maxRequest = tonumber(cfg.stockKeeper.maxRequest) or 65536
   if type(cfg.stockKeeper.items) ~= "table" then cfg.stockKeeper.items = {} end
@@ -783,6 +791,25 @@ local function processCraftQueue(now)
     recordRequest = recordCraftRequest,
   })
   if summary.changed then saveQueue(craftQueue) end
+
+  -- Keep the cooldown ALIVE for in-flight crafts: while RS still reports an item
+  -- crafting, slide its ledger timestamp so a batch that outlives cooldownSeconds
+  -- cannot be re-fired on a momentary isItemCrafting false-negative. The cooldown
+  -- only starts counting down once RS actually stops crafting the item, so the
+  -- ledger guard no longer expires mid-flight. Batched into one ledger write.
+  local inflight = {}
+  for _, e in ipairs(cqueue.list(craftQueue)) do
+    if e.state == cqueue.CRAFTING and isItemCrafting(e.name) then inflight[#inflight + 1] = e end
+  end
+  if #inflight > 0 then
+    local ledger = readLedger() or { requests = {} }
+    if type(ledger.requests) ~= "table" then ledger.requests = {} end
+    for _, e in ipairs(inflight) do
+      ledger.requests[e.name] = { requestedAt = now, request = tonumber(e.request) or 0 }
+    end
+    writeLedger(ledger)
+  end
+
   for _, r in ipairs(summary.requested) do
     print("Craft requested: " .. tostring(r.name) .. " x" .. tostring(r.amount))
   end
@@ -797,12 +824,14 @@ end
 -- still require a tap on the Plan page to approve.
 --
 -- Re-approving an item that is already queued is intentional and safe:
---   * The ledger COOLDOWN (cooldownSeconds) keeps the planner from reporting an
---     item as WOULD CRAFT again until the window elapses, so a given item re-fires
---     at most once per cooldown -- not every cycle.
---   * An item RS is actively crafting reports action == ALREADY CRAFTING (not
---     WOULD CRAFT) and is skipped here; the runner also re-checks isCrafting and
---     adopts CRAFTING without re-firing. Two independent guards against double-fire.
+--   * The ledger COOLDOWN (cooldownSeconds, floored > 0 in normalizeConfig) keeps
+--     the planner from reporting an item as WOULD CRAFT again until the window
+--     elapses; processCraftQueue SLIDES that timestamp while RS reports the item
+--     still crafting, so a long batch (one that outlives cooldownSeconds) can't be
+--     re-fired on a momentary isItemCrafting false-negative -- the window only
+--     starts counting once RS actually stops crafting it.
+--   * An item RS is actively crafting reports ALREADY CRAFTING (not WOULD CRAFT)
+--     and is skipped here; the runner also re-checks isCrafting before firing.
 --   * maxCraftsPerCycle still caps the ACTUAL bridge requests issued per cycle, so
 --     a large backlog drains a few per cycle instead of flooding a laggy server.
 local function autoApprovePlans(plans)
@@ -912,6 +941,10 @@ local function scan()
     -- persist on a throttle: the history spans thousands of items, so writing it
     -- every 5s cycle would thrash the disk; every couple minutes is plenty
     if now - lastTrendsSaveMs >= TRENDS_SAVE_INTERVAL_MS then
+      -- bound the file + keep windows recent before persisting (see suggest.prune)
+      suggest.prune(trendHistory, now, {
+        maxAgeMs = TREND_MAX_AGE_MS, maxWindowMs = TREND_MAX_WINDOW_MS, maxEntries = TREND_MAX_ENTRIES,
+      })
       saveTrends(trendHistory)
       lastTrendsSaveMs = now
     end

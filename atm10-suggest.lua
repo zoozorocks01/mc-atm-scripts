@@ -32,6 +32,47 @@ function suggest.record(history, snapshot, now)
   return history
 end
 
+-- Bound the (now persisted) history so it neither grows without limit nor lets an
+-- item's window stretch over its whole lifetime. Call before saving.
+--   maxAgeMs    : drop an entry not seen within this window (item left the grid)
+--   maxWindowMs : restart an entry's window (t0/a0/minA/n) once its span exceeds
+--                 this, so analyze() measures recent behavior, not all-time drain
+--   maxEntries  : hard cap; drop the least-recently-seen beyond it
+-- Returns history and the number of entries removed. (0 for any option disables it.)
+function suggest.prune(history, now, opts)
+  history = history or {}
+  opts = opts or {}
+  now = tonumber(now) or 0
+  local maxAgeMs = tonumber(opts.maxAgeMs) or 0
+  local maxWindowMs = tonumber(opts.maxWindowMs) or 0
+  local maxEntries = tonumber(opts.maxEntries) or 0
+  local removed = 0
+
+  for name, h in pairs(history) do
+    if maxAgeMs > 0 and (now - (h.tN or 0)) > maxAgeMs then
+      history[name] = nil
+      removed = removed + 1
+    elseif maxWindowMs > 0 and ((h.tN or 0) - (h.t0 or 0)) > maxWindowMs then
+      -- restart the window at the latest sample so drain reflects recent time
+      h.t0, h.a0, h.minA, h.n = h.tN or now, h.aN or 0, h.aN or 0, 1
+    end
+  end
+
+  if maxEntries > 0 then
+    local arr = {}
+    for name, h in pairs(history) do arr[#arr + 1] = { name = name, tN = h.tN or 0 } end
+    if #arr > maxEntries then
+      table.sort(arr, function(a, b) return a.tN > b.tN end) -- newest first
+      for i = maxEntries + 1, #arr do
+        history[arr[i].name] = nil
+        removed = removed + 1
+      end
+    end
+  end
+
+  return history, removed
+end
+
 local function mins(span) return math.max(1, math.floor(span / 60000)) end
 
 -- analyze(history, ctx) -> array of suggestions (each seeded for the editor):

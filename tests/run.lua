@@ -560,6 +560,30 @@ local ok2 = { steel = { label = "Steel", t0 = 0, a0 = 900, tN = 120000, aN = 800
 t.eq(#suggest.analyze(ok2, { quotas = { steel = { target = 256, craftTo = 300 } } }), 0,
   "managed item above target -> no raise suggestion")
 
+-- prune: bound the persisted history (drop stale, restart long windows, cap size)
+local ph = {
+  fresh = { label = "Fresh", t0 = 0, a0 = 100, tN = 1000000, aN = 50, minA = 50, n = 5 },
+  stale = { label = "Stale", t0 = 0, a0 = 100, tN = 1000, aN = 50, minA = 50, n = 5 },
+}
+local _, pruned = suggest.prune(ph, 1000000, { maxAgeMs = 100000 })
+t.eq(pruned, 1, "prune drops an entry not seen within maxAgeMs")
+t.check(ph.fresh ~= nil and ph.stale == nil, "prune keeps the freshly-seen entry, drops the stale one")
+
+-- maxWindowMs restarts an over-long window in place (keeps the entry, resets t0/a0)
+local pw = { long = { label = "Long", t0 = 0, a0 = 100, tN = 500000, aN = 30, minA = 20, n = 50 } }
+suggest.prune(pw, 500000, { maxWindowMs = 100000 })
+t.eq(pw.long.t0, 500000, "prune restarts an over-long window at the latest sample")
+t.eq(pw.long.a0, 30, "restarted window adopts the latest amount as the new baseline")
+t.eq(pw.long.n, 1, "restarted window resets the sample count")
+
+-- maxEntries caps the table, dropping the least-recently-seen
+local pc = {
+  a = { tN = 10 }, b = { tN = 30 }, c = { tN = 20 },
+}
+local _, capRemoved = suggest.prune(pc, 100, { maxEntries = 2 })
+t.eq(capRemoved, 1, "prune drops down to maxEntries")
+t.check(pc.a == nil and pc.b ~= nil and pc.c ~= nil, "prune keeps the most-recently-seen entries")
+
 -- ---------------------------------------------------------------------------
 print("overflow balancer (compress above ceiling)")
 local function ovItem(over) local i = { name = "dust", label = "Steel Dust",
