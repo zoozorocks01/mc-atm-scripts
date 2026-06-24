@@ -131,20 +131,27 @@ deficits but never crafts on its own: a `WOULD CRAFT` row on the console Plan
 page is tappable, and tapping it **approves** that craft into the queue. A gated
 runner then issues exactly one RS `craftItem` request per approval and moves the
 entry to `CRAFTING`; it is dropped once stock recovers. Cancel a pending
-approval by tapping its row on the Queue page.
+approval by tapping its row on the Queue page. To approve every deficit at once,
+tap **[APPROVE ALL]** on the Plan page; **[CLEAR QUEUE]** on the Queue page
+cancels all approvals.
 
 Modes (config `mode`): `monitor` and `dry-run` never craft; `manual` requires
-your approval per item; `auto` crafts approved deficits unattended. Setting
-`allowAutocraft = false` hard-disables crafting regardless of mode. Every craft
-passes the shared safety gate in `lib/atm10-control.lua` before the runner in
-`lib/atm10-craftrunner.lua` touches the bridge.
+your approval per item; `auto` **maintains quotas hands-free** — it auto-approves
+every craftable deficit (refill *and* overflow/compress) and crafts it, so set
+your quotas, switch to `auto`, and walk away. All modes are still rate-limited by
+`stockKeeper.maxCraftsPerCycle` (bridge requests per cycle) and the per-item
+`cooldownSeconds`, so `auto` drains a backlog steadily instead of flooding a
+laggy server. Setting `allowAutocraft = false` hard-disables crafting regardless
+of mode. Every craft passes the shared safety gate in `lib/atm10-control.lua`
+before the runner in `lib/atm10-craftrunner.lua` touches the bridge.
 
 ### Console pages
 
 The manager monitor has five tabs (tap a tab, or pulse the page-button redstone
 side to cycle): **Plan** (stock-keeper deficits + overflow/compress; paginated;
-tap a `WOULD CRAFT` row to approve), **Queue** (approved/in-flight crafts; tap a
-row to cancel), **Browse** (the live grid, paginated, with an ALL/MANAGED
+tap a `WOULD CRAFT` row to approve, or **[APPROVE ALL]**), **Queue**
+(approved/in-flight crafts; tap a row to cancel, or **[CLEAR QUEUE]**),
+**Browse** (the live grid, paginated, with an ALL/MANAGED
 filter; tap an item to set its quota), **Presets** (one-tap quota bundles), and
 **Smart** (opt-in quota suggestions). The header shows a tappable mode chip
 (monitor / dry-run / manual / auto) and the queue depth. Pages do not auto-rotate
@@ -251,9 +258,12 @@ stockKeeper = {
 ```
 
 `target` is the low line. `craftTo` is the planned refill line. `maxRequest`
-caps a single planned craft request. `inventory-config-example` contains a
-larger Mekanism, Modern Industrialization, Mystical Agriculture, and RS starter
-list to copy from.
+caps a single planned craft request (default `65536`) and `maxCraftsPerCycle`
+caps how many new craft requests fire per cycle (default `8`) — both tuned for
+late-game bulk; lower them if a big batch strains your machines. Existing installs
+keep their `inventory-config` on update, so `edit inventory-config` to adopt new
+defaults. `inventory-config-example` contains a larger Mekanism, Modern
+Industrialization, Mystical Agriculture, and RS starter list to copy from.
 
 ### Install on remote inventory display
 
