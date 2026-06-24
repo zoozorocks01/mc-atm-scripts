@@ -299,6 +299,19 @@ t.eq(noPrune, 0, "maxAge<=0 disables pruning")
 
 t.eq(cqueue.count(cqueue.normalize("garbage")), 0, "normalize coerces garbage to empty")
 
+-- keyed identity: a refill and a compress that craft the SAME item don't alias
+local kq = cqueue.new()
+kq = cqueue.approve(kq, { name = "iron_ingot", request = 100 }, 1)                              -- refill, key=name
+kq = cqueue.approve(kq, { name = "iron_ingot", key = "compress:iron_dust", request = 50 }, 2)   -- compress -> ingot
+t.eq(cqueue.count(kq), 2, "refill + compress of the same item are two distinct entries")
+t.check(cqueue.has(kq, "iron_ingot"), "refill entry present under its name key")
+t.check(cqueue.has(kq, "compress:iron_dust"), "compress entry present under its compress key")
+-- reconcile by the refill's name must NOT drop the compress entry
+local _, kremoved = cqueue.reconcile(kq, { iron_ingot = true })
+t.eq(kremoved, 1, "satisfied iron_ingot drops only the refill entry")
+t.check(cqueue.has(kq, "compress:iron_dust"), "compress entry survives the refill being satisfied")
+t.check(cqueue.has(kq, "iron_ingot") == false, "refill entry removed")
+
 -- state transitions used by the craft runner
 local sq = cqueue.approve(cqueue.new(), { name = "s", request = 4 }, 10)
 cqueue.markCrafting(sq, "s", 20)
@@ -381,6 +394,30 @@ t.eq(tries, 1, "no retry within the backoff cooldown")
 depsF.now = 1000 + 400000
 craftrunner.run(qf, depsF)
 t.eq(tries, 2, "retries after the backoff cooldown elapses")
+
+-- maxPerCycle caps NEW bridge requests per run; the rest stay APPROVED
+local fired = {}
+local qcap = mkQ({ { name = "a", request = 1 }, { name = "b", request = 1 }, { name = "c", request = 1 } })
+craftrunner.run(qcap, { policy = pManualCraft, mode = "manual", now = 1, maxPerCycle = 2,
+  isCrafting = function() return false end,
+  craft = function(name) fired[#fired + 1] = name; return true end })
+t.eq(#fired, 2, "maxPerCycle=2 fires only two requests this cycle")
+local approvedLeft = 0
+for _, e in pairs(qcap.entries) do if e.state == cqueue.APPROVED then approvedLeft = approvedLeft + 1 end end
+t.eq(approvedLeft, 1, "the third entry stays APPROVED for next cycle")
+
+-- two entries with distinct keys but the SAME crafted item fire craft() once/run
+local dq = cqueue.new()
+dq = cqueue.approve(dq, { name = "copper_ingot", key = "compress:copper_dust", request = 10 }, 1)
+dq = cqueue.approve(dq, { name = "copper_ingot", key = "compress:copper_nugget", request = 5 }, 2)
+local madeCopper = 0
+craftrunner.run(dq, { policy = pManualCraft, mode = "manual", now = 1,
+  isCrafting = function() return false end,
+  craft = function() madeCopper = madeCopper + 1; return true end })
+t.eq(madeCopper, 1, "same crafted item across two keys fires only one bridge request per run")
+local craftingCount = 0
+for _, e in pairs(dq.entries) do if e.state == cqueue.CRAFTING then craftingCount = craftingCount + 1 end end
+t.eq(craftingCount, 2, "both same-item entries move to CRAFTING (one fired, one adopted)")
 
 -- ---------------------------------------------------------------------------
 print("managed quotas (tap-to-manage store)")
@@ -578,6 +615,9 @@ t.eq(console.tabHit(strip, 3, 2), 1, "tap inside [PLAN] -> page 1")
 t.eq(console.tabHit(strip, 10, 2), 2, "tap inside [QUEUE] -> page 2")
 t.eq(console.tabHit(strip, 7, 2), nil, "tap the gap between tabs -> nil")
 t.eq(console.tabHit(strip, 3, 3), nil, "tap the wrong row -> nil")
+-- the short 5-tab strip (used when the full one overflows) fits a narrow monitor
+local shortStrip = console.tabs({ "PLAN", "QUE", "BRWS", "PRE", "SMRT" }, 2)
+t.check(shortStrip.tabs[#shortStrip.tabs].x2 <= 34, "short tab strip fits a ~34-col monitor (SMART reachable)")
 local hitRows = { { y = 5, entry = "a" }, { y = 6, entry = "b" } }
 t.eq(console.rowHit(hitRows, 6), "b", "rowHit returns the entry at that y")
 t.eq(console.rowHit(hitRows, 9), nil, "rowHit miss -> nil")

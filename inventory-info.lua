@@ -20,6 +20,9 @@ local MANAGED_FILE = ".atm10-managed" -- operator-set quotas (tap-to-manage stor
 local EDIT_STEPS = { 1, 10, 100, 1000, 10000 } -- cycleable +/- step sizes in the quota editor
 local PAGE_SECONDS = 0 -- auto page-rotation seconds; 0 = off (the manager is interactive)
 local PAGES = { "PLAN", "QUEUE", "BROWSE", "PRESETS", "SMART" }
+-- short tab labels used when the full strip would overflow a narrow monitor
+local PAGES_SHORT = { "PLAN", "QUE", "BRWS", "PRE", "SMRT" }
+local MODE_CYCLE = { "monitor", "dry-run", "manual", "auto" } -- console mode-chip order
 local QUEUE_MAX_AGE_MS = 30 * 60 * 1000 -- prune approvals older than 30 minutes
 local PAGE_BUTTON_SIDE = "back"          -- a redstone pulse here flips to the next page ("none" disables)
 local BROWSE_CRAFT_AMOUNT = 64           -- default quantity when approving a craft from the Browse page
@@ -77,8 +80,13 @@ local itemsByName = {}      -- name -> item, rebuilt each scan (avoids per-item 
 local craftableCache = {}   -- name -> { v = bool, at = ms } (TTL'd, see constants)
 local craftingCache = {}    -- name -> { v = bool, at = ms }
 local lastData = nil
+local lastUnique = 0       -- last good unique-item count; guards transient empty bridge reads
 local tabStrip = nil
 local planRowRegions = {}
+local planNavRegions = {}
+local planPage = 1
+local modeChip = nil       -- hit region for the header mode-cycle chip
+local modeConfirm = nil    -- mode awaiting a confirm tap (auto only)
 local queueRowRegions = {}
 local browseRowRegions = {}
 local browseNavRegions = {}
@@ -89,6 +97,8 @@ local smartButtons = nil   -- enable/disable + clear toggle row on the Smart pag
 local trendHistory = {}    -- in-memory consumption history for smart mode
 local dismissedSuggestions = {} -- names the operator cleared this session
 local browsePage = 1
+local browseFilter = false  -- false = whole grid; true = managed (quota'd) items only
+local browseFilterBtn = nil -- hit region for the Browse ALL/MANAGED toggle
 local editing = nil       -- when set, the Browse page shows the quota editor for this item
 local editorRows = {}     -- button rows in the editor, for touch hit-testing
 local rsLevels = {}
@@ -237,17 +247,28 @@ local function readLedger()
   return data
 end
 
-local function writeLedger(data)
-  -- Reserved for the future manual/auto craft path. Dry-run planning never writes.
-  local tmp = LEDGER_FILE .. ".tmp"
+-- Atomically write content to path (tmp + move), fully guarded: a full disk, a
+-- leftover .tmp from a prior crash, or any fs error returns false instead of
+-- throwing up into the event loop (which would freeze the console). Clears a
+-- stale .tmp first so a single failed write doesn't wedge every future save.
+local function atomicWrite(path, content)
+  local tmp = path .. ".tmp"
+  if fs.exists(tmp) then pcall(fs.delete, tmp) end
   local file = fs.open(tmp, "w")
-  if not file then return false, "Ledger tmp open failed" end
-  file.write(textutils.serialize(data))
-  file.close()
+  if not file then return false end
+  local wrote = pcall(function() file.write(content); file.close() end)
+  if not wrote then pcall(fs.delete, tmp); return false end
+  local moved = pcall(function()
+    if fs.exists(path) then fs.delete(path) end
+    fs.move(tmp, path)
+  end)
+  -- on move failure leave the .tmp in place: if delete(path) already succeeded the
+  -- tmp holds the only copy of the new data. The next atomicWrite clears stale tmp.
+  return moved == true
+end
 
-  if fs.exists(LEDGER_FILE) then fs.delete(LEDGER_FILE) end
-  fs.move(tmp, LEDGER_FILE)
-  return true
+local function writeLedger(data)
+  return atomicWrite(LEDGER_FILE, textutils.serialize(data))
 end
 
 -- Load the approved-craft queue (fail-safe: any problem yields an empty queue).
@@ -274,28 +295,12 @@ local function loadManaged()
   return managed.normalize(data)
 end
 
--- Persist the managed-quota store atomically (tmp + move), like the queue.
 local function saveManaged(store)
-  local tmp = MANAGED_FILE .. ".tmp"
-  local file = fs.open(tmp, "w")
-  if not file then return false end
-  file.write(textutils.serialize(store))
-  file.close()
-  if fs.exists(MANAGED_FILE) then fs.delete(MANAGED_FILE) end
-  fs.move(tmp, MANAGED_FILE)
-  return true
+  return atomicWrite(MANAGED_FILE, textutils.serialize(store))
 end
 
--- Persist the craft queue atomically (tmp + move), like the ledger.
 local function saveQueue(q)
-  local tmp = QUEUE_FILE .. ".tmp"
-  local file = fs.open(tmp, "w")
-  if not file then return false end
-  file.write(textutils.serialize(q))
-  file.close()
-  if fs.exists(QUEUE_FILE) then fs.delete(QUEUE_FILE) end
-  fs.move(tmp, QUEUE_FILE)
-  return true
+  return atomicWrite(QUEUE_FILE, textutils.serialize(q))
 end
 
 local function openBroadcastModems()
@@ -583,7 +588,10 @@ local function effectiveStockKeeper()
   return {
     enabled = true,
     cooldownSeconds = stock.cooldownSeconds,
-    maxCraftsPerCycle = stock.maxCraftsPerCycle,
+    -- DISPLAY is uncapped: every deficit shows as WOULD CRAFT so the operator can
+    -- approve any of them. The real rate-limit (maxCraftsPerCycle) is enforced in
+    -- the craft runner per cycle, not on the plan display.
+    maxCraftsPerCycle = math.huge,
     maxRequest = stock.maxRequest,
     categories = categories,
   }
@@ -662,11 +670,42 @@ local function recordCraftRequest(name, amount, now)
   writeLedger(ledger)
 end
 
--- Execution policy derived from config: the global mode + capability flags that
--- gate every real action. Local touch approval lives in the craft queue.
+-- The active control mode: an operator override set from the console (persisted
+-- in the managed store so it survives reboot + isn't clobbered by loadConfig)
+-- takes precedence over the config file. This is what the gate actually sees.
+local function effectiveMode()
+  local override = managed.getSetting(managedStore, "modeOverride")
+  if override and control.normalizeMode(override) == override then return override end
+  return config.mode or "manual"
+end
+
+-- Cycle the console mode chip: monitor -> dry-run -> manual -> auto -> monitor.
+-- Advancing INTO auto (the only unattended-crafting mode) needs a confirm tap.
+-- autoArmed: was the auto-confirm armed by the IMMEDIATELY preceding chip tap?
+-- (handleTouch clears the arm on any other tap, so only consecutive chip taps
+-- commit auto -- one stray tap can't sneak the unattended mode on.)
+local function cycleMode(autoArmed)
+  local cur = effectiveMode()
+  local idx = 1
+  for i, m in ipairs(MODE_CYCLE) do if m == cur then idx = i end end
+  local nextMode = MODE_CYCLE[idx % #MODE_CYCLE + 1]
+  if nextMode == control.MODE_AUTO and not autoArmed then
+    modeConfirm = control.MODE_AUTO -- arm: require a consecutive second chip tap
+    return
+  end
+  modeConfirm = nil
+  managedStore = managedStore or loadManaged()
+  managed.setSetting(managedStore, "modeOverride", nextMode)
+  saveManaged(managedStore)
+  pageShownAt = nowMs()
+  print("Mode -> " .. nextMode)
+end
+
+-- Execution policy derived from the effective mode + capability flags that gate
+-- every real action. Local touch approval lives in the craft queue.
 local function buildPolicy()
   return control.policy({
-    mode = config.mode,
+    mode = effectiveMode(),
     allowAutocraft = config.allowAutocraft == true,
   })
 end
@@ -679,9 +718,11 @@ local function processCraftQueue(now)
   local stock = config.stockKeeper or {}
   local summary = craftrunner.run(craftQueue, {
     policy = buildPolicy(),
-    mode = config.mode,
+    mode = effectiveMode(),
     now = now,
     cooldownMs = (tonumber(stock.cooldownSeconds) or 300) * 1000,
+    -- rate-limit ACTUAL bridge requests per cycle (the plan display is uncapped)
+    maxPerCycle = tonumber(stock.maxCraftsPerCycle) or 2,
     isCrafting = function(name) return isItemCrafting(name) end,
     craft = function(name, amount) return requestCraft(name, amount) end,
     recordRequest = recordCraftRequest,
@@ -716,6 +757,18 @@ local function scan()
   local online = call(bridge, "isOnline")
 
   local items = getItems()
+
+  -- Distrust a transient empty/offline read: getItems() returns {} on any bridge
+  -- error or laggy/partial tick. If we HAD items last cycle (or the grid reports
+  -- offline), treat this as stale and hold the last plan rather than manufacturing
+  -- a full set of phantom deficits (which in auto mode could re-fire bulk crafts).
+  if (next(items) == nil and lastUnique > 0) or online == false or connected == false then
+    status = (online == false or connected == false)
+      and "Grid OFFLINE - holding last plan"
+      or "Grid read failed - holding last plan"
+    return nil, "stale"
+  end
+
   local unique = 0
   local totalAmount = 0
   local craftableCount = 0
@@ -730,6 +783,7 @@ local function scan()
     if item.name then itemsByName[item.name] = item end
     sorted[#sorted + 1] = item
   end
+  lastUnique = unique -- remember a good read so the next empty read is caught as stale
 
   table.sort(sorted, function(a, b) return itemAmount(a) > itemAmount(b) end)
 
@@ -758,9 +812,11 @@ local function scan()
   local smartOn = managed.getSetting(managedStore, "smartMode") == true
   local suggestions = {}
   if smartOn then
+    -- track drain for ALL items, not just craftable ones: with the live grid
+    -- reporting craftable=0, gating on isCraftable would learn nothing.
     local snapshot = {}
     for _, item in ipairs(sorted) do
-      if item.isCraftable then
+      if item.name then
         snapshot[#snapshot + 1] = { name = item.name, label = itemName(item), amount = itemAmount(item) }
       end
     end
@@ -804,7 +860,7 @@ local function scan()
     storedEnergy = call(bridge, "getStoredEnergy") or call(bridge, "getEnergyStorage"),
     energyCapacity = call(bridge, "getEnergyCapacity") or call(bridge, "getMaxEnergyStorage"),
     energyUsage = call(bridge, "getEnergyUsage"),
-    configMode = config.mode or "dry-run",
+    configMode = effectiveMode(),
     configError = configError,
     ledgerError = ledgerError,
     stockPlans = stockPlans,
@@ -885,20 +941,38 @@ local function drawPlanPage(data)
     line(6 + i, formatCategorySummary(summaries[i], w), uiStatus.color(categorySummaryStatus(summaries[i])))
   end
 
+  -- Order: WOULD CRAFT (approvable) first, then most-severe problems, OK last,
+  -- so the actionable rows are always on the first page(s).
+  local plans = {}
+  for _, p in ipairs(data.stockPlans or {}) do plans[#plans + 1] = p end
+  local function planKey(p)
+    if p.action == "WOULD CRAFT" then return 0 end
+    return 100 - uiStatus.severity(p.action)
+  end
+  table.sort(plans, function(a, b)
+    local ka, kb = planKey(a), planKey(b)
+    if ka ~= kb then return ka < kb end
+    return tostring(a.label) < tostring(b.label)
+  end)
+
   local planLabelY = 6 + summaryRows + 2
-  line(planLabelY, "Stock Keeper Plan [dry-run]", colors.cyan)
-  local headerRows = 0
+  local headerRows = (w >= 72) and 1 or 0
+  local planStart = planLabelY + 1 + headerRows
+  -- reserve the bottom two lines for the nav+tally row and the hint
+  local navY = h - 1
+  local perPage = math.max(1, navY - planStart)
+  local pg = console.paginate(#plans, perPage, planPage)
+  planPage = pg.page
+
+  line(planLabelY, "Stock Keeper Plan [" .. tostring(effectiveMode()) ..
+    "]   page " .. pg.page .. "/" .. pg.pages, colors.cyan)
   if w >= 72 then
     line(planLabelY + 1, uiDraw.fit("ITEM", math.max(18, w - 39)) .. "     HAVE   TARGET    PLAN   STATUS", colors.gray)
-    headerRows = 1
   end
 
-  local planStart = planLabelY + 1 + headerRows
-  local plans = data.stockPlans or {}
-  local planRows = math.max(0, math.min(#plans, h - planStart - 1))
-  for i = 1, planRows do
+  for i = pg.from, pg.to do
     local p = plans[i]
-    local y = planStart + i - 1
+    local y = planStart + (i - pg.from)
     line(y, formatPlanRow(p, w), uiStatus.color(p.action))
     -- only WOULD CRAFT rows are tappable (tap = approve into the queue)
     if p.action == "WOULD CRAFT" and p.name then
@@ -906,25 +980,25 @@ local function drawPlanPage(data)
     end
   end
 
+  -- nav row (paging) + a compact tally on the same line
+  local prev, next = "[< PREV]", "[NEXT >]"
+  uiDraw.write(monitor, 1, navY, prev, pg.page > 1 and colors.cyan or colors.gray, colors.black)
+  uiDraw.write(monitor, 11, navY, next, pg.page < pg.pages and colors.cyan or colors.gray, colors.black)
+  planNavRegions = {
+    { x1 = 1, x2 = #prev, y = navY, delta = -1 },
+    { x1 = 11, x2 = 10 + #next, y = navY, delta = 1 },
+  }
   local tally = data.stockTally or {}
-  local tallyY = planStart + planRows
-  if tallyY <= h then
-    line(tallyY, "+ " .. fmt(tally.OK) ..
-      "  > " .. fmt(tally.WOULD) ..
-      "  ~ " .. fmt(tally.CRAFTING) ..
-      "  . " .. fmt(tally.COOLDOWN) ..
-      "  x " .. fmt(tally.NO_RECIPE) ..
-      "  # " .. fmt(tally.BLOCKED), colors.gray)
+  if w >= 40 then
+    uiDraw.write(monitor, 21, navY, "+" .. fmt(tally.OK) .. " >" .. fmt(tally.WOULD) ..
+      " ~" .. fmt(tally.CRAFTING) .. " x" .. fmt(tally.NO_RECIPE) .. " #" .. fmt(tally.BLOCKED), colors.gray)
   end
 
-  -- footer hint: tells you exactly what is tappable here (and why it might not be)
-  local hintY = tallyY + 1
-  if hintY <= h then
-    if (tally.WOULD or 0) > 0 then
-      line(hintY, "Tap a cyan > WOULD CRAFT row to approve it.", colors.lime)
-    else
-      line(hintY, "Nothing craftable yet - RS reports no patterns (set up Crafters).", colors.orange)
-    end
+  -- footer hint: what is tappable here (and why it might not be)
+  if (tally.WOULD or 0) > 0 then
+    line(h, "Tap a cyan > WOULD CRAFT row to approve.", colors.lime)
+  else
+    line(h, "Nothing craftable yet - RS reports no patterns (set up Crafters).", colors.gray)
   end
 end
 
@@ -933,7 +1007,7 @@ local function drawQueuePage(data)
   local q = data.craftQueue or {}
   local policy = buildPolicy()
 
-  line(6, "Craft Queue   " .. #q .. " approved   mode:" .. tostring(config.mode), colors.cyan)
+  line(6, "Craft Queue   " .. #q .. " approved   mode:" .. tostring(effectiveMode()), colors.cyan)
 
   if #q == 0 then
     line(8, "No approved crafts yet.", colors.lime)
@@ -961,7 +1035,7 @@ local function drawQueuePage(data)
     elseif e.error then
       gateState = uiStatus.BLOCKED -- bridge rejected; retries after backoff
     else
-      local action = control.craftAction(e, { mode = config.mode, execute = requestCraft })
+      local action = control.craftAction(e, { mode = effectiveMode(), execute = requestCraft })
       gateState = control.executionState(action, policy)
     end
     local text
@@ -993,7 +1067,17 @@ end
 -- [< PREV] / [NEXT >] tap targets sit on the bottom line.
 local function drawBrowsePage(data)
   local w, h = monitor.getSize()
+  local store = managedStore or managed.new()
   local items = data.items or {}
+
+  -- managed-only filter: cut the ~5.9k-item haystack down to the items you tune
+  if browseFilter then
+    local filtered = {}
+    for _, item in ipairs(items) do
+      if item.name and managed.has(store, item.name) then filtered[#filtered + 1] = item end
+    end
+    items = filtered
+  end
   local total = #items
 
   local listTop = 8
@@ -1017,7 +1101,6 @@ local function drawBrowsePage(data)
     return
   end
 
-  local store = managedStore or managed.new()
   for i = pg.from, pg.to do
     local item = items[i]
     local y = listTop + (i - pg.from)
@@ -1057,8 +1140,15 @@ local function drawBrowsePage(data)
     { x1 = 1, x2 = #prev, y = navY, delta = -1 },
     { x1 = 11, x2 = 10 + #next, y = navY, delta = 1 },
   }
-  if w >= 44 then
-    uiDraw.write(monitor, 21, navY, "tap an item to set its quota", colors.gray, colors.black)
+  -- ALL <-> MANAGED filter toggle (cuts the ~5.9k haystack to your quota'd items).
+  -- Hidden while picking a compress target, where tapping it would be a dead no-op.
+  if not (editing and editing.pickingInto) then
+    local toggle = browseFilter and "[MANAGED]" or "[ALL]"
+    uiDraw.write(monitor, 21, navY, toggle, colors.black, browseFilter and colors.lime or colors.cyan)
+    browseFilterBtn = { x1 = 21, x2 = 20 + #toggle, y = navY }
+    if w >= 52 then
+      uiDraw.write(monitor, 21 + #toggle + 1, navY, "tap item to set quota", colors.gray, colors.black)
+    end
   end
 end
 
@@ -1081,13 +1171,15 @@ local function nextStep(cur)
 end
 
 -- A "[-] LABEL: value [+]" row that adjusts `field` by the current step size.
+-- Shows the EXACT integer (not fmt-rounded) so a small step on a big number is
+-- visible (e.g. +100 on 264000 must not display as unchanged "264.0k").
 local function renderFieldRow(label, value, field, y)
   uiDraw.write(monitor, 1, y, "[-]", colors.cyan, colors.black)
-  uiDraw.write(monitor, 5, y, label .. ": " .. fmt(value), colors.white, colors.black)
-  uiDraw.write(monitor, 26, y, "[+]", colors.cyan, colors.black)
+  uiDraw.write(monitor, 5, y, label .. ": " .. tostring(math.floor(tonumber(value) or 0)), colors.white, colors.black)
+  uiDraw.write(monitor, 30, y, "[+]", colors.cyan, colors.black)
   editorRows[#editorRows + 1] = { y = y, buttons = {
     { key = field .. ":-", x1 = 1, x2 = 3 },
-    { key = field .. ":+", x1 = 26, x2 = 28 },
+    { key = field .. ":+", x1 = 30, x2 = 32 },
   } }
 end
 
@@ -1218,9 +1310,12 @@ local function draw(data)
   monitor.setBackgroundColor(colors.black)
   monitor.clear()
   planRowRegions = {} -- rebuilt each render for touch hit-testing
+  planNavRegions = {}
+  modeChip = nil
   queueRowRegions = {}
   browseRowRegions = {}
   browseNavRegions = {}
+  browseFilterBtn = nil
   presetRowRegions = {}
   smartRowRegions = {}
   smartButtons = nil
@@ -1230,8 +1325,13 @@ local function draw(data)
 
   line(1, TITLE, colors.cyan)
 
-  -- tappable tab strip (right-click a tab to switch pages)
+  -- tappable tab strip (right-click a tab to switch pages). Use short labels when
+  -- the full strip would run off this monitor, so SMART is never cut off/untappable.
+  local tabW = select(1, monitor.getSize())
   tabStrip = console.tabs(PAGES, 2)
+  if (tabStrip.tabs[#tabStrip.tabs] and tabStrip.tabs[#tabStrip.tabs].x2 or 0) > tabW then
+    tabStrip = console.tabs(PAGES_SHORT, 2)
+  end
   monitor.setCursorPos(1, 2)
   monitor.setBackgroundColor(colors.black)
   monitor.clearLine()
@@ -1245,16 +1345,30 @@ local function draw(data)
   local onlineText, onlineColor = "unknown", colors.yellow
   if data.online == true then onlineText, onlineColor = "ONLINE", colors.lime
   elseif data.online == false then onlineText, onlineColor = "OFFLINE", colors.red end
-  line(3, "Grid: " .. onlineText .. "   Managed: " .. fmt(data.managedItemCount) ..
-    "   Bridge: " .. tostring(bridgeName or "?"), onlineColor)
+  -- a stale read holds the last plan; say so loudly (the grid line below is stale too)
+  if data.stale then
+    line(3, "! " .. tostring(data.stale), colors.red)
+  else
+    line(3, "Grid: " .. onlineText .. "   Managed: " .. fmt(data.managedItemCount) ..
+      "   Bridge: " .. tostring(bridgeName or "?"), onlineColor)
+  end
 
   if data.configError then
     line(4, data.configError, colors.orange)
   else
+    local mode = effectiveMode()
     local craftLive = (config.allowAutocraft == true)
-      and (config.mode == control.MODE_MANUAL or config.mode == control.MODE_AUTO)
-    line(4, "Mode: " .. tostring(data.configMode or "manual") ..
-      "   autocraft: " .. (craftLive and "ON" or "off"), craftLive and colors.lime or colors.gray)
+      and (mode == control.MODE_MANUAL or mode == control.MODE_AUTO)
+    -- tappable mode chip: tap to cycle monitor->dry-run->manual->auto (auto needs a confirm tap)
+    monitor.setCursorPos(1, 4)
+    monitor.setBackgroundColor(colors.black)
+    monitor.clearLine()
+    local chip = "[" .. mode .. (modeConfirm == control.MODE_AUTO and " AUTO?" or "") .. "]"
+    uiDraw.write(monitor, 1, 4, chip, colors.black,
+      modeConfirm == control.MODE_AUTO and colors.orange or colors.cyan)
+    modeChip = { x1 = 1, x2 = #chip, y = 4 }
+    uiDraw.write(monitor, #chip + 2, 4, "autocraft: " .. (craftLive and "ON" or "off") ..
+      "   Queue: " .. cqueue.count(craftQueue), craftLive and colors.lime or colors.gray)
   end
 
   -- the quota editor is a modal: it renders over any tab when open (unless we're
@@ -1279,6 +1393,7 @@ end
 local function setPage(i)
   pageIndex = ((i - 1) % #PAGES) + 1
   editing = nil -- any page change exits the quota editor
+  modeConfirm = nil -- and cancels a pending auto-mode confirm
   pageShownAt = nowMs() -- a manual page change resets the auto-rotate timer
 end
 
@@ -1314,7 +1429,7 @@ end
 local function approve(entry)
   if not entry or not entry.name then return end
   craftQueue = cqueue.approve(craftQueue or loadQueue(),
-    { name = entry.name, label = entry.label, request = entry.request }, nowMs())
+    { name = entry.name, label = entry.label, request = entry.request, key = entry.key }, nowMs())
   saveQueue(craftQueue)
   pageShownAt = nowMs()
   print("Approved: " .. tostring(entry.label or entry.name) .. " x" .. tostring(entry.request))
@@ -1324,7 +1439,7 @@ end
 -- per approval, so a canceled-but-already-requested item just stops being shown.
 local function cancelEntry(entry)
   if not entry or not entry.name then return end
-  craftQueue = cqueue.cancel(craftQueue or loadQueue(), entry.name)
+  craftQueue = cqueue.cancel(craftQueue or loadQueue(), entry.key or entry.name)
   saveQueue(craftQueue)
   pageShownAt = nowMs()
   print("Canceled approval: " .. tostring(entry.label or entry.name))
@@ -1431,7 +1546,13 @@ local function handleEditorTouch(x, y)
       elseif key == "ratio:-" then editing.ratio = math.max(1, editing.ratio - 1)
       elseif key == "ratio:+" then editing.ratio = editing.ratio + 1
       elseif key == "craftnow" then
-        approve({ name = editing.name, label = editing.label, request = BROWSE_CRAFT_AMOUNT })
+        -- size the one-off craft to the deficit (craftTo - have), capped at
+        -- maxRequest; fall back to the default batch when already at/above craftTo
+        local stock = config.stockKeeper or {}
+        local maxReq = tonumber(stock.maxRequest) or 4096
+        local deficit = (editing.craftTo or 0) - (editing.amount or 0)
+        local request = (deficit > 0) and math.min(deficit, maxReq) or BROWSE_CRAFT_AMOUNT
+        approve({ name = editing.name, label = editing.label, request = request })
         editing = nil
       else
         local field, sign = string.match(key, "^(%a+):([-+])$")
@@ -1479,11 +1600,32 @@ local function handleTouch(x, y)
     return
   end
 
+  -- any tap clears the auto-mode arm; only a consecutive chip tap re-confirms it
+  local autoArmed = (modeConfirm == control.MODE_AUTO)
+  modeConfirm = nil
+
+  -- header mode chip: cycle the control mode (available on every page)
+  if modeChip and y == modeChip.y and x >= modeChip.x1 and x <= modeChip.x2 then
+    cycleMode(autoArmed)
+    renderCurrent()
+    return
+  end
+
   local page = console.tabHit(tabStrip, x, y)
   if page then
     setPage(page)
     renderCurrent()
     return
+  end
+
+  -- Plan page: [< PREV] / [NEXT >] paging, then tap a WOULD CRAFT row to approve
+  for _, nav in ipairs(planNavRegions) do
+    if y == nav.y and x >= nav.x1 and x <= nav.x2 then
+      planPage = math.max(1, planPage + nav.delta)
+      pageShownAt = nowMs()
+      renderCurrent()
+      return
+    end
   end
 
   local planEntry = console.rowHit(planRowRegions, y)
@@ -1529,7 +1671,14 @@ local function handleTouch(x, y)
     return
   end
 
-  -- Browse page: [< PREV] / [NEXT >] paging, then tap a row to edit its quota
+  -- Browse page: ALL/MANAGED filter toggle, [< PREV]/[NEXT >] paging, tap a row
+  if browseFilterBtn and y == browseFilterBtn.y and x >= browseFilterBtn.x1 and x <= browseFilterBtn.x2 then
+    browseFilter = not browseFilter
+    browsePage = 1
+    pageShownAt = nowMs()
+    renderCurrent()
+    return
+  end
   for _, nav in ipairs(browseNavRegions) do
     if y == nav.y and x >= nav.x1 and x <= nav.x2 then
       browsePage = math.max(1, browsePage + nav.delta)
@@ -1572,19 +1721,39 @@ local function refreshAndDraw()
     return
   end
 
-  local ok, data = pcall(scan)
+  local ok, data, reason = pcall(scan)
   if ok then
-    lastData = data
-    -- drive the gated craft runner, then refresh the queue snapshot so the page
-    -- reflects this cycle's state transitions (APPROVED -> CRAFTING) immediately
-    processCraftQueue(nowMs())
-    data.craftQueue = cqueue.list(craftQueue)
-    broadcast(data)
+    if data then
+      lastData = data
+      -- drive the gated craft runner, then refresh the queue snapshot so the page
+      -- reflects this cycle's state transitions (APPROVED -> CRAFTING) immediately
+      processCraftQueue(nowMs())
+      data.craftQueue = cqueue.list(craftQueue)
+      broadcast(data)
+    elseif reason == "stale" then
+      -- keep the last good plan, but mark it stale so draw() shows a banner
+      -- (otherwise a held plan looks live and a real bridge loss reads ONLINE)
+      if lastData then lastData.stale = status end
+    else
+      lastData = nil -- hard failure (e.g. no bridge): show the waiting screen
+    end
   else
     lastData = nil
     status = tostring(data)
   end
   renderCurrent()
+end
+
+-- Every loop step is guarded: a UI/peripheral error must NOT freeze the console
+-- on a dead frame (the worst failure for an unattended in-game screen). On error,
+-- log it and drop the monitor handle so the next cycle re-acquires + redraws.
+local function guard(fn, ...)
+  local ok, err = pcall(fn, ...)
+  if not ok then
+    print("loop error: " .. tostring(err))
+    monitor = nil
+    paletteApplied = false
+  end
 end
 
 local refreshTimer = os.startTimer(0)
@@ -1594,15 +1763,17 @@ while true do
   local kind = ev[1]
 
   if kind == "timer" and ev[2] == refreshTimer then
-    advancePageIfDue()
-    refreshAndDraw()
+    guard(advancePageIfDue)
+    guard(refreshAndDraw)
     refreshTimer = os.startTimer(REFRESH_SECONDS)
   elseif kind == "monitor_touch" then
-    handleTouch(ev[3], ev[4])
+    guard(handleTouch, ev[3], ev[4])
   elseif kind == "redstone" then
-    handleRedstone()
+    guard(handleRedstone)
   elseif kind == "monitor_resize" then
-    if monitor then pickTextScale() end
-    renderCurrent()
+    guard(function()
+      if monitor then pickTextScale() end
+      renderCurrent()
+    end)
   end
 end

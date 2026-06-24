@@ -27,6 +27,9 @@ local runner = {}
 --   isCrafting    : function(name) -> bool   (is RS already crafting it?)
 --   craft         : function(name, amount) -> ok, reason   (the bridge call)
 --   recordRequest : function(name, amount, now)            (optional; ledger write)
+--   maxPerCycle   : cap on NEW bridge requests issued this run (<=0/nil = unlimited);
+--                   over-cap entries stay APPROVED for a later cycle, so the operator
+--                   can approve many items without flooding a laggy server at once.
 --
 -- Mutates q in place. Returns a summary and the queue:
 --   { requested = { {name, amount} }, failed = { {name, reason} }, changed = bool }
@@ -40,17 +43,30 @@ function runner.run(q, deps)
   local craftFn = deps.craft or function() return false, "no executor" end
   local recordRequest = deps.recordRequest
   local policy = deps.policy
+  local maxPerCycle = tonumber(deps.maxPerCycle)
+  if maxPerCycle and maxPerCycle <= 0 then maxPerCycle = nil end
 
   local summary = { requested = {}, failed = {}, changed = false }
+  local fired = 0
+  local requestedThisRun = {} -- item names already requested this run (avoid double-fire)
 
   for _, e in ipairs(cqueue.list(q)) do
+    local ekey = e.key or e.name -- queue identity (refill vs compress can share a name)
     if e.state == cqueue.APPROVED then
       if e.triedAt and cooldownMs > 0 and (now - e.triedAt) < cooldownMs then
         -- backing off after a recent failed craft; skip this cycle
       elseif isCrafting(e.name) then
         -- RS is already crafting it: adopt CRAFTING, never double-request
-        cqueue.markCrafting(q, e.name, now)
+        cqueue.markCrafting(q, ekey, now)
+        requestedThisRun[e.name] = true
         summary.changed = true
+      elseif requestedThisRun[e.name] then
+        -- another entry already requested this exact item this run (e.g. two
+        -- compress rules both crafting copper_ingot): adopt CRAFTING, don't re-fire
+        cqueue.markCrafting(q, ekey, now)
+        summary.changed = true
+      elseif maxPerCycle and fired >= maxPerCycle then
+        -- hit the per-cycle request cap; leave APPROVED for the next cycle
       else
         local action = control.craftAction(e, {
           mode = deps.mode,
@@ -62,12 +78,14 @@ function runner.run(q, deps)
         if control.canExecute(action, policy) then
           local ok, reason = control.execute(action, policy) -- only here does the bridge run
           if ok then
-            cqueue.markCrafting(q, e.name, now)
+            cqueue.markCrafting(q, ekey, now)
             if recordRequest then recordRequest(e.name, e.request, now) end
+            requestedThisRun[e.name] = true
             summary.requested[#summary.requested + 1] = { name = e.name, amount = e.request }
             summary.changed = true
+            fired = fired + 1
           else
-            cqueue.markError(q, e.name, now, reason)
+            cqueue.markError(q, ekey, now, reason)
             summary.failed[#summary.failed + 1] = { name = e.name, reason = reason }
             summary.changed = true
           end

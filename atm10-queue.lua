@@ -21,13 +21,18 @@ function queue.normalize(q)
   return q
 end
 
--- Approve (or refresh) a craft request for an item. Deduped by registry name.
+-- Approve (or refresh) a craft request. Deduped by `key` (defaults to the
+-- registry name). A distinct key lets two requests that craft the SAME item not
+-- alias each other -- e.g. a refill (key=name) and a compress/overflow request
+-- (key="compress:<name>") both craft `name` but stay separate queue entries.
 function queue.approve(q, entry, now)
   q = queue.normalize(q)
   local name = entry and entry.name
   if not name then return q end
+  local key = entry.key or name
 
-  q.entries[name] = {
+  q.entries[key] = {
+    key = key,
     name = name,
     label = entry.label or name,
     request = tonumber(entry.request) or 0,

@@ -43,7 +43,10 @@ function balance.plan(ctx)
 
       if qty > 0 then
         local label = (it.label or it.name) .. " -> " .. (into.label or into.name)
-        local row = { name = into.name, category = "Overflow", label = label, amount = amount, target = ceiling }
+        -- distinct queue identity so a compress row crafting `into.name` does not
+        -- alias the refill row for that same item (both craft it; they stay separate)
+        local row = { name = into.name, key = "compress:" .. it.name, kind = "compress",
+          category = "Overflow", label = label, amount = amount, target = ceiling }
 
         local _, craftable, crafting = resolve(into.name)
         if not craftable then

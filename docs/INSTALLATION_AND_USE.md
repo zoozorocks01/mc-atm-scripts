@@ -112,7 +112,10 @@ redstone side to cycle):
 - **PRESETS** — one-tap quota bundles (see below).
 - **SMART** — opt-in suggestions (see below).
 
-PLAN and QUEUE auto-rotate on a wall; BROWSE and PRESETS/SMART are manual.
+Pages do not auto-rotate (the console is interactive); switch with the tabs or a
+redstone pulse on the page-button side. The header also has a tappable **mode
+chip** (monitor / dry-run / manual / auto; switching to auto needs a confirm tap)
+and shows the queue depth.
 
 ## Quotas (the core idea)
 

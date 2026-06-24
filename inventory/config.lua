@@ -1,5 +1,5 @@
 return {
-  mode = "dry-run",
+  mode = "manual",
 
   itemDefaults = {
     handling = "unmanaged",

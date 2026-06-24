@@ -92,17 +92,17 @@ empty/full, status, and history graphs.
 ### Install on display computer
 
 ```lua
-wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/power/display.lua power-display
-wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/power/display-startup.lua startup
-startup
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/atm10-update.lua update
+update power-display
+reboot
 ```
 
 ### Install on power computer
 
 ```lua
-wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/power/probe.lua power-probe
-wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/power/probe-startup.lua startup
-startup
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/atm10-update.lua update
+update power-probe
+reboot
 ```
 
 ## Notes
@@ -141,11 +141,19 @@ passes the shared safety gate in `lib/atm10-control.lua` before the runner in
 
 ### Console pages
 
-The manager monitor has three tabs (tap a tab, or pulse the page-button
-redstone side to cycle): **Plan** (stock-keeper deficits; tap a `WOULD CRAFT`
-row to approve), **Queue** (approved/in-flight crafts; tap a row to cancel), and
-**Browse** (the live grid, paginated). Plan and Queue auto-rotate; Browse is
-manual only.
+The manager monitor has five tabs (tap a tab, or pulse the page-button redstone
+side to cycle): **Plan** (stock-keeper deficits + overflow/compress; paginated;
+tap a `WOULD CRAFT` row to approve), **Queue** (approved/in-flight crafts; tap a
+row to cancel), **Browse** (the live grid, paginated, with an ALL/MANAGED
+filter; tap an item to set its quota), **Presets** (one-tap quota bundles), and
+**Smart** (opt-in quota suggestions). The header shows a tappable mode chip
+(monitor / dry-run / manual / auto) and the queue depth. Pages do not auto-rotate
+(the console is interactive); use the tabs or the redstone page button.
+
+**Everything reading `NOT CRAFTABLE` is expected until you set up Refined Storage
+autocraft patterns** — see "Setting up RS autocrafting" in
+[`docs/INSTALLATION_AND_USE.md`](docs/INSTALLATION_AND_USE.md). It is a Minecraft
+setup task (Crafters + Patterns), not a script error.
 
 ### Setting quotas from the console (tap-to-manage)
 
@@ -198,14 +206,16 @@ The computer needs access to:
 
 ### Install on inventory computer
 
+Use the updater (it pulls the shared `lib/atm10-*` modules too — a bare `wget` of
+just the script will crash on the first `require`):
+
 ```lua
-wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventory/manager.lua inventory-info
-wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventory/manager-startup.lua startup
-label set atm10-inventory-info
-startup
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/atm10-update.lua update
+update inventory-source
+reboot
 ```
 
-Low-stock watches and stock keeper dry-run settings live in `inventory-config`.
+Low-stock watches and stock keeper settings live in `inventory-config`.
 The updater installs that config only if it is missing, so your edited values
 are preserved.
 
@@ -247,15 +257,17 @@ list to copy from.
 
 ### Install on remote inventory display
 
-Remote displays need only an advanced monitor and modem on the same modem
-network/band as the inventory source computer.
+Remote displays (viewers) need only an advanced monitor and modem on the same
+modem network/band as the inventory source computer.
 
 ```lua
-wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventory/remote.lua inventory-remote
-wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/inventory/remote-startup.lua startup
-label set atm10-inventory-remote
-startup
+wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/atm10-update.lua update
+update inventory-remote
+reboot
 ```
+
+Pick which screen a viewer shows with the one-line `atm10-display` file
+(`view` / `autocraft` / `alerts`); see the viewer section of the install guide.
 
 ## Development
 
