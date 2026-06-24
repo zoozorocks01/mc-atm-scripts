@@ -93,14 +93,17 @@ do
   local items = {}
   local function add(x) items[#items + 1] = x end
   local function buf(name, label, target) add({ name = name, label = label, target = target, craftTo = target }) end
-  -- full chain: dust band (264k, compress surplus to ingot at 350k) -> ingot
-  -- (100k, compress surplus to block at 150k, 9:1) -> block (10k floor).
+  -- Blocks are NOT stockpiled (no floor) - a big block quota isn't useful. The
+  -- valuable direction is OVERFLOW: hold the ingot in a band and compress its
+  -- surplus down into blocks (dense storage). So the block is only the compress
+  -- sink for the ingot's ceiling, never a refill target of its own.
+  -- chain: dust band (264k; compress surplus to ingot at 350k) -> ingot (100k;
+  -- compress surplus to block at 150k, 9:1) -> block (overflow only, no floor).
   local function chain(dust, ingot, block, label)
     add({ name = dust, label = label .. " Dust", target = 264000, craftTo = 264000,
       ceiling = 350000, into = { name = ingot, label = label .. " Ingot" }, ratio = 1 })
     add({ name = ingot, label = label .. " Ingot", target = 100000, craftTo = 100000,
       ceiling = 150000, into = { name = block, label = label .. " Block" }, ratio = 9 })
-    add({ name = block, label = label .. " Block", target = 10000, craftTo = 10000 })
   end
 
   -- Normal metals: full dust->ingot->block chain (IDs from base recon; iron/gold/

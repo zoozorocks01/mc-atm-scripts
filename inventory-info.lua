@@ -68,8 +68,8 @@ local DEFAULT_CONFIG = {
   stockKeeper = {
     enabled = false,
     cooldownSeconds = 300,
-    maxCraftsPerCycle = 2,
-    maxRequest = 4096,
+    maxCraftsPerCycle = 8,    -- new craft requests issued per cycle (late-game default)
+    maxRequest = 65536,       -- cap per single craft request (bigger batches)
     items = {},
     categories = {},
   },
@@ -202,8 +202,8 @@ local function normalizeConfig(raw)
   if type(cfg.stockKeeper) ~= "table" then cfg.stockKeeper = {} end
   if cfg.stockKeeper.enabled ~= true then cfg.stockKeeper.enabled = false end
   cfg.stockKeeper.cooldownSeconds = tonumber(cfg.stockKeeper.cooldownSeconds) or 300
-  cfg.stockKeeper.maxCraftsPerCycle = tonumber(cfg.stockKeeper.maxCraftsPerCycle) or 2
-  cfg.stockKeeper.maxRequest = tonumber(cfg.stockKeeper.maxRequest) or 4096
+  cfg.stockKeeper.maxCraftsPerCycle = tonumber(cfg.stockKeeper.maxCraftsPerCycle) or 8
+  cfg.stockKeeper.maxRequest = tonumber(cfg.stockKeeper.maxRequest) or 65536
   if type(cfg.stockKeeper.items) ~= "table" then cfg.stockKeeper.items = {} end
   if type(cfg.stockKeeper.categories) ~= "table" then cfg.stockKeeper.categories = {} end
 

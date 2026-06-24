@@ -35,8 +35,8 @@ return {
   stockKeeper = {
     enabled = true,
     cooldownSeconds = 300,
-    maxCraftsPerCycle = 2,
-    maxRequest = 4096,
+    maxCraftsPerCycle = 8,
+    maxRequest = 65536,
 
     categories = {
       {
