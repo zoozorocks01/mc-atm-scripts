@@ -20,6 +20,7 @@ local function copyPlanFields(dest, entry)
   dest.banded = entry.banded == true
   dest.adjusted = entry.adjusted == true
   dest.reason = entry.reason
+  dest.kind = entry.kind or dest.kind -- preserve compress/void row identity (e.g. "compress")
   return dest
 end
 

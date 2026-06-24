@@ -333,12 +333,13 @@ local autoPlans = {
   { action = "NOT CRAFTABLE", name = "tin", request = 50 },   -- no pattern, skip
   { action = "ON COOLDOWN", name = "lead", request = 50 },    -- backing off, skip
   { action = "WOULD CRAFT", name = "zinc", request = 0 },     -- nothing to craft, skip
-  { action = "WOULD CRAFT", name = "copper", label = "Copper", key = "compress:copper", request = 9 },
+  { action = "WOULD CRAFT", name = "copper", label = "Copper", key = "compress:copper", kind = "compress", request = 9 },
 }
 local _, an1 = cqueue.autoApprove(aq, autoPlans, 100)
 t.eq(an1, 2, "autoApprove approves only WOULD CRAFT rows with a positive request")
 t.check(cqueue.has(aq, "iron"), "autoApprove enqueued the refill deficit")
 t.check(cqueue.has(aq, "compress:copper"), "autoApprove enqueued the overflow deficit under its compress key")
+t.eq(cqueue.get(aq, "compress:copper").kind, "compress", "queue entry preserves the compress row kind (needed by the future void/discard path)")
 t.eq(cqueue.has(aq, "gold"), false, "autoApprove skipped the OK row")
 t.eq(cqueue.has(aq, "zinc"), false, "autoApprove skipped the zero-request row")
 
