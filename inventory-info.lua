@@ -748,6 +748,42 @@ local function processCraftQueue(now)
   end
 end
 
+-- AUTO MODE: maintain quotas hands-free. Auto-approve every craftable deficit
+-- (a "WOULD CRAFT" plan row, refill OR overflow/compress) into the queue so the
+-- gated runner fires it next -- no manual taps. Other modes are unchanged: they
+-- still require a tap on the Plan page to approve.
+--
+-- Re-approving an item that is already queued is intentional and safe:
+--   * The ledger COOLDOWN (cooldownSeconds) keeps the planner from reporting an
+--     item as WOULD CRAFT again until the window elapses, so a given item re-fires
+--     at most once per cooldown -- not every cycle.
+--   * An item RS is actively crafting reports action == ALREADY CRAFTING (not
+--     WOULD CRAFT) and is skipped here; the runner also re-checks isCrafting and
+--     adopts CRAFTING without re-firing. Two independent guards against double-fire.
+--   * maxCraftsPerCycle still caps the ACTUAL bridge requests issued per cycle, so
+--     a large backlog drains a few per cycle instead of flooding a laggy server.
+local function autoApprovePlans(plans)
+  if effectiveMode() ~= control.MODE_AUTO then return end
+  if type(plans) ~= "table" then return end
+  craftQueue = craftQueue or loadQueue()
+  local changed = false
+  for _, p in ipairs(plans) do
+    if p.action == "WOULD CRAFT" and p.name and (tonumber(p.request) or 0) > 0 then
+      -- Skip an entry that is already APPROVED and waiting (re-approving would just
+      -- reset its timestamp and churn the queue file every cycle). Re-arm one that
+      -- is CRAFTING (RS finished it but the item is WOULD CRAFT again, i.e. a still-
+      -- unmet quota needing the next batch) or one that is absent.
+      local cur = cqueue.get(craftQueue, p.key or p.name)
+      if not cur or cur.state ~= cqueue.APPROVED then
+        craftQueue = cqueue.approve(craftQueue,
+          { name = p.name, label = p.label, request = p.request, key = p.key }, nowMs())
+        changed = true
+      end
+    end
+  end
+  if changed then saveQueue(craftQueue) end
+end
+
 local function scan()
   loadConfig()
 
@@ -1750,6 +1786,9 @@ local function refreshAndDraw()
   if ok then
     if data then
       lastData = data
+      -- in auto mode, enqueue craftable deficits so the runner can maintain quotas
+      -- unattended; a no-op in monitor/dry-run/manual (those need a manual tap)
+      autoApprovePlans(data.stockPlans)
       -- drive the gated craft runner, then refresh the queue snapshot so the page
       -- reflects this cycle's state transitions (APPROVED -> CRAFTING) immediately
       processCraftQueue(nowMs())

@@ -76,6 +76,14 @@ function queue.has(q, name)
   return q.entries[name] ~= nil
 end
 
+-- The entry stored under a key (defaults to the registry name), or nil. Read-only
+-- lookup so callers can branch on an entry's state without reaching into .entries.
+function queue.get(q, name)
+  q = queue.normalize(q)
+  if name == nil then return nil end
+  return q.entries[name]
+end
+
 function queue.count(q)
   q = queue.normalize(q)
   local n = 0

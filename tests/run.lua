@@ -276,6 +276,11 @@ q = cqueue.approve(q, { name = "y", request = 16 }, 40)
 local listed = cqueue.list(q)
 t.eq(listed[1].name, "y", "list is newest-approval first")
 
+-- get: read-only lookup used by auto-approve to branch on entry state
+t.eq(cqueue.get(q, "x").state, cqueue.APPROVED, "get returns the entry")
+t.eq(cqueue.get(q, "missing"), nil, "get returns nil for absent key")
+t.eq(cqueue.get(q, nil), nil, "get(nil) is nil")
+
 q = cqueue.cancel(q, "y")
 t.check(cqueue.has(q, "y") == false, "cancel removes an entry")
 t.eq(cqueue.count(q), 1, "cancel decrements count")
