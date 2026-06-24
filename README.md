@@ -270,6 +270,24 @@ keep their `inventory-config` on update, so `edit inventory-config` to adopt new
 defaults. `inventory-config-example` contains a larger Mekanism, Modern
 Industrialization, Mystical Agriculture, and RS starter list to copy from.
 
+### Server TPS / performance
+
+The manager is the only computer that polls the RS Bridge; the remote viewers are
+push-driven (they read broadcasts, never call the bridge). So the manager's load
+is the lever:
+
+- **`refreshSeconds`** (config, default 5, floored at 2) — each scan does one full
+  `getItems()` over the whole network, so this is the dominant per-tick cost. If
+  `/spark` shows the RS Bridge / peripheral calls as a tick hog, raise it to
+  `10`–`15`. Touch input stays responsive regardless (taps redraw from cached data).
+- **`maxCraftsPerCycle` / `maxRequest`** — in `auto` mode every cycle can kick off
+  up to `maxCraftsPerCycle` RS craft-tree calculations of up to `maxRequest` each,
+  which is real RS work. If TPS dips while auto is grinding a big backlog, lower
+  these (e.g. `3` / `16384`) — slower fills, lighter server.
+- Most ATM10 TPS loss is **not** the computer: profile with `/spark profiler
+  --timeout 60` and look at force-loaded chunks, Mekanism/MI machines, mob farms,
+  and item/fluid pipes first.
+
 ### Install on remote inventory display
 
 Remote displays (viewers) need only an advanced monitor and modem on the same

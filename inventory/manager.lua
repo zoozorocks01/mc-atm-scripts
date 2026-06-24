@@ -57,6 +57,7 @@ local console = require("atm10-console")
 local DEFAULT_CONFIG = {
   mode = "manual",          -- manual: plan + require operator approval before a craft fires
   allowAutocraft = true,    -- autocraft capability on by default (still gated by mode + approval)
+  refreshSeconds = 5,       -- bridge poll interval; raise it to cut RS-Bridge load if TPS is low
   itemDefaults = {
     handling = "unmanaged",
   },
@@ -196,6 +197,12 @@ local function normalizeConfig(raw)
 
   -- Autocraft capability flag. Default on; only an explicit false disables it.
   cfg.allowAutocraft = cfg.allowAutocraft ~= false
+
+  -- Bridge poll interval. The scan does a full getItems() over the whole network
+  -- each tick it fires, so this is the manager's main per-tick server cost. Floor
+  -- at 2s so it can't be set low enough to hammer a laggy server; raise it (10-15)
+  -- to trade refresh latency for TPS.
+  cfg.refreshSeconds = math.max(2, tonumber(cfg.refreshSeconds) or 5)
 
   local hadItemDefaults = type(cfg.itemDefaults) == "table"
   if not hadItemDefaults then cfg.itemDefaults = {} end
@@ -1967,7 +1974,9 @@ while true do
   if kind == "timer" and ev[2] == refreshTimer then
     guard(advancePageIfDue)
     guard(refreshAndDraw)
-    refreshTimer = os.startTimer(REFRESH_SECONDS)
+    -- poll interval is operator-tunable (config.refreshSeconds) so a laggy server
+    -- can dial back RS-Bridge load; falls back to the constant before first load
+    refreshTimer = os.startTimer((config and config.refreshSeconds) or REFRESH_SECONDS)
   elseif kind == "monitor_touch" then
     guard(handleTouch, ev[3], ev[4])
   elseif kind == "redstone" then

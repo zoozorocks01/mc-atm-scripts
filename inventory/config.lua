@@ -1,6 +1,10 @@
 return {
   mode = "manual",
 
+  -- Bridge poll interval (seconds). Raise to 10-15 if server TPS is low: the scan
+  -- does a full getItems() over the whole RS network each time it fires.
+  refreshSeconds = 5,
+
   itemDefaults = {
     handling = "unmanaged",
   },
