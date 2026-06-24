@@ -140,6 +140,25 @@ do
   buf("enderio:vibrant_alloy_ingot", "Vibrant Alloy", 35000)
   buf("enderio:dark_steel_ingot", "Dark Steel", 35000)
 
+  -- Modern Industrialization components + metals. ~5k late-game baseline (the two
+  -- highest-volume ones a bit higher). MI multiblock recipes generally are NOT
+  -- RS-autocraftable, so these are buffers/targets, not autocraft.
+  buf("modern_industrialization:rubber_sheet", "Rubber Sheet", 10000)
+  buf("modern_industrialization:motor", "Motor", 10000)
+  buf("modern_industrialization:advanced_motor", "Advanced Motor", 5000)
+  buf("modern_industrialization:analog_circuit", "Analog Circuit", 5000)
+  buf("modern_industrialization:electronic_circuit", "Electronic Circuit", 5000)
+  buf("modern_industrialization:digital_circuit", "Digital Circuit", 5000)
+  buf("modern_industrialization:antimony_ingot", "Antimony", 5000)
+  buf("modern_industrialization:tungsten_ingot", "Tungsten", 5000)
+  buf("modern_industrialization:titanium_ingot", "Titanium", 5000)
+
+  -- Mekanism alloys + casing (~5k baseline).
+  buf("mekanism:alloy_infused", "Infused Alloy", 5000)
+  buf("mekanism:alloy_reinforced", "Reinforced Alloy", 5000)
+  buf("mekanism:alloy_atomic", "Atomic Alloy", 5000)
+  buf("mekanism:steel_casing", "Steel Casing", 5000)
+
   -- Mystical Agriculture: inferium left UNCAPPED (base feedstock, ~2.1M, fine to
   -- pool). Higher tiers kept as floors only (no ceiling - extras are valuable).
   buf("mysticalagriculture:prudentium_essence", "Prudentium Essence", 16000)
