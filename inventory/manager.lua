@@ -17,7 +17,19 @@ local CONFIG_FILE = "inventory-config"
 local LEDGER_FILE = ".atm10-stock-ledger"
 local QUEUE_FILE = ".atm10-craft-queue"
 local MANAGED_FILE = ".atm10-managed" -- operator-set quotas (tap-to-manage store)
-local EDIT_STEPS = { 1, 10, 100, 1000, 10000 } -- cycleable +/- step sizes in the quota editor
+-- Cycleable +/- step sizes in the quota editor: by count AND by stacks (a stack
+-- is 64), so big late-game numbers are quick to dial in. {value, label}.
+local STACK = 64
+local EDIT_STEPS = {
+  { value = 1, label = "1" },
+  { value = 10, label = "10" },
+  { value = 100, label = "100" },
+  { value = 1000, label = "1000" },
+  { value = STACK, label = "1 stack" },
+  { value = 10 * STACK, label = "10 stacks" },
+  { value = 100 * STACK, label = "100 stacks" },
+  { value = 1000 * STACK, label = "1000 stacks" },
+}
 local PAGE_SECONDS = 0 -- auto page-rotation seconds; 0 = off (the manager is interactive)
 local PAGES = { "PLAN", "QUEUE", "BROWSE", "PRESETS", "SMART" }
 -- short tab labels used when the full strip would overflow a narrow monitor
@@ -1162,12 +1174,20 @@ local function renderButtonRow(specs, y)
   return row
 end
 
--- The next step size in the cycle (1 -> 10 -> ... -> 10000 -> 1).
+-- The next step VALUE in the cycle (counts then stacks, then wraps).
 local function nextStep(cur)
   for i, s in ipairs(EDIT_STEPS) do
-    if s == cur then return EDIT_STEPS[(i % #EDIT_STEPS) + 1] end
+    if s.value == cur then return EDIT_STEPS[(i % #EDIT_STEPS) + 1].value end
   end
-  return EDIT_STEPS[1]
+  return EDIT_STEPS[1].value
+end
+
+-- Human label for the current step value (e.g. "100" or "10 stacks").
+local function stepLabel(cur)
+  for _, s in ipairs(EDIT_STEPS) do
+    if s.value == cur then return s.label end
+  end
+  return tostring(cur)
 end
 
 -- A "[-] LABEL: value [+]" row that adjusts `field` by the current step size.
@@ -1195,7 +1215,8 @@ local function drawEditor()
   line(7, "stored: " .. fmt(e.amount) .. "   craftable: " .. (e.craftable and "yes" or "NO"),
     e.craftable and colors.gray or colors.orange)
 
-  uiDraw.write(monitor, 1, 8, "step: " .. fmt(e.step), colors.gray, colors.black)
+  uiDraw.write(monitor, 1, 8, "step: " .. stepLabel(e.step) ..
+    (e.step >= STACK and ("  (" .. fmt(e.step) .. ")") or ""), colors.gray, colors.black)
   do
     local r = console.buttonRow({ { label = "STEP", key = "step" } }, 8, 14)
     for _, b in ipairs(r.buttons) do uiDraw.write(monitor, b.x1, 8, b.text, colors.cyan, colors.black) end
