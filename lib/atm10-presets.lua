@@ -77,33 +77,64 @@ presets.all = {
 }
 
 -- A named PERSONAL profile (opt-in, off by default). The generic stage presets
--- above are neutral starting points anyone can use; this one is Zoozo's curated
--- late-game setup and is the only thing that (later) enables "smart mode". It
--- shows the full banded/compress chain: keep dust in a band and compress the
--- surplus up dust -> ingot -> block. EXPAND with Codex's real metal list + IDs;
--- iron is the worked example. `settings.smartMode` is reserved for when smart
--- mode ships (it stays off unless this profile is applied).
-presets.all[#presets.all + 1] = {
-  id = "zoozo-late-game",
-  label = "Zoozo Late-Game",
-  description = "Personal profile: banded metals + compress chain (expand w/ real IDs)",
-  personal = true,
-  settings = { smartMode = true },
-  items = {
-    -- Iron, the worked example of the full chain (VERIFY dust id against the pack):
-    { name = "mekanism:dust_iron", label = "Iron Dust", target = 250000, craftTo = 250000,
-      ceiling = 350000, into = { name = "minecraft:iron_ingot", label = "Iron Ingot" }, ratio = 1 }, -- VERIFY dust id
-    { name = "minecraft:iron_ingot", label = "Iron Ingot", target = 300000, craftTo = 300000,
-      ceiling = 320000, into = { name = "minecraft:iron_block", label = "Iron Block" }, ratio = 9 },
-    { name = "minecraft:iron_block", label = "Iron Block", target = 10000, craftTo = 10000 },
-    -- Non-metal staples:
-    { name = "minecraft:dirt", label = "Dirt", target = 10000, craftTo = 10000 },
-    { name = "minecraft:stone", label = "Stone", target = 10000, craftTo = 10000 },
-    -- TODO(codex): add the rest of the metals (gold, copper, steel, allthemodium,
-    -- vibranium, unobtainium, ...) following the iron pattern, with verified dust/
-    -- ingot/block registry IDs from the live base.
-  },
-}
+-- above are neutral starting points anyone can use; this one is Zoozo's late-game
+-- setup and is the only thing that enables smart mode when applied.
+--
+-- STARTER, NOT FINAL. Built from a PARTIAL base recon (Codex, 2026-06-23):
+--   * Only confirmed registry IDs are used (alltheores:* metals/alloys,
+--     modern_industrialization:*, enderio:* alloys, mysticalagriculture:*).
+--   * The recon was truncated above "Zinc", so base metals (iron/copper/gold/
+--     tin/lead/silver/nickel/aluminum/osmium/...) are NOT here yet, nor are
+--     block IDs, MI components, or Mekanism alloys. Expand as Codex sends more.
+--   * Numbers are starting points to tune in-game, not gospel.
+--   * Nothing autocrafts until the RS pattern TREES exist for each item; until
+--     then these act as monitor targets (run in manual/monitor mode).
+do
+  local items = {}
+  local function add(x) items[#items + 1] = x end
+  local function buf(name, label, target) add({ name = name, label = label, target = target, craftTo = target }) end
+
+  -- Zinc: the one metal in the partial recon with a confirmed dust + ingot.
+  -- Keep dust in a band; smelt the surplus up to ingots. (No block id in recon
+  -- yet -> no ingot->block step; add when confirmed.)
+  add({ name = "alltheores:zinc_dust", label = "Zinc Dust", target = 65536, craftTo = 131072,
+    ceiling = 131072, into = { name = "alltheores:zinc_ingot", label = "Zinc Ingot" }, ratio = 1 })
+  add({ name = "alltheores:zinc_ingot", label = "Zinc Ingot", target = 65536, craftTo = 131072 })
+
+  -- Alloys / processed metals (ingot buffers; confirmed IDs).
+  buf("alltheores:steel_ingot", "Steel", 65536)
+  buf("alltheores:bronze_ingot", "Bronze", 32768)
+  buf("alltheores:brass_ingot", "Brass", 16384)
+  buf("alltheores:invar_ingot", "Invar", 16384)
+  buf("alltheores:electrum_ingot", "Electrum", 16384)
+  buf("alltheores:enderium_ingot", "Enderium", 4096)
+  buf("modern_industrialization:stainless_steel_ingot", "Stainless Steel", 8000)
+  buf("modern_industrialization:battery_alloy_ingot", "Battery Alloy", 8000)
+  buf("modern_industrialization:cupronickel_ingot", "Cupronickel", 2000)
+  buf("modern_industrialization:kanthal_ingot", "Kanthal", 2000)
+  buf("enderio:conductive_alloy_ingot", "Conductive Alloy", 2048)
+  buf("enderio:redstone_alloy_ingot", "Redstone Alloy", 2048)
+  buf("enderio:pulsating_alloy_ingot", "Pulsating Alloy", 2048)
+  buf("enderio:vibrant_alloy_ingot", "Vibrant Alloy", 1024)
+  buf("enderio:dark_steel_ingot", "Dark Steel", 2048)
+
+  -- Mystical Agriculture tier essences (floors; confirmed IDs). Inferium is
+  -- massively overflowing (2.1M) - capping it needs a compress-to-prudentium or
+  -- void rule once the recipe/ratio is confirmed.
+  buf("mysticalagriculture:prudentium_essence", "Prudentium Essence", 16000)
+  buf("mysticalagriculture:tertium_essence", "Tertium Essence", 8000)
+  buf("mysticalagriculture:imperium_essence", "Imperium Essence", 2000)
+  buf("mysticalagriculture:supremium_essence", "Supremium Essence", 1000)
+
+  presets.all[#presets.all + 1] = {
+    id = "zoozo-late-game",
+    label = "Zoozo Late-Game",
+    description = "Personal starter from base recon (partial) - tune in-game",
+    personal = true,
+    settings = { smartMode = true },
+    items = items,
+  }
+end
 
 -- Presets as a display list (id, label, description, count, personal).
 function presets.list()

@@ -565,9 +565,9 @@ t.check(presets.settings("zoozo-late-game").smartMode == true, "profile reserves
 t.check(presets.settings("early").smartMode == nil, "generic presets do NOT enable smart mode")
 local zstore = managed.new()
 presets.apply(zstore, "zoozo-late-game", 1)
-local ironIngot = managed.get(zstore, "minecraft:iron_ingot")
-t.check(ironIngot ~= nil and ironIngot.ceiling ~= nil, "applying the profile sets a compress ceiling")
-t.eq(ironIngot.into.name, "minecraft:iron_block", "compress chain flows through apply into the store")
+local zincDust = managed.get(zstore, "alltheores:zinc_dust")
+t.check(zincDust ~= nil and zincDust.ceiling ~= nil, "applying the profile sets a compress ceiling")
+t.eq(zincDust.into.name, "alltheores:zinc_ingot", "compress chain flows through apply into the store")
 t.check(#managed.overflowItems(zstore) >= 1, "profile produces overflow-managed items")
 
 -- ---------------------------------------------------------------------------
