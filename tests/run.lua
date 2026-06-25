@@ -430,6 +430,24 @@ t.eq(sq.entries.s.triedAt, 30, "markError stamps triedAt for backoff")
 cqueue.markCrafting(sq, "absent", 40) -- no-op on a missing entry
 t.check(cqueue.has(sq, "absent") == false, "markCrafting on a missing entry is a no-op")
 
+-- per-item last-craft results (QUICK-5): record ok/reason/timestamp, bounded
+local res = {}
+cqueue.recordResult(res, "iron", true, nil, 100)
+t.check(res.iron.ok == true and res.iron.at == 100 and res.iron.reason == nil, "recordResult stores an OK outcome")
+cqueue.recordResult(res, "iron", false, "bridge offline", 200)
+t.check(res.iron.ok == false and res.iron.reason == "bridge offline" and res.iron.at == 200, "recordResult overwrites with the latest (failed) outcome + reason")
+cqueue.recordResult(res, "gold", false, nil, 150)
+t.eq(res.gold.reason, "rejected", "recordResult defaults a missing reason")
+-- pruneResults caps to the newest N by `at` (drop-oldest)
+local rp = {}
+for i = 1, 10 do rp["i" .. i] = { ok = true, at = i } end -- i1 oldest, i10 newest
+local _, rpRemoved = cqueue.pruneResults(rp, 4)
+local rpN = 0; for _ in pairs(rp) do rpN = rpN + 1 end
+t.eq(rpN, 4, "pruneResults caps to max (10 -> 4)")
+t.eq(rpRemoved, 6, "pruneResults reports the dropped count")
+t.check(rp.i1 == nil and rp.i10 ~= nil, "pruneResults drops the OLDEST, keeps the newest")
+t.eq(select(2, cqueue.pruneResults({ a = { at = 1 } }, 0)), 0, "pruneResults with max<=0 disables the cap")
+
 -- ---------------------------------------------------------------------------
 print("craft runner (gated execution)")
 local function mkQ(items)

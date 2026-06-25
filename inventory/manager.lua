@@ -16,6 +16,8 @@ local BROADCAST_PROTOCOL = "atm10-inventory-v1"
 local CONFIG_FILE = "inventory-config"
 local LEDGER_FILE = ".atm10-stock-ledger"
 local QUEUE_FILE = ".atm10-craft-queue"
+local CRAFT_RESULTS_FILE = ".atm10-craft-results" -- per-item last-craft outcome (QUICK-5)
+local CRAFT_RESULTS_MAX = 150 -- cap: bounded like every other on-disk state (~1MB disk)
 local MANAGED_FILE = ".atm10-managed" -- operator-set quotas (tap-to-manage store)
 local TRENDS_FILE = ".atm10-trends" -- smart-mode consumption history (survives reboot)
 local DISMISSED_FILE = ".atm10-dismissed" -- smart suggestions the operator cleared (survives reboot)
@@ -94,6 +96,8 @@ local pageShownAt = nil
 local firedTimes = {}      -- ms timestamps of crafts fired in the last 60s (throughput readout)
 local lastCraftAt = nil    -- ms of the most recent craftItem (unpruned; drives reboot-safety)
 local craftQueue = nil
+local craftResults = {}          -- name -> { ok, reason, at }: last-craft outcome (QUICK-5)
+local craftResultsLoaded = false -- lazily load the persisted results on first use
 local managedStore = nil
 local itemsByName = {}      -- name -> item, rebuilt each scan (avoids per-item bridge.getItem)
 local craftableCache = {}   -- name -> { v = bool, at = ms } (TTL'd, see constants)
@@ -405,6 +409,48 @@ end
 
 local function saveDismissed(set)
   return atomicWrite(DISMISSED_FILE, textutils.serialize(set or {}))
+end
+
+-- Per-item last-craft results (QUICK-5): own file, own cap, atomicWrite -- so a
+-- craft outcome survives reboots and is debuggable from the editor/queue without
+-- coupling to the ledger's error semantics.
+local function loadCraftResults()
+  if not fs.exists(CRAFT_RESULTS_FILE) then return {} end
+  local file = fs.open(CRAFT_RESULTS_FILE, "r")
+  if not file then return {} end
+  local text = file.readAll()
+  file.close()
+  local ok, data = pcall(textutils.unserialize, text)
+  if not ok or type(data) ~= "table" then return {} end
+  return data
+end
+
+local function saveCraftResults(map)
+  return atomicWrite(CRAFT_RESULTS_FILE, textutils.serialize(map or {}))
+end
+
+local function ensureCraftResults()
+  if not craftResultsLoaded then
+    craftResults = loadCraftResults()
+    craftResultsLoaded = true
+  end
+  return craftResults
+end
+
+-- compact "how long ago" for craft-result readouts: 45s / 12m / 3h / 2d
+local function agoShort(at, now)
+  local s = math.max(0, math.floor(((now or nowMs()) - (tonumber(at) or 0)) / 1000))
+  if s < 60 then return s .. "s" end
+  if s < 3600 then return math.floor(s / 60) .. "m" end
+  if s < 86400 then return math.floor(s / 3600) .. "h" end
+  return math.floor(s / 86400) .. "d"
+end
+
+-- short queue-column token for a name's last-craft result, or "-" if none yet
+local function craftResultShort(name, now)
+  local r = ensureCraftResults()[name]
+  if not r then return "-" end
+  return (r.ok and "OK " or "rej ") .. agoShort(r.at, now)
 end
 
 local function openBroadcastModems()
@@ -871,6 +917,18 @@ local function processCraftQueue(now)
     writeLedger(ledger)
   end
 
+  -- QUICK-5: persist the last-craft outcome per item (ok/reason/timestamp) so the
+  -- editor + queue can show whether a craft actually succeeded -- craftItem's exact
+  -- return shape is unconfirmed in-world, so a persistent result makes the first
+  -- real craft debuggable from the screen. Bounded + atomicWrite.
+  if #summary.requested > 0 or #summary.failed > 0 then
+    ensureCraftResults()
+    for _, r in ipairs(summary.requested) do cqueue.recordResult(craftResults, r.name, true, nil, now) end
+    for _, f in ipairs(summary.failed) do cqueue.recordResult(craftResults, f.name, false, f.reason, now) end
+    cqueue.pruneResults(craftResults, CRAFT_RESULTS_MAX)
+    saveCraftResults(craftResults)
+  end
+
   for _, r in ipairs(summary.requested) do
     firedTimes[#firedTimes + 1] = now
     lastCraftAt = now -- unpruned: marks the start of the AP drain window for safereboot
@@ -1251,7 +1309,7 @@ local function drawQueuePage(data)
 
   local wide = w >= 60
   if wide then
-    line(7, uiDraw.fit("ITEM", math.max(16, w - 28)) .. "  REQUEST   GATE      AGE", colors.gray)
+    line(7, uiDraw.fit("ITEM", math.max(16, w - 40)) .. "  REQUEST   GATE      AGE   LAST", colors.gray)
   end
 
   local start = wide and 8 or 7
@@ -1276,10 +1334,11 @@ local function drawQueuePage(data)
     end
     local text
     if wide then
-      text = uiDraw.fit(tostring(e.label or e.name), math.max(16, w - 28)) ..
+      text = uiDraw.fit(tostring(e.label or e.name), math.max(16, w - 40)) ..
         "  " .. rjust("+" .. fmt(e.request), 7) ..
         "  " .. uiDraw.fit(uiStatus.label(gateState), 8) ..
-        "  " .. rjust(ageS .. "s", 4)
+        "  " .. rjust(ageS .. "s", 4) ..
+        "  " .. uiDraw.fit(craftResultShort(e.name, now), 9)
     else
       text = uiDraw.fit(tostring(e.label or e.name) .. " +" .. fmt(e.request) ..
         " " .. uiStatus.label(gateState), w)
@@ -1457,6 +1516,23 @@ local function drawEditor()
     local r = console.buttonRow({ { label = "STEP", key = "step" } }, 8, 14)
     for _, b in ipairs(r.buttons) do uiDraw.write(monitor, b.x1, 8, b.text, colors.cyan, colors.black) end
     editorRows[#editorRows + 1] = r
+  end
+
+  -- QUICK-5: last-craft outcome for this item, so Browse doubles as a craft-debug
+  -- lookup (survives reboot + the item leaving the queue).
+  do
+    ensureCraftResults()
+    local lc = craftResults[e.name]
+    local now = nowMs()
+    local txt, col
+    if not lc then
+      txt, col = "last craft: never", colors.gray
+    elseif lc.ok then
+      txt, col = "last craft: OK " .. agoShort(lc.at, now) .. " ago", colors.lime
+    else
+      txt, col = "last craft: rejected " .. agoShort(lc.at, now) .. " ago - " .. tostring(lc.reason or ""), colors.orange
+    end
+    line(9, uiDraw.fit(txt, w), col)
   end
 
   renderFieldRow("TARGET ", e.target, "target", 10)   -- floor: craft when below

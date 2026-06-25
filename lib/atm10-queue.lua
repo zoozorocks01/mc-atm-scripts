@@ -191,4 +191,38 @@ function queue.prune(q, now, maxAgeMs)
   return q, removed
 end
 
+-- Per-item last-craft RESULT tracking (QUICK-5). Separate from the approval queue:
+-- a bounded map { [name] = { ok=bool, reason=string?, at=ms } } the manager persists
+-- so the operator can see whether an item's last craft request actually succeeded --
+-- the approval entry itself is transient (it leaves on completion / the 30-min prune).
+-- Pure: the manager owns the file.
+function queue.recordResult(results, name, ok, reason, at)
+  if type(results) ~= "table" or not name then return results or {} end
+  local entry = { ok = ok == true, at = tonumber(at) or 0 }
+  if not entry.ok then entry.reason = reason and tostring(reason) or "rejected" end
+  results[name] = entry
+  return results
+end
+
+-- Keep the newest `max` results by `at` (drop-oldest), bounding the on-disk file.
+-- max <= 0 disables the cap. Returns results and the count removed.
+function queue.pruneResults(results, max)
+  if type(results) ~= "table" then return {}, 0 end
+  max = tonumber(max) or 0
+  if max <= 0 then return results, 0 end
+  local arr, total = {}, 0
+  for name, r in pairs(results) do
+    total = total + 1
+    arr[#arr + 1] = { name = name, at = tonumber(r and r.at) or 0 }
+  end
+  if total <= max then return results, 0 end
+  table.sort(arr, function(a, b) return a.at > b.at end) -- newest first
+  local removed = 0
+  for i = max + 1, total do
+    results[arr[i].name] = nil
+    removed = removed + 1
+  end
+  return results, removed
+end
+
 return queue
