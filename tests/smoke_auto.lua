@@ -193,5 +193,71 @@ check(ok2 == false and tostring(err2):find(SENTINEL, 1, true) ~= nil,
 check(#crafted2 == 0,
   "STAB-2: craftItem was NOT issued at a bridge that detached after scan (recheck blocked it)")
 
+-- ---- STAB-1(a): unknown events are ignored without throwing -----------------
+-- Inject an event the loop has no handler for; it must fall through the dispatch
+-- and the loop must keep running (and still craft the deficit on the timer).
+files = { [MANAGED_FILE] = "MANAGED" }
+clock = 0
+local craftedA = {}
+local BRA = fakeBridge()
+BRA.craftItem = function(arg) craftedA[#craftedA + 1] = arg; return true end
+_G.peripheral.wrap = function(n)
+  if n == "monitor_0" then return MON end
+  if n == "rs_bridge_0" then return BRA end
+  return nil
+end
+local eventsA, eia = { { "weird_unhandled_event", "junk" }, { "timer", 1 } }, 0
+_G.os.pullEvent = function()
+  eia = eia + 1
+  local ev = eventsA[eia]
+  if not ev then error(SENTINEL, 0) end
+  return table.unpack(ev)
+end
+print("smoke-auto: injecting an unknown event before the refresh timer")
+local okA, errA = pcall(function() dofile("inventory/manager.lua") end)
+check(okA == false and tostring(errA):find(SENTINEL, 1, true) ~= nil,
+  "STAB-1: an unknown event is ignored without throwing (loop reached the sentinel): " .. tostring(errA))
+check(#craftedA >= 1, "STAB-1: the loop kept running past the unknown event (still crafted the deficit)")
+
+-- ---- STAB-1(b): a throwing craftItem is contained at the craft site ---------
+-- call() pcall-wraps every bridge method, so a raising craftItem must be caught
+-- THERE (entry rejected), never escalated to the loop's guard(). Bite: remove
+-- call()'s pcall and the throw escapes to guard(), which prints "loop error:" ->
+-- the no-loop-error assertion below fails.
+files = { [MANAGED_FILE] = "MANAGED" }
+clock = 0
+local craftAttempts = 0
+local BR3 = fakeBridge()
+BR3.craftItem = function() craftAttempts = craftAttempts + 1; error("simulated AP craft failure", 0) end
+_G.peripheral.wrap = function(n)
+  if n == "monitor_0" then return MON end
+  if n == "rs_bridge_0" then return BR3 end
+  return nil
+end
+local eventsB, eib = { { "timer", 1 } }, 0
+_G.os.pullEvent = function()
+  eib = eib + 1
+  local ev = eventsB[eib]
+  if not ev then error(SENTINEL, 0) end
+  return table.unpack(ev)
+end
+local realPrint = print
+local logged = {}
+_G.print = function(...)
+  local parts = {}
+  for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
+  logged[#logged + 1] = table.concat(parts, " ")
+  realPrint(...)
+end
+print("smoke-auto: making craftItem raise; expect containment at call(), not the loop guard")
+local okB, errB = pcall(function() dofile("inventory/manager.lua") end)
+_G.print = realPrint
+check(okB == false and tostring(errB):find(SENTINEL, 1, true) ~= nil,
+  "STAB-1: a throwing craftItem does not crash the loop (reached the sentinel): " .. tostring(errB))
+check(craftAttempts >= 1, "STAB-1: the throwing craftItem was actually invoked (craft path exercised)")
+local loopErr = false
+for _, line in ipairs(logged) do if line:find("loop error", 1, true) then loopErr = true end end
+check(not loopErr, "STAB-1: call() contained the craft throw at the craft site (no loop-level error)")
+
 print((failures == 0) and "SMOKE-AUTO OK" or ("SMOKE-AUTO FAILED (" .. failures .. ")"))
 os.exit(failures == 0 and 0 or 1)
