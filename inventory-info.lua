@@ -758,6 +758,20 @@ local function requestCraft(name, count)
   count = tonumber(count) or 0
   if not name or count <= 0 then return false, "nothing to craft" end
 
+  -- STAB-2: recheck attachment immediately before the mutating craftItem. Firing
+  -- craftItem at a half-detached bridge is the precise trigger for the async
+  -- AdvancedPeripherals NotAttachedException that crashes the whole server tick
+  -- (no Lua pcall can catch it). The read path (scan) already distrusts an offline
+  -- bridge; the craft path must too. Treat only an EXPLICIT offline signal as
+  -- offline (matching scan's semantics) so builds lacking these methods still
+  -- craft; drop the cached handle so the next scan re-acquires it.
+  local connected = call(bridge, "isConnected")
+  local online = call(bridge, "isOnline")
+  if connected == false or online == false then
+    bridge = nil
+    return false, "bridge offline"
+  end
+
   local result = call(bridge, "craftItem", { name = name, count = count })
   -- Advanced Peripherals' craftItem returns a boolean on most builds (a table on
   -- some). call() returns nil if the method is missing or pcall errored. Treat an

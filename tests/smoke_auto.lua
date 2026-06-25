@@ -156,5 +156,42 @@ for _, c in ipairs(crafted) do
 end
 check(hit, "auto mode crafted the deficit item (zinc_ingot) with a positive count")
 
+-- ---- STAB-2: craft-path attachment recheck ---------------------------------
+-- Race the #1 server-crash trigger: the bridge is CONNECTED when scan reads it
+-- (so the deficit is planned + auto-approved), then DETACHED by the time
+-- requestCraft is about to fire the mutating craftItem. STAB-2 must recheck
+-- isConnected immediately before craftItem and refuse, so craftItem is never
+-- issued at a half-detached peripheral (the uncatchable NotAttachedException).
+-- isConnected is called exactly once before the craft (scan), so a call-counter
+-- stub (true at scan, false at the recheck) isolates the recheck. Remove the
+-- recheck and this run fires craftItem -> the #crafted2 assertion below bites.
+local crafted2 = {}
+local function fakeBridgeRace()
+  local b = fakeBridge()
+  local checks = 0
+  b.isConnected = function() checks = checks + 1; return checks == 1 end
+  b.craftItem = function(arg) crafted2[#crafted2 + 1] = arg; return true end
+  return b
+end
+
+-- Reset the in-memory world so the deficit re-plans cleanly: run 1 wrote a
+-- ledger/queue that would otherwise cooldown-skip zinc and mask the recheck.
+files = { [MANAGED_FILE] = "MANAGED" }
+clock = 0
+ei = 0
+local BR2 = fakeBridgeRace()
+_G.peripheral.wrap = function(n)
+  if n == "monitor_0" then return MON end
+  if n == "rs_bridge_0" then return BR2 end
+  return nil
+end
+
+print("smoke-auto: re-running with a bridge that detaches AFTER scan, BEFORE the craft")
+local ok2, err2 = pcall(function() dofile("inventory/manager.lua") end)
+check(ok2 == false and tostring(err2):find(SENTINEL, 1, true) ~= nil,
+  "STAB-2: manager survived the cycle with a bridge that detached before the craft (no crash): " .. tostring(err2))
+check(#crafted2 == 0,
+  "STAB-2: craftItem was NOT issued at a bridge that detached after scan (recheck blocked it)")
+
 print((failures == 0) and "SMOKE-AUTO OK" or ("SMOKE-AUTO FAILED (" .. failures .. ")"))
 os.exit(failures == 0 and 0 or 1)
