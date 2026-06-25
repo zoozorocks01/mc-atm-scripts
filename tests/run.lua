@@ -935,6 +935,17 @@ t.eq(console.buttonHit(row, row.buttons[3].x1, 5), "save", "tap SAVE -> save key
 t.eq(console.buttonHit(row, 1, 6), nil, "tap the wrong row -> nil")
 t.eq(console.buttonHit(row, 999, 5), nil, "tap past the buttons -> nil")
 
+-- boundedSlice (VIEW-1): payload entry count stays <= cap regardless of grid size
+do
+  local grid = {}
+  for i = 1, 5900 do grid[i] = { name = "minecraft:item" .. i, amount = i } end
+  t.eq(#console.boundedSlice(grid, 150), 150, "boundedSlice caps a 5900-item grid to the view limit")
+  t.eq(#console.boundedSlice(grid, 8), 8, "boundedSlice keeps the 8-item header summary cap")
+  t.eq(#console.boundedSlice({ 1, 2, 3 }, 150), 3, "boundedSlice returns all when grid < limit")
+  t.eq(#console.boundedSlice(nil, 10), 0, "boundedSlice tolerates a nil list")
+  t.eq(console.boundedSlice(grid, 5)[5].name, "minecraft:item5", "boundedSlice preserves order + element shape")
+end
+
 -- ---------------------------------------------------------------------------
 print("all scripts compile")
 -- loadfile parses without executing, so the display while-loops and peripheral

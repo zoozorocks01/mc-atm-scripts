@@ -9,7 +9,9 @@ local REFRESH_SECONDS = 5
 local CRAFTABLE_TRUE_TTL_MS = 60000
 local CRAFTABLE_FALSE_TTL_MS = 10000
 local CRAFTING_TTL_MS = 6000
-local TOP_ITEM_COUNT = 8
+-- Broadcast slice sizes: an 8-item header summary (topItems) + a larger BOUNDED
+-- list (viewItems) the read-only viewer paginates (VIEW-1). Capped, never thousands.
+local BROADCAST_ITEMS = { top = 8, view = 150 }
 local BROADCAST_ENABLED = true
 local BROADCAST_MODEM_SIDE = "auto"
 local BROADCAST_PROTOCOL = "atm10-inventory-v1"
@@ -1167,8 +1169,9 @@ end
 
 local function compactItems(items, limit)
   local compact = {}
-  for i = 1, math.min(limit, #items) do
-    local item = items[i]
+  -- route the cap through the tested console.boundedSlice (VIEW-1): payload stays
+  -- <= limit no matter how large the grid is.
+  for _, item in ipairs(console.boundedSlice(items, limit)) do
     compact[#compact + 1] = {
       name = itemName(item),
       amount = itemAmount(item),
@@ -1196,7 +1199,8 @@ local function broadcast(data)
     unmanagedItemCount = data.unmanagedItemCount,
     listedItems = data.listedItems,
     warnings = data.warnings,
-    topItems = compactItems(data.items, TOP_ITEM_COUNT),
+    topItems = compactItems(data.items, BROADCAST_ITEMS.top),
+    viewItems = compactItems(data.items, BROADCAST_ITEMS.view),
     usedItemStorage = data.usedItemStorage,
     totalItemStorage = data.totalItemStorage,
     availableItemStorage = data.availableItemStorage,

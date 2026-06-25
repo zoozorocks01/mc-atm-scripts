@@ -116,4 +116,15 @@ function console.paginate(total, perPage, page)
   return { page = page, pages = pages, perPage = perPage, from = from, to = to, total = total }
 end
 
+-- Bounded array slice (VIEW-1): the first min(limit, #list) elements as a new
+-- array. Caps a broadcast payload regardless of grid size (~5.9k items), so the
+-- viewer gets a fuller list than the 8-item teaser without flooding rednet.
+function console.boundedSlice(list, limit)
+  local out = {}
+  if type(list) ~= "table" then return out end
+  local n = math.min(math.max(0, math.floor(tonumber(limit) or 0)), #list)
+  for i = 1, n do out[i] = list[i] end
+  return out
+end
+
 return console
