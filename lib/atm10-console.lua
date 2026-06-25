@@ -127,4 +127,47 @@ function console.boundedSlice(list, limit)
   return out
 end
 
+-- Selectable viewer/Browse sort modes (VIEW-3). "Craftable" is intentionally
+-- omitted: isCraftable reads blind on this pack (see CRAFT-3), so it can't be a
+-- trustworthy sort key.
+console.SORT_MODES = { "qty", "az", "mod" }
+local SORT_LABELS = { qty = "Qty", az = "A-Z", mod = "Mod" }
+
+function console.sortLabel(mode) return SORT_LABELS[mode] or "Qty" end
+
+-- The next mode in the cycle (wraps). Unknown -> first mode.
+function console.nextSort(mode)
+  for i, m in ipairs(console.SORT_MODES) do
+    if m == mode then return console.SORT_MODES[(i % #console.SORT_MODES) + 1] end
+  end
+  return console.SORT_MODES[1]
+end
+
+-- Sort an item list IN PLACE by mode. `acc` supplies accessors for non-default
+-- item shapes; defaults read it.name / it.amount / it.id (the compactItems
+-- broadcast shape). qty: amount desc (default). az: display name asc.
+-- mod: registry namespace asc, then name.
+function console.sortItems(items, mode, acc)
+  if type(items) ~= "table" then return items end
+  acc = acc or {}
+  local getName = acc.name or function(it) return it.name end
+  local getAmount = acc.amount or function(it) return it.amount end
+  local getId = acc.id or function(it) return it.id or it.name end
+  local function lname(it) return tostring(getName(it) or ""):lower() end
+  local function ns(it) local id = tostring(getId(it) or ""); return (id:match("^([^:]+):") or id):lower() end
+
+  if mode == "az" then
+    table.sort(items, function(a, b) return lname(a) < lname(b) end)
+  elseif mode == "mod" then
+    table.sort(items, function(a, b)
+      local na, nb = ns(a), ns(b)
+      if na ~= nb then return na < nb end
+      return lname(a) < lname(b)
+    end)
+  else
+    table.sort(items, function(a, b) return (tonumber(getAmount(a)) or 0) > (tonumber(getAmount(b)) or 0) end)
+  end
+  return items
+end
+
 return console

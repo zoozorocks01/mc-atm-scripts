@@ -20,7 +20,8 @@ local lastSeen = nil
 local modemsOpen = false
 local paletteApplied = false
 local viewPage = 1     -- VIEW-2: current page of the paginated stored-items list
-local viewNavRow = nil -- VIEW-2: [< PREV]/[NEXT >] button row, rebuilt each draw
+local viewNavRow = nil -- VIEW-2: [< PREV]/[NEXT >]/[SORT] button row, rebuilt each draw
+local viewSort = "qty" -- VIEW-3: current sort mode (qty / az / mod)
 
 local function peripheralTypeMatches(actual, expected)
   if actual == expected then return true end
@@ -240,12 +241,14 @@ local function drawView(data)
   -- VIEW-2: paginated, touch-scrollable stored-items list (consumes VIEW-1's bounded
   -- viewItems; falls back to the 8-item summary if an older source is broadcasting).
   local items = data.viewItems or data.topItems or {}
+  console.sortItems(items, viewSort) -- VIEW-3: re-sort per the tappable sort chip
   local headerY, navY = 11, h
   local listStart = headerY + 1
   local perPage = math.max(1, navY - listStart)
   local pg = console.paginate(#items, perPage, viewPage)
   viewPage = pg.page
-  line(headerY, "Stored Items   " .. #items .. " shown   page " .. pg.page .. "/" .. pg.pages, colors.cyan)
+  line(headerY, "Stored Items   " .. #items .. " shown   page " .. pg.page .. "/" .. pg.pages ..
+    "   sort:" .. console.sortLabel(viewSort), colors.cyan)
   for i = pg.from, pg.to do
     local item = items[i]
     if item then
@@ -255,9 +258,13 @@ local function drawView(data)
     end
   end
   -- nav row (reuses the tested console.buttonRow / buttonHit)
-  viewNavRow = console.buttonRow({ { label = "< PREV", key = "prev" }, { label = "NEXT >", key = "next" } }, navY, 1)
+  viewNavRow = console.buttonRow({
+    { label = "< PREV", key = "prev" },
+    { label = "NEXT >", key = "next" },
+    { label = "SORT:" .. console.sortLabel(viewSort), key = "sort" },
+  }, navY, 1)
   for _, b in ipairs(viewNavRow.buttons) do
-    local enabled = (b.key == "prev" and pg.page > 1) or (b.key == "next" and pg.page < pg.pages)
+    local enabled = (b.key == "prev" and pg.page > 1) or (b.key == "next" and pg.page < pg.pages) or (b.key == "sort")
     uiDraw.write(monitor, b.x1, navY, b.text, enabled and colors.cyan or colors.gray, colors.black)
   end
 end
@@ -403,7 +410,8 @@ local function handleViewTouch(x, y)
   if PROFILE ~= "view" then return end -- only the inventory list paginates
   local key = viewNavRow and console.buttonHit(viewNavRow, x, y)
   if key == "prev" then viewPage = math.max(1, viewPage - 1)
-  elseif key == "next" then viewPage = viewPage + 1 end -- paginate() clamps to the last page
+  elseif key == "next" then viewPage = viewPage + 1 -- paginate() clamps to the last page
+  elseif key == "sort" then viewSort = console.nextSort(viewSort); viewPage = 1 end
 end
 
 -- Event-driven loop: touch paging (monitor_touch) works alongside rednet updates;

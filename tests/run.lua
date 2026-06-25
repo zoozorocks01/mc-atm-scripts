@@ -946,6 +946,27 @@ do
   t.eq(console.boundedSlice(grid, 5)[5].name, "minecraft:item5", "boundedSlice preserves order + element shape")
 end
 
+-- sortItems / sort cycle (VIEW-3)
+do
+  local function items() return {
+    { name = "Zinc", amount = 10, id = "alltheores:zinc" },
+    { name = "apple", amount = 50, id = "minecraft:apple" },
+    { name = "Iron", amount = 30, id = "minecraft:iron" },
+  } end
+  local q = console.sortItems(items(), "qty")
+  t.eq(q[1].name, "apple", "qty sort: highest amount first")
+  t.eq(q[3].name, "Zinc", "qty sort: lowest amount last")
+  local az = console.sortItems(items(), "az")
+  t.eq(az[1].name, "apple", "az sort: case-insensitive name asc")
+  t.eq(az[3].name, "Zinc", "az sort: Zinc last")
+  local md = console.sortItems(items(), "mod")
+  t.eq(md[1].id, "alltheores:zinc", "mod sort: alltheores namespace first")
+  t.check(md[2].id:find("minecraft", 1, true) and md[3].id:find("minecraft", 1, true), "mod sort: minecraft items grouped after")
+  t.eq(console.nextSort("qty"), "az", "nextSort cycles qty -> az")
+  t.eq(console.nextSort("mod"), "qty", "nextSort wraps mod -> qty")
+  t.eq(console.sortLabel("az"), "A-Z", "sortLabel maps az")
+end
+
 -- ---------------------------------------------------------------------------
 print("all scripts compile")
 -- loadfile parses without executing, so the display while-loops and peripheral
