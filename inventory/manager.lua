@@ -134,6 +134,8 @@ local TREND_MAX_WINDOW_MS = 21600000  -- restart a trend window after 6h so drai
 local TREND_MAX_ENTRIES = 800
 local dismissedSuggestions = {} -- names the operator cleared (persisted to disk)
 local dismissedLoaded = false   -- lazily load persisted dismissals on first smart cycle
+local DISMISSED_MAX_AGE_MS = 604800000 -- re-surface a cleared suggestion after 7d (drain may have changed)
+local DISMISSED_MAX_ENTRIES = 400      -- hard cap (drop-oldest); same ~1MB-disk discipline as trends
 local browsePage = 1
 local browseFilter = false  -- false = whole grid; true = managed (quota'd) items only
 local browseFilterBtn = nil -- hit region for the Browse ALL/MANAGED toggle
@@ -996,7 +998,8 @@ local function scan()
       trendsLoaded = true
     end
     if not dismissedLoaded then
-      dismissedSuggestions = loadDismissed()
+      dismissedSuggestions = suggest.pruneDismissed(loadDismissed(), nowMs(),
+        { maxAgeMs = DISMISSED_MAX_AGE_MS, maxEntries = DISMISSED_MAX_ENTRIES })
       dismissedLoaded = true
     end
     -- track drain for ALL items, not just craftable ones: with the live grid
@@ -1977,9 +1980,12 @@ local function handleTouch(x, y)
     renderCurrent()
     return
   elseif smartKey == "smartclear" then
+    local clearedAt = nowMs()
     for _, s in ipairs((lastData and lastData.suggestions) or {}) do
-      if s.name then dismissedSuggestions[s.name] = true end
+      if s.name then dismissedSuggestions[s.name] = clearedAt end
     end
+    dismissedSuggestions = suggest.pruneDismissed(dismissedSuggestions, clearedAt,
+      { maxAgeMs = DISMISSED_MAX_AGE_MS, maxEntries = DISMISSED_MAX_ENTRIES })
     saveDismissed(dismissedSuggestions)
     pageShownAt = nowMs()
     renderCurrent()

@@ -79,6 +79,38 @@ function suggest.prune(history, now, opts)
   return history, removed
 end
 
+-- Bound the operator's dismissed-suggestion set the same way the trend history is
+-- bounded: it persists on the same ~1MB CC disk and would otherwise grow forever
+-- (each "clear all" only ever ADDS names). Values are dismissal timestamps; legacy
+-- boolean-true entries are normalized to `now`. Age out entries older than maxAgeMs
+-- (drain may have changed -> let the suggestion return) and, if still over
+-- maxEntries, drop the OLDEST. Returns a NEW set and the number removed. (0 for an
+-- option disables it.)
+function suggest.pruneDismissed(set, now, opts)
+  opts = opts or {}
+  now = tonumber(now) or 0
+  local maxAgeMs = tonumber(opts.maxAgeMs) or 0
+  local maxEntries = tonumber(opts.maxEntries) or 0
+
+  local total, kept = 0, {}
+  for name, ts in pairs(set or {}) do
+    total = total + 1
+    if type(ts) ~= "number" then ts = now end -- legacy boolean `true` -> timestamp
+    if maxAgeMs <= 0 or (now - ts) <= maxAgeMs then
+      kept[#kept + 1] = { name = name, ts = ts }
+    end
+  end
+
+  if maxEntries > 0 and #kept > maxEntries then
+    table.sort(kept, function(a, b) return a.ts > b.ts end) -- newest first
+    for i = #kept, maxEntries + 1, -1 do kept[i] = nil end  -- keep the newest maxEntries
+  end
+
+  local out, count = {}, 0
+  for _, e in ipairs(kept) do out[e.name] = e.ts; count = count + 1 end
+  return out, total - count
+end
+
 local function mins(span) return math.max(1, math.floor(span / 60000)) end
 
 -- analyze(history, ctx) -> array of suggestions (each seeded for the editor):

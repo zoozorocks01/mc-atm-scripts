@@ -688,6 +688,24 @@ local pn = {
 suggest.prune(pn, 100, { maxEntries = 2 })
 t.check(pn.busy ~= nil and pn.mid ~= nil and pn.blip == nil, "prune keeps high-sample entries, evicts a one-off blip")
 
+-- pruneDismissed: bound the operator's dismissed set (cap drops oldest, TTL ages out)
+-- STAB-4 acceptance: inserting cap+50 dismissals leaves the saved set <= cap.
+local big = {}
+for i = 1, 450 do big["item" .. i] = i end -- ts == i, so item1 is oldest, item450 newest
+local capped, capRem = suggest.pruneDismissed(big, 1000, { maxEntries = 400, maxAgeMs = 0 })
+local cappedN = 0; for _ in pairs(capped) do cappedN = cappedN + 1 end
+t.eq(cappedN, 400, "pruneDismissed caps the set at maxEntries (450 -> 400)")
+t.eq(capRem, 50, "pruneDismissed reports the 50 dropped")
+t.check(capped["item1"] == nil and capped["item450"] ~= nil, "pruneDismissed drops the OLDEST, keeps the newest")
+
+-- TTL: an entry older than maxAgeMs is aged out (re-surfaces as a suggestion again)
+local aged = suggest.pruneDismissed({ old = 100, fresh = 9000 }, 10000, { maxAgeMs = 5000 })
+t.check(aged.old == nil and aged.fresh ~= nil, "pruneDismissed ages out entries past maxAgeMs")
+
+-- legacy boolean `true` values are normalized to a timestamp (now), not dropped
+local legacy = suggest.pruneDismissed({ a = true }, 777, { maxAgeMs = 5000, maxEntries = 400 })
+t.eq(legacy.a, 777, "pruneDismissed upgrades a legacy boolean dismissal to a timestamp")
+
 -- ---------------------------------------------------------------------------
 print("overflow balancer (compress above ceiling)")
 local function ovItem(over) local i = { name = "dust", label = "Steel Dust",
