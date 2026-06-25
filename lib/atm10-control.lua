@@ -283,4 +283,71 @@ function control.rebootSafety(state)
   return { safe = true, crafting = 0, secondsLeft = 0, reason = "no crafts in flight" }
 end
 
+-- ===========================================================================
+-- CONTROL COMMANDS (CTRL-1): the foundation for the eventual control center.
+-- A `command` is a pure data shape { action, target, args, token }; dispatch()
+-- validates it against the capability gates + token and, only when every check
+-- passes, hands off to a host-injected `actuator` to perform the real side effect.
+-- dispatch NEVER touches a peripheral itself, so it stays pure + unit-testable and
+-- is the single authorization chokepoint every control action must pass through --
+-- safe for multi-user use (gate everything; default deny).
+-- ===========================================================================
+
+-- The recognized control actions -> the capability each requires. Introducing a new
+-- control action = add an entry here AND an actuator branch on the host; dispatch
+-- refuses anything not listed (default deny). target meaning is per-action (e.g. a
+-- redstone side); args carries action-specific params (e.g. { level = 15 }).
+control.COMMANDS = {
+  redstone_set    = { capability = control.CAPABILITY_REDSTONE, label = "Set a redstone output" },
+  redstone_toggle = { capability = control.CAPABILITY_REDSTONE, label = "Toggle a redstone output" },
+}
+
+-- Build a control command (plain data; the host/sender fills these in).
+function control.command(args)
+  args = args or {}
+  return { action = args.action, target = args.target, args = args.args, token = args.token }
+end
+
+-- Validate + dispatch a control command. policy = control.policy{...}; actuator =
+-- function(command, spec) that performs the side effect (injected by the host).
+-- Returns { ok = bool, reason = str, action = str|nil }. The actuator is invoked AT
+-- MOST ONCE, only after the action is recognized, the token matches (when the policy
+-- sets one), and the action's capability is allowed. Default deny on anything else.
+function control.dispatch(cmd, policy, actuator)
+  policy = policy or {}
+
+  if type(cmd) ~= "table" then
+    return { ok = false, reason = "bad command", action = nil }
+  end
+
+  local spec = control.COMMANDS[cmd.action]
+  if not spec then
+    return { ok = false, reason = "unknown action", action = cmd.action }
+  end
+
+  -- token: when the policy sets one, the command must carry the matching token
+  -- (the transport layer may also check this; defense in depth).
+  if policy.token ~= nil and cmd.token ~= policy.token then
+    return { ok = false, reason = "bad token", action = cmd.action }
+  end
+
+  local allowed, capabilityReason = control.isCapabilityAllowed(spec.capability, policy)
+  if not allowed then
+    return { ok = false, reason = capabilityReason, action = cmd.action }
+  end
+
+  if type(actuator) ~= "function" then
+    return { ok = false, reason = "no actuator", action = cmd.action }
+  end
+
+  -- contain a misbehaving actuator (local peripheral side effect) so a bad output
+  -- can't crash the dispatch loop; still counts as one invocation.
+  local ok, err = pcall(actuator, cmd, spec)
+  if not ok then
+    return { ok = false, reason = "actuator error: " .. tostring(err), action = cmd.action }
+  end
+
+  return { ok = true, reason = "ok", action = cmd.action }
+end
+
 return control

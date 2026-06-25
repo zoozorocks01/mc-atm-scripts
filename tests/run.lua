@@ -93,6 +93,43 @@ t.check((control.authorize(7, { token = "secret" }, pSecured)) == true, "listed 
 t.check((control.authorize(99, {}, control.policy({}))) == true, "open policy accepts any sender")
 
 -- ---------------------------------------------------------------------------
+print("control commands (CTRL-1 dispatch chokepoint)")
+local ctrlPolicy = control.policy({ allowRedstone = true, token = "t0k" })
+local actuatorCalls
+local function mkActuator() actuatorCalls = {}; return function(cmd, spec) actuatorCalls[#actuatorCalls + 1] = { target = cmd.target, cap = spec.capability } end end
+-- unknown action -> rejected, actuator untouched
+local act1 = mkActuator()
+local r1 = control.dispatch(control.command({ action = "no_such", target = "left", token = "t0k" }), ctrlPolicy, act1)
+t.check(r1.ok == false and r1.reason == "unknown action", "dispatch rejects an unknown action")
+t.eq(#actuatorCalls, 0, "unknown action does not call the actuator")
+-- capability off -> rejected
+local act2 = mkActuator()
+local r2 = control.dispatch(control.command({ action = "redstone_toggle", target = "left", token = "t0k" }),
+  control.policy({ allowRedstone = false, token = "t0k" }), act2)
+t.check(r2.ok == false and r2.reason == "redstone not allowed", "dispatch rejects an action whose capability is off")
+t.eq(#actuatorCalls, 0, "capability-off action does not call the actuator")
+-- bad token -> rejected
+local act3 = mkActuator()
+local r3 = control.dispatch(control.command({ action = "redstone_toggle", target = "left", token = "WRONG" }), ctrlPolicy, act3)
+t.check(r3.ok == false and r3.reason == "bad token", "dispatch rejects a bad token")
+t.eq(#actuatorCalls, 0, "bad-token action does not call the actuator")
+-- permitted -> actuator called exactly once with the right target
+local act4 = mkActuator()
+local r4 = control.dispatch(control.command({ action = "redstone_toggle", target = "right", token = "t0k" }), ctrlPolicy, act4)
+t.check(r4.ok == true and r4.action == "redstone_toggle", "dispatch accepts a permitted, authorized command")
+t.eq(#actuatorCalls, 1, "permitted command calls the actuator exactly once")
+t.eq(actuatorCalls[1].target, "right", "actuator receives the command's target")
+-- no actuator -> rejected (and reports it)
+local r5 = control.dispatch(control.command({ action = "redstone_toggle", target = "left", token = "t0k" }), ctrlPolicy, nil)
+t.check(r5.ok == false and r5.reason == "no actuator", "dispatch refuses when no actuator is injected")
+-- open policy (no token) doesn't require a token on the command
+local act6 = mkActuator()
+local r6 = control.dispatch(control.command({ action = "redstone_set", target = "back", args = { level = 15 } }),
+  control.policy({ allowRedstone = true }), act6)
+t.check(r6.ok == true, "no-token policy accepts a command without a token")
+t.eq(#actuatorCalls, 1, "token-less permitted command still actuates once")
+
+-- ---------------------------------------------------------------------------
 print("reboot safety (drain guard against the AP detach crash)")
 local DRAIN = control.DEFAULT_DRAIN_MS
 -- nothing crafting + no recent craft -> safe
