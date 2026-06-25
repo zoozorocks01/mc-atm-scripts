@@ -34,6 +34,16 @@ function stockplan.deficitPriority(amount, target)
   return math.max(0, (target - amount) / target)
 end
 
+-- Round a banded refill target UP to a clean, human number so the display shows
+-- "2k" not "1.3k": nearest 1000 once >= 1000, else nearest 100 / 10.
+local function roundCleanUp(n)
+  n = math.floor(tonumber(n) or 0)
+  if n >= 1000 then return math.ceil(n / 1000) * 1000 end
+  if n >= 100 then return math.ceil(n / 100) * 100 end
+  if n >= 10 then return math.ceil(n / 10) * 10 end
+  return n
+end
+
 function stockplan.effectiveCraftTo(target, stock)
   target = target or {}
   stock = stock or {}
@@ -44,7 +54,7 @@ function stockplan.effectiveCraftTo(target, stock)
   local banded = false
 
   if craftTo <= trigger then
-    craftTo = trigger + refillMargin(target, stock)
+    craftTo = roundCleanUp(trigger + refillMargin(target, stock))
     banded = true
   end
 

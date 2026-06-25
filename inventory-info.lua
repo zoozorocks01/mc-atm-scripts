@@ -91,6 +91,7 @@ local ledgerError = nil
 local paletteApplied = false
 local pageIndex = 1
 local pageShownAt = nil
+local firedTimes = {}      -- ms timestamps of crafts fired in the last 60s (throughput readout)
 local craftQueue = nil
 local managedStore = nil
 local itemsByName = {}      -- name -> item, rebuilt each scan (avoids per-item bridge.getItem)
@@ -413,8 +414,8 @@ local function fmt(n)
   local a = math.abs(n)
   if a >= 1000000000000 then return string.format("%.2fT", n / 1000000000000) end
   if a >= 1000000000 then return string.format("%.2fG", n / 1000000000) end
-  if a >= 1000000 then return string.format("%.2fM", n / 1000000) end
-  if a >= 1000 then return string.format("%.1fk", n / 1000) end
+  if a >= 1000000 then return (string.format("%.2fM", n / 1000000):gsub("%.00?M$", "M")) end
+  if a >= 1000 then return (string.format("%.1fk", n / 1000):gsub("%.0k$", "k")) end
   return tostring(math.floor(n))
 end
 
@@ -842,8 +843,13 @@ local function processCraftQueue(now)
   end
 
   for _, r in ipairs(summary.requested) do
+    firedTimes[#firedTimes + 1] = now
     print("Craft requested: " .. tostring(r.name) .. " x" .. tostring(r.amount))
   end
+  -- keep only the last 60s so #firedTimes == crafts/min (bounds the list too)
+  local keptFired = {}
+  for _, ts in ipairs(firedTimes) do if now - ts <= 60000 then keptFired[#keptFired + 1] = ts end end
+  firedTimes = keptFired
   for _, f in ipairs(summary.failed) do
     print("Craft failed (" .. tostring(f.reason) .. "): " .. tostring(f.name))
   end
@@ -1195,7 +1201,10 @@ local function drawQueuePage(data)
   local q = data.craftQueue or {}
   local policy = buildPolicy()
 
-  line(6, "Craft Queue   " .. #q .. " approved   mode:" .. tostring(effectiveMode()), colors.cyan)
+  local crafting = 0
+  for _, e in ipairs(q) do if e.state == cqueue.CRAFTING then crafting = crafting + 1 end end
+  line(6, "Craft Queue   " .. #q .. " approved   " .. crafting .. " crafting   ~" .. #firedTimes ..
+    "/min   mode:" .. tostring(effectiveMode()), colors.cyan)
 
   if #q == 0 then
     line(8, "No approved crafts yet.", colors.lime)
@@ -1214,7 +1223,9 @@ local function drawQueuePage(data)
   local now = nowMs()
   for i = 1, rows do
     local e = q[i]
-    local ageS = math.max(0, math.floor((now - (e.approvedAt or now)) / 1000))
+    -- show how long a job has been CRAFTING (craftingAt), else how long it's waited
+    local ageBase = (e.state == cqueue.CRAFTING and e.craftingAt) or e.approvedAt or now
+    local ageS = math.max(0, math.floor((now - ageBase) / 1000))
     -- In-flight and failed entries show their lifecycle state; entries still
     -- awaiting a request show the live safety-gate verdict (would it craft now?).
     local gateState

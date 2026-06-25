@@ -228,9 +228,9 @@ t.eq(wcP[1].category, "Stock Keeper", "items-only config falls back to Stock Kee
 local bandP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100, craftTo = 100 } }),
   ledger = emptyLedger, resolve = function() return 99, true, false end })
 t.eq(bandP[1].action, "WOULD CRAFT", "target==craftTo still plans a refill")
-t.eq(bandP[1].craftTo, 125, "default refill band is 25% above the floor")
+t.eq(bandP[1].craftTo, 200, "refill band (25% above floor) rounds up to a clean number")
 t.eq(bandP[1].configuredCraftTo, 100, "configured craftTo is preserved on the row")
-t.eq(bandP[1].request, 26, "dip by one still refills the full band, not one item")
+t.eq(bandP[1].request, 101, "dip by one still refills the full band, not one item")
 t.check(bandP[1].banded == true, "row marks that the refill band was inferred")
 local tinyBand = stockplan.plan({ stockKeeper = SK({ { name = "star", target = 4, craftTo = 4 } }),
   ledger = emptyLedger, resolve = function() return 3, true, false end })
