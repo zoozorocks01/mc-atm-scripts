@@ -8,6 +8,13 @@ crash the server — top priority)**, and UI/display polish.
 > synthesis → human hardening pass). Every task is concrete, test-gated, and
 > ordered by value/risk. One task = one loop iteration.
 
+> **Operator priorities (2026-06-25 review):** the system must first be *reliable* and
+> *usable as good software others may run*. Ranked pains: (1) reliability / crashes,
+> (2) can't control machines, (3) autocraft is opaque (can't tell if a craft worked).
+> The external viewer is wanted but secondary (the in-game grid covers ad-hoc lookups).
+> §5 sequencing reflects this. NOTE: autocraft is **LIVE** in-world (see §1) — the old
+> `craftable_rows=0` framing was a CC introspection blind spot, not a crafting blocker.
+
 ---
 
 ## 0. How to use this doc (read first)
@@ -56,9 +63,16 @@ crash the server — top priority)**, and UI/display polish.
   exception — no Lua pcall can catch it.** Code can only *shrink the trigger
   window*; the real fix is **force-loading** the CC chunk. Reads (`getItems`,
   energy, storage) are safe — only the autocraft path is fragile.
-- **Live RS currently reports `craftable_rows=0`** (no patterns yet), so the
-  autocraft path is unexercised in-world and `craftItem`'s exact return shape is
-  unconfirmed → RS-task work is **in-game-gated**.
+- **Autocraft is LIVE; CC-side craftability introspection is BLIND.** The system has
+  actually crafted (`enderio:vibrant_alloy_ingot`, 2026-06-24) through RS as the queue
+  recommended — patterns exist and `craftItem` fires in-world. But the CC RS-Bridge
+  export reports `craftable_rows=0` / `isCraftable=false` for *every* item (RS 2.0 stores
+  patterns as block-entity data-components the export can't see). Consequences: (a) the
+  craft + crash path IS exercisable in-world — **STAB-2 matters now**; (b)
+  `getCraftableItems`/`isCraftable` are **NOT trustworthy** craftability signals — the
+  only reliable "exists" signal is presence in the `getItems` grid; (c) `craftItem`'s
+  exact return shape and `getCraftingTasks` shape are still **in-game-gated** (need a
+  live-bridge probe — CRAFT-1).
 - **Three standing guardrails:**
   1. Never add an un-throttled bridge call — gate new reads behind a
      `STATS_INTERVAL_MS`-style throttle.
@@ -71,8 +85,10 @@ crash the server — top priority)**, and UI/display polish.
 
 ## 2. ✅ Already shipped (do NOT redo — read the current code first)
 
-The crash-resistance pass from the prior session is already merged. Verify against
-current code before starting STAB tasks:
+The crash-resistance pass from the prior session is already merged. All items below are
+**code-confirmed + unit-tested off-CC, but `in-game-verify: pending`** — none has been
+verified against a live craft, so §2 means "code levers shipped," not "server-crash
+solved." Verify against current code before starting STAB tasks:
 
 - `control.rebootSafety()` + **`safereboot`** command + `.atm10-craftstate` drain
   snapshot — drain-safe reboot (waits until nothing crafting + 120s drain window).
@@ -102,13 +118,15 @@ open. All other STAB tasks are open.
 | **VIEW** | Inventory viewing, search & detail | Turn the viewer from an 8-item teaser into a paginated, searchable, sortable list with detail + trends. |
 | **CRAFT** | Autocrafting management & job truth | Make the queue reflect RS's *real* crafting state; validate quota IDs; pattern-setup worklist; fairer scheduling. |
 | **UI** | Display polish & touch ergonomics | Wire the (already-written, unused) double buffer to kill flicker; styled components; bigger tap targets. |
+| **CTRL** | Control foundation | Turn the dead capability scaffolding (`atm10-control.lua` redstone/export/security gates + `CONTROL_ARCHITECTURE.md`) into one real, gated, testable actuator path — the bones of the eventual factory/base control center. |
 
 **Key audit findings driving these:** the flicker-free diff double-buffer + box/gauge
 helpers in `atm10-draw.lua` have **zero callers** (both UIs clear-and-redraw every
 frame) — highest polish-per-effort. Viewing is weakest (`TOP_ITEM_COUNT=8`, no
-search, one sort). Queue job state is **fake** (it shows our own request timestamps,
-never RS's real tasks). `requestCraft` issues the mutating `craftItem` with no
-`isConnected` recheck (the read path checks it; the craft path doesn't).
+search, one sort). Queue job state is **partial** — CRAFTING *is* reconciled against RS
+via live `isItemCrafting` (`manager.lua:847`); what's local is timestamps, ETA, and
+made-vs-requested progress (no RS task-list is read). `requestCraft` issues the mutating
+`craftItem` with no `isConnected` recheck (the read path checks it; the craft path doesn't).
 
 ---
 
@@ -118,13 +136,13 @@ Each task: **what** to do, **why**, **files**, **acceptance**, size, risk, deps.
 
 ### STAB — Stability & crash-resistance (do first)
 
-**STAB-1 — Pin synchronous-exception containment with smoke tests** · S · low · deps: none
+**STAB-1 — Pin synchronous-exception containment with smoke tests** · S · low · deps: STAB-2 *(ships paired — this test pins STAB-2's fix; do STAB-2 first)*
 - *What:* Extend `tests/smoke_auto.lua`: (a) inject an unknown event name into stubbed `pullEvent`, assert the loop ignores it without throwing; (b) make stubbed `bridge.craftItem` raise, assert `call()`/`guard()` contain it, the loop survives, and the entry is treated as rejected (BLOCKED) not crafted.
 - *Why:* Locks the most important server-safety invariant (no unhandled throw reaches the loop) before any refactor can regress it. Pure off-CC.
 - *Files:* `tests/smoke_auto.lua`
 - *Acceptance:* `lua tests/smoke_auto.lua` prints SMOKE-AUTO OK with two new assertions; temporarily removing the pcall in `call()` makes the throwing-craftItem assertion fail (proves the test bites).
 
-**STAB-2 — Recheck bridge attachment immediately before every mutating `craftItem`** · S · med · deps: STAB-1
+**STAB-2 — Recheck bridge attachment immediately before every mutating `craftItem`** · S · med · deps: none *(loop starts here)*
 - *What:* In `requestCraft` (`inventory/manager.lua:~735`) before `craftItem`, add: if `call(bridge,'isConnected') ~= true` (and/or `isOnline`) then null the cached bridge handle and return `false,'bridge offline'`. Mirror into `inventory-info.lua`. Add a unit test with a disconnected fake bridge.
 - *Why:* Issuing the mutating call at a half-detached peripheral is the precise trigger for the async crash. `scan()` checks connection for reads; the craft path doesn't. The only code-side lever on the #1 risk (shrinks the window; does not fully eliminate the async exception).
 - *Files:* `inventory/manager.lua`, `inventory-info.lua`, `tests/run.lua`
@@ -240,12 +258,14 @@ Each task: **what** to do, **why**, **files**, **acceptance**, size, risk, deps.
 
 ### CRAFT — Autocrafting management & job truth
 
-> CRAFT-1/2 are **hard-blocked** on live patterns existing (`craftable_rows=0`).
-> CRAFT-3/4/5/6 are pure-logic and can be pulled forward / interleaved with QUICK.
+> CRAFT-1/2 need a **live RS Bridge** to confirm the `getCraftingTasks` / `craftItem`
+> return shapes (patterns DO exist — crafting is live — but those API shapes are
+> unconfirmed from CC). Implement off-CC against a stubbed task-list, mark
+> `in-game-verify: pending`. CRAFT-3/4/5/6 are pure-logic and interleave freely.
 
-**CRAFT-3 — Validate quota IDs; flag UNKNOWN vs NO-PATTERN on PLAN + editor** · M · low · deps: none
-- *What:* On `scan` build a name set from `getItems` (+ `getCraftableItems` when populated). In the editor and on PLAN distinguish UNKNOWN ID (not in grid — likely typo/version drift), NOT CRAFTABLE (in grid, no pattern), OK. Add a PLAN header count: `Quotas: 48 (3 unknown IDs, 41 await patterns)`. Mirror.
-- *Why:* `effectiveCraftTo`/`managed.set` never validate the ID; a typo'd preset ID reads NOT CRAFTABLE forever, indistinguishable from the global no-patterns state.
+**CRAFT-3 — Validate quota IDs; flag UNKNOWN-ID on PLAN + editor** · M · low · deps: none
+- *What:* On `scan` build a name set from `getItems` (the ~5.9k stored rows — the ONLY trustworthy signal; do **NOT** use `getCraftableItems`/`isCraftable`, which read empty even for items that craft fine — see §1). In the editor and on PLAN distinguish UNKNOWN ID (not in grid — likely typo/version drift) from OK (present in grid). Add a PLAN header count: `Quotas: 48 (3 unknown IDs)`. Mirror.
+- *Why:* `effectiveCraftTo`/`managed.set` never validate the ID; a typo'd preset ID silently never crafts and is invisible today. Presence-in-grid is the only reliable check given the blind craftability export.
 
 **CRAFT-4 — Patterns worklist + ID export to kill setup toil** · M · low · deps: CRAFT-3
 - *What:* A page (or QUEUE section) listing every managed quota lacking a pattern, grouped by category, with the exact registry name + a recipe hint, plus a `dump IDs` action writing the list to a file so the operator can `/give` + build Crafters in one pass. Auto-check items off as `isCraftable` flips true. Mirror.
@@ -258,31 +278,82 @@ Each task: **what** to do, **why**, **files**, **acceptance**, size, risk, deps.
 **CRAFT-6 — Smart-mode `craftTo` cooldown-consistent + compress suggestions + re-surface dismissals** · M · med · deps: none
 - *What:* In `atm10-suggest.lua`: compute suggested `craftTo` from observed `perMin` drain × `cooldownSeconds` (refill lasts until the next allowed craft) instead of arbitrary `perMin*5`; add a "compress chain" suggestion kind when an item grows past a stable band (pre-seed ceiling+into+ratio); let a dismissed suggestion re-surface if drain materially accelerates. Mirror lib⇄root.
 
-**CRAFT-1 — Probe + confirm the RS crafting-task API shape** · S · high · deps: none · **IN-GAME, blocked on patterns**
-- *What:* Extend `atm10-bridge-probe.lua` to probe `getCraftingTasks` / `isItemCrafting` (with amounts) / per-task progress and dump exact return shapes to a file. Recon-only, throttled. Needs a live RS Bridge with a craftable item.
-- *Acceptance:* IN-GAME: probe output records the actual return shapes (or notes absence). No pure-code acceptance. **Do only when the operator confirms a live craftable item.**
+**CRAFT-1 — Probe + confirm the RS crafting-task API shape** · S · high · deps: none · **IN-GAME (live bridge)**
+- *What:* Extend `atm10-bridge-probe.lua` to probe `getCraftingTasks` / `isItemCrafting` (with amounts) / per-task progress and dump exact return shapes to a file. Recon-only, throttled. Patterns exist (crafting is live), so request a known-craftable item (e.g. vibrant alloy) and capture the real shapes.
+- *Acceptance:* The probe code compiles via `tests/run.lua`. IN-GAME: probe output records the actual return shapes (or notes absence). **in-game-verify: pending.**
 
 **CRAFT-2 — Reconcile CRAFTING entries against real RS tasks; show made/requested + ETA** · M · high · deps: CRAFT-1
 - *What:* Using CRAFT-1's confirmed shape, read RS tasks (throttled like `bridgeStats`) and reconcile CRAFTING queue entries: show `made X / requested Y`, a simple ETA from observed throughput, and drop a CRAFTING entry the instant RS reports the task gone (instead of the 30-min prune). Mirror. Unit tests with a stubbed task-list bridge.
 - *Why:* Turns the queue from "what I asked for" into "what is actually happening." The throttle is load-bearing for TPS. **in-game-verify: pending.**
 
+### CTRL — Control foundation (minimal, staged)
+
+> The repo already *designed* a general control system — `lib/atm10-control.lua` defines
+> `CAPABILITY_REDSTONE/EXPORT/SECURITY` + `allowRedstone/allowExport/allowSecurity` gates,
+> and `docs/CONTROL_ARCHITECTURE.md` describes a sensors→state→rules→trusted-controller model
+> with an (empty) `dashboard/` host. Today **nothing outside the lib consumes any of it** —
+> the only actuation anywhere is QUICK-3's one-way alarm. These three tasks turn that
+> scaffolding into one working, gated, testable control path without committing to wiring
+> every machine. **Build for multi-user from the start: gate every action; never actuate on
+> an offline or unauthorized path.**
+
+**CTRL-1 — Trusted-controller command schema + dispatcher (pure-logic, gated)** · M · med · deps: none
+- *What:* In `lib/atm10-control.lua` (mirror root `atm10-control.lua`) add a pure command model:
+  a `command` shape `{action, target, args, token}` and `dispatch(cmd, caps, actuator)` that
+  validates the action against the capability gates (`allowRedstone` etc.), rejects unknown
+  actions / missing capability / bad token, and on success calls the injected `actuator`
+  callback — **never touches a peripheral directly** (so it's unit-testable, no I/O).
+- *Why:* One safe, validated entry point for every future control action — the foundation the
+  control center needs and the place to enforce authorization for multi-user use.
+- *Files:* `lib/atm10-control.lua`, `atm10-control.lua`, `tests/run.lua`
+- *Acceptance:* Unit tests: dispatch rejects an action whose capability is off / an unknown action /
+  a bad token (actuator called 0 times); accepts a permitted action (actuator called once with the
+  right target). `lua tests/run.lua` pass; mirror identical.
+
+**CTRL-2 — Rednet command channel with sender allowlist + token** · M · med · deps: CTRL-1
+- *What:* A thin transport: a `control` rednet protocol where the actuator host receives `command`
+  messages, checks the sender ID against a config allowlist + a shared token, and feeds valid ones
+  to CTRL-1's `dispatch`. Bounded + throttled, no unbounded state. Allowlist + token live in
+  `inventory-config.lua`. Mirror per role.
+- *Why:* The wire that lets a screen/computer issue gated actions to the actuator host. Allowlist +
+  token keep it safe when others use the base.
+- *Acceptance:* Unit test with a stubbed rednet: a message from an allowlisted sender + good token
+  dispatches; a non-allowlisted sender or bad token is dropped (dispatch not called). Tests pass;
+  mirror identical.
+
+**CTRL-3 — One real redstone toggle end-to-end** · S · med · deps: CTRL-2 · **IN-GAME**
+- *What:* Wire CTRL-1's actuator callback to `redstone.setOutput` on a configured side for a single
+  `redstone_toggle` action, exposed as one button on a screen (or a `control` CLI command).
+  Config-driven side + enable, gated by `allowRedstone`. Mirror.
+- *Why:* The smallest end-to-end proof of the control center: tap → gated dispatch → real redstone
+  output. Turns the dead capability scaffolding into a working feature.
+- *Acceptance:* Unit test: the toggle drives a stubbed `redstone.setOutput` with the configured
+  side/level **only** when `allowRedstone` is true. Tests pass; mirror identical. **in-game-verify: pending** (real redstone).
+
 ---
 
 ## 5. Recommended sequencing
 
-1. **STAB first** (operator's top priority + cheap pure-code): STAB-1 → STAB-2 →
-   STAB-4 → STAB-5 → STAB-3 → STAB-7. (STAB-6 mostly done — skip/minimal.)
-2. **QUICK**, gated by **QUICK-2** (power-math tests): QUICK-2 → QUICK-1 → QUICK-3 →
-   QUICK-4 → QUICK-5 (needs STAB-2) → QUICK-6 → PWR-1.
-3. **UI** as a strict chain: UI-1 → UI-2 → UI-3 → UI-4 / UI-5.
-4. **VIEW** founded on VIEW-1: VIEW-1 → VIEW-2 → VIEW-3 → VIEW-4 → VIEW-6; VIEW-5
-   branches off VIEW-1 in parallel.
-5. **CRAFT:** pull CRAFT-3/4/5/6 (pure-logic) forward and interleave with QUICK
-   whenever the loop needs unattended work. CRAFT-1/2 run **last / only when live
-   patterns exist**.
+Reordered for the operator's stated priorities (2026-06-25 review): **reliability +
+control + autocraft-truth first**; the external viewer is wanted but secondary (the
+in-game grid covers ad-hoc lookups); UI polish is last. Lead each workstream with behavior
+the operator can *feel*; let invisible test-only tasks ride behind the fix they pin.
 
-**Guiding rule:** never let an in-game-blocked task stall the loop — there is always
-pure-code work (STAB / CRAFT-logic / UI tests / VIEW-logic) available.
+1. **Tier 1 — Reliability bones:** STAB-2 → STAB-4 → STAB-5 → STAB-1 (pins STAB-2) →
+   STAB-3 → STAB-7. (STAB-6 already done.)
+2. **Tier 2 — Autocraft truth** (unblocked — crafting is live): QUICK-5 → CRAFT-3 →
+   CRAFT-1 (in-game probe) → CRAFT-2 (in-game-verify).
+3. **Tier 3 — Control foundation** (minimal, staged): CTRL-1 → CTRL-2 → CTRL-3 (in-game).
+4. **Tier 4 — External viewer:** VIEW-1 → VIEW-2 → VIEW-3; VIEW-5 branches off VIEW-1.
+5. **Tier 5 — Polish & power:** QUICK-2 → UI-1 (flicker kill) → QUICK-1 → QUICK-4 →
+   QUICK-6 → CRAFT-5 → CRAFT-6 → UI-2 → CRAFT-4 → VIEW-4 → VIEW-6 → UI-3 → UI-5 →
+   UI-4 → QUICK-3 → PWR-1.
+
+**Guiding rules:** never let an in-game-blocked task stall the loop — skip to the next
+pure-code task. **Mirror-pair diff is a HARD gate every iteration.** Decide
+wire-in-or-delete for the dead `atm10-draw.lua` double-buffer by the time UI-1 lands
+(don't leave it as cruft on the ~1MB disk). Build for multi-user from the start: gate
+every control action.
 
 ---
 
