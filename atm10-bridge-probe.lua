@@ -91,6 +91,7 @@ out("--- key methods present? ---")
 local WANT = {
   "getItems", "getItem", "getItemDetail", "isItemCraftable", "isCraftable",
   "isItemCrafting", "isCrafting", "getCraftableItems", "craftItem",
+  "getCraftingTasks", "getTasks", "listCraftingTasks", "getCraftingTask",
   "exportItem", "exportItemToPeripheral", "importItem", "importItemFromPeripheral",
   "isConnected", "isOnline", "getStoredEnergy", "getEnergyStorage",
   "getUsedItemStorage", "getTotalItemStorage", "getMaxItemDiskStorage",
@@ -128,6 +129,51 @@ if type(bridge.getCraftableItems) == "function" then
   end
 else
   out("getCraftableItems -> (method absent)")
+end
+
+-- 3b) crafting-task introspection (CRAFT-1): the exact shape of in-flight RS craft
+-- tasks (made/requested/progress) is unconfirmed and gates CRAFT-2. Probe every
+-- likely accessor + isItemCrafting. All read-only -- never crafts.
+out("")
+out("--- crafting-task introspection (read-only) ---")
+local probeName = nil
+do
+  local okItems, items = tryCall(bridge, "getItems")
+  if okItems and type(items) == "table" and items[1] then probeName = items[1].name end
+end
+for _, m in ipairs({ "getCraftingTasks", "getTasks", "listCraftingTasks", "getCraftingTask" }) do
+  if type(bridge[m]) == "function" then
+    ok, v = tryCall(bridge, m)
+    if ok and type(v) == "table" then
+      out(m .. " -> table with " .. #v .. " entries")
+      if v[1] then
+        out("  [1] shape:  " .. shape(v[1]))
+        -- a task usually nests the item + amounts; dump one level deeper
+        for k, val in pairs(v[1]) do
+          if type(val) == "table" then out("    ." .. tostring(k) .. " shape: " .. shape(val)) end
+        end
+      end
+    else
+      out(m .. " -> " .. typedesc(v))
+    end
+  else
+    out(m .. " -> (method absent)")
+  end
+end
+
+-- isItemCrafting(name): probe with a live grid item + a known-pattern id (per base
+-- recon vibrant alloy crafts), so we capture the arg form + the true/false returns.
+for _, m in ipairs({ "isItemCrafting", "isCrafting" }) do
+  if type(bridge[m]) == "function" then
+    if probeName then
+      ok, v = tryCall(bridge, m, { name = probeName })
+      out(m .. '({name="' .. tostring(probeName) .. '"}) -> ' .. typedesc(v))
+    end
+    ok, v = tryCall(bridge, m, { name = "enderio:vibrant_alloy_ingot" })
+    out(m .. '({name="enderio:vibrant_alloy_ingot"}) -> ' .. typedesc(v))
+  else
+    out(m .. " -> (method absent)")
+  end
 end
 
 ok, v = tryCall(bridge, "getStoredEnergy"); out("getStoredEnergy -> " .. typedesc(v))
