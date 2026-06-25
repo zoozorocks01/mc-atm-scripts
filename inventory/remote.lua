@@ -19,6 +19,8 @@ local last = nil
 local lastSeen = nil
 local modemsOpen = false
 local paletteApplied = false
+local viewPage = 1     -- VIEW-2: current page of the paginated stored-items list
+local viewNavRow = nil -- VIEW-2: [< PREV]/[NEXT >] button row, rebuilt each draw
 
 local function peripheralTypeMatches(actual, expected)
   if actual == expected then return true end
@@ -235,13 +237,28 @@ local function drawView(data)
     line(9, "RS Usage:  " .. fmt(data.energyUsage) .. " FE/t", colors.white)
   end
 
-  line(11, "Top Stored Items", colors.cyan)
-  local maxRows = math.max(0, h - 12)
-  for i = 1, maxRows do
-    local item = data.topItems and data.topItems[i]
+  -- VIEW-2: paginated, touch-scrollable stored-items list (consumes VIEW-1's bounded
+  -- viewItems; falls back to the 8-item summary if an older source is broadcasting).
+  local items = data.viewItems or data.topItems or {}
+  local headerY, navY = 11, h
+  local listStart = headerY + 1
+  local perPage = math.max(1, navY - listStart)
+  local pg = console.paginate(#items, perPage, viewPage)
+  viewPage = pg.page
+  line(headerY, "Stored Items   " .. #items .. " shown   page " .. pg.page .. "/" .. pg.pages, colors.cyan)
+  for i = pg.from, pg.to do
+    local item = items[i]
     if item then
-      line(11 + i, tostring(i) .. ". " .. tostring(item.name) .. "  " .. fmt(item.amount), colors.white)
+      local y = listStart + (i - pg.from)
+      line(y, rjust(i, 4) .. ". " .. uiDraw.fit(tostring(item.name), math.max(8, w - 18)) ..
+        "  " .. rjust(fmt(item.amount), 10), colors.white)
     end
+  end
+  -- nav row (reuses the tested console.buttonRow / buttonHit)
+  viewNavRow = console.buttonRow({ { label = "< PREV", key = "prev" }, { label = "NEXT >", key = "next" } }, navY, 1)
+  for _, b in ipairs(viewNavRow.buttons) do
+    local enabled = (b.key == "prev" and pg.page > 1) or (b.key == "next" and pg.page < pg.pages)
+    uiDraw.write(monitor, b.x1, navY, b.text, enabled and colors.cyan or colors.gray, colors.black)
   end
 end
 
@@ -371,6 +388,27 @@ local function draw(data)
   end
 end
 
+-- VIEW-2: redraw + touch paging helpers.
+local function redraw()
+  -- A render error (e.g. a malformed broadcast) logs and self-heals on the next
+  -- tick instead of crashing the display.
+  local ok, err = pcall(draw, last)
+  if not ok then
+    print("draw error: " .. tostring(err))
+    pcall(drawWaiting, "Render error; retrying")
+  end
+end
+
+local function handleViewTouch(x, y)
+  if PROFILE ~= "view" then return end -- only the inventory list paginates
+  local key = viewNavRow and console.buttonHit(viewNavRow, x, y)
+  if key == "prev" then viewPage = math.max(1, viewPage - 1)
+  elseif key == "next" then viewPage = viewPage + 1 end -- paginate() clamps to the last page
+end
+
+-- Event-driven loop: touch paging (monitor_touch) works alongside rednet updates;
+-- a periodic timer ages the readiness banner even with no new broadcast.
+local refreshTimer = nil
 while true do
   openModems()
 
@@ -382,21 +420,26 @@ while true do
   if not modemsOpen then
     if monitor then drawWaiting("No modem found") else print("No modem found") end
     sleep(2)
-  elseif monitor then
-    local _, msg = rednet.receive(PROTOCOL, 1)
-    if type(msg) == "table" and msg.kind == "inventory_snapshot" then
-      last = msg
-      lastSeen = os.clock()
-    end
-    -- A render error (e.g. a malformed broadcast) logs and self-heals on the
-    -- next tick instead of crashing the display.
-    local ok, err = pcall(draw, last)
-    if not ok then
-      print("draw error: " .. tostring(err))
-      pcall(drawWaiting, "Render error; retrying")
-    end
-  else
+  elseif not monitor then
     print("No monitor found. Retrying...")
     sleep(2)
+  else
+    if not refreshTimer then refreshTimer = os.startTimer(1) end
+    local ev = { os.pullEvent() }
+    local kind = ev[1]
+    if kind == "rednet_message" and ev[4] == PROTOCOL then
+      local msg = ev[3]
+      if type(msg) == "table" and msg.kind == "inventory_snapshot" then
+        last = msg
+        lastSeen = os.clock()
+      end
+      redraw()
+    elseif kind == "monitor_touch" then
+      handleViewTouch(ev[3], ev[4])
+      redraw()
+    elseif kind == "timer" and ev[2] == refreshTimer then
+      redraw()
+      refreshTimer = os.startTimer(1)
+    end
   end
 end
