@@ -232,8 +232,13 @@ just the script will crash on the first `require`):
 ```lua
 wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/atm10-update.lua update
 update inventory-source
-reboot
+safereboot
 ```
+
+After the first install use **`safereboot`, not `reboot`**, on this computer —
+rebooting while a craft is in flight crashes the server (see "Avoiding the
+AdvancedPeripherals craft-job crash" below). On a fresh install with nothing
+crafting, `safereboot` reboots immediately.
 
 Low-stock watches and stock keeper settings live in `inventory-config`.
 The updater installs that config only if it is missing, so your edited values
@@ -300,6 +305,32 @@ bridge (remote viewers are push-driven — they read broadcasts, never call it).
   `maxCraftsPerCycle` RS craft-tree calculations of up to `maxRequest` each (real
   RS work). If a healthy server dips only while auto grinds a big backlog, lower
   these (e.g. `3` / `16384`).
+
+### Avoiding the AdvancedPeripherals craft-job crash
+
+There is a known AdvancedPeripherals bug: if a computer **detaches while AP still
+has an RS craft job pending**, AP fires that job's completion event at a computer
+that is gone (`NotAttachedException`), and the uncaught throw **crashes the whole
+server tick**. Reads (`getItems`, energy, storage) are safe — only the autocraft
+path creates a long-lived, event-firing job. The triggers are anything that
+detaches the manager: a reboot/`update`, a chunk unload, or a broken modem link.
+AP's job list also lags the on-screen queue, so "nothing crafting" is not enough.
+
+We can't patch the mod, so we remove the triggers:
+
+- **`safereboot` instead of `reboot`.** On any computer wired to an rs_bridge,
+  run `safereboot` (shipped by the updater). It waits until no craft is in flight
+  **and** AP's drain window (120s since the last `craftItem`) has elapsed — with a
+  live `isItemCrafting` re-check and a visible countdown — then reboots. Viewer and
+  power computers (no bridge) reboot immediately. `safereboot --force` overrides.
+  The manager console also shows a `reboot ok` / `DO NOT REBOOT Ns` chip on line 4.
+- **Force-load the CC chunk.** Keep the manager computer + rs_bridge in a
+  force-loaded chunk (Chunky `/chunky force`, FTB Chunks claim+load, or spawn
+  chunks) so they never detach when you walk away / log off. This removes the
+  passive trigger entirely.
+- **Hang watchdog.** The manager emits a heartbeat each cycle; its startup wrapper
+  restarts the *program* (never the computer, so the bridge stays attached) if the
+  heartbeat stops for 90s — recovering a frozen console without a hard cycle.
 
 ### Install on remote inventory display
 
