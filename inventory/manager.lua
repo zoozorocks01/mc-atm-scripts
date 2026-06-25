@@ -20,6 +20,7 @@ local MANAGED_FILE = ".atm10-managed" -- operator-set quotas (tap-to-manage stor
 local TRENDS_FILE = ".atm10-trends" -- smart-mode consumption history (survives reboot)
 local DISMISSED_FILE = ".atm10-dismissed" -- smart suggestions the operator cleared (survives reboot)
 local CRAFTSTATE_FILE = ".atm10-craftstate" -- drain snapshot read by `safereboot` to avoid the AP detach-crash
+local HEARTBEAT_FILE = ".atm10-heartbeat" -- liveness ping; the startup watchdog restarts a hung manager
 -- Cycleable +/- step sizes in the quota editor: by count AND by stacks (a stack
 -- is 64), so big late-game numbers are quick to dial in. {value, label}.
 local STACK = 64
@@ -349,6 +350,12 @@ end
 
 local function saveQueue(q)
   return atomicWrite(QUEUE_FILE, textutils.serialize(q))
+end
+
+-- Liveness ping: the startup watchdog restarts the program if these stop landing
+-- (a hang the pcall-restart loop can't catch). Fixed-size; overwrites in place.
+local function writeHeartbeat(now)
+  pcall(atomicWrite, HEARTBEAT_FILE, tostring(now or 0))
 end
 
 -- Persist a tiny drain snapshot so `safereboot` can decide whether detaching this
@@ -2069,6 +2076,9 @@ while true do
   if kind == "timer" and ev[2] == refreshTimer then
     guard(advancePageIfDue)
     guard(refreshAndDraw)
+    -- a completed refresh tick means the loop is alive: ping the watchdog. (A hang
+    -- inside refreshAndDraw stops these pings, and the startup watchdog restarts us.)
+    writeHeartbeat(nowMs())
     -- poll interval is operator-tunable (config.refreshSeconds) so a laggy server
     -- can dial back RS-Bridge load; falls back to the constant before first load
     refreshTimer = os.startTimer((config and config.refreshSeconds) or REFRESH_SECONDS)

@@ -832,6 +832,8 @@ local luaFiles = {
   "inventory/config.lua", "inventory/config-example.lua",
   "power/display.lua", "power/probe.lua",
   "atm10-update.lua", "safereboot.lua",
+  "inventory/manager-startup.lua", "inventory-startup.lua",
+  "inventory/remote-startup.lua", "inventory-remote-startup.lua",
   "inventory-info.lua", "inventory-remote.lua", "power-display.lua",
   "atm10-status.lua", "atm10-palette.lua", "atm10-control.lua",
   "atm10-draw.lua", "atm10-stockplan.lua", "atm10-queue.lua",
