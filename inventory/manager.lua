@@ -1532,6 +1532,19 @@ local function drawSmartPage(data)
   line(h, "Tapping opens the editor pre-filled; SAVE to apply.", colors.gray)
 end
 
+-- Global reboot-safety chip: tells the operator, on every page, whether detaching
+-- this computer now (reboot / shutdown / update) is safe or would risk the AP
+-- craft-job server crash. Mirrors control.rebootSafety / the `safereboot` command.
+local function rebootChip()
+  local crafting = 0
+  for _, e in ipairs(cqueue.list(craftQueue or cqueue.new())) do
+    if e.state == cqueue.CRAFTING then crafting = crafting + 1 end
+  end
+  local v = control.rebootSafety({ now = nowMs(), lastCraftAt = lastCraftAt, crafting = crafting })
+  if v.safe then return "reboot ok", colors.gray end
+  return "DO NOT REBOOT" .. (v.secondsLeft and (" " .. v.secondsLeft .. "s") or ""), colors.red
+end
+
 local function draw(data)
   if not monitor then return end
 
@@ -1604,6 +1617,11 @@ local function draw(data)
     modeChip = { x1 = 1, x2 = #chip, y = 4 }
     uiDraw.write(monitor, #chip + 2, 4, "autocraft: " .. (craftLive and "ON" or "off") ..
       "   Queue: " .. cqueue.count(craftQueue), craftLive and colors.lime or colors.gray)
+    -- right-aligned reboot-safety chip (warns before a detach that could crash the
+    -- server); only drawn when the monitor is wide enough to avoid clobbering above
+    local rbText, rbColor = rebootChip()
+    local rbx = tabW - #rbText + 1
+    if rbx > #chip + 30 then uiDraw.write(monitor, rbx, 4, rbText, rbColor, colors.black) end
   end
 
   -- the quota editor is a modal: it renders over any tab when open (unless we're

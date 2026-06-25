@@ -346,9 +346,16 @@ local function draw(data)
   monitor.clear()
   line(1, TITLE .. "  [" .. PROFILE .. "]", colors.cyan)
 
+  -- Readiness banner: say plainly whether this screen is live or reconnecting, so
+  -- a frozen-looking display is never mistaken for current data.
   local age = os.clock() - (lastSeen or os.clock())
-  local ageColor = age > STALE_SECONDS and colors.orange or colors.gray
-  line(2, "Source: " .. tostring(data.source or "?") .. "   age " .. math.floor(age) .. "s", ageColor)
+  if not lastSeen then
+    line(2, "STARTING - waiting for source...", colors.yellow)
+  elseif age > STALE_SECONDS then
+    line(2, "RECONNECTING - last update " .. math.floor(age) .. "s ago", colors.orange)
+  else
+    line(2, "LIVE - source " .. tostring(data.source or "?") .. "   updated " .. math.floor(age) .. "s ago", colors.lime)
+  end
 
   local onlineText, onlineColor = "unknown", colors.yellow
   if data.online == true then onlineText, onlineColor = "ONLINE", colors.lime
