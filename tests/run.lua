@@ -153,6 +153,24 @@ local cAct4 = mkActuator()
 local cr4 = control.handleMessage(12, { action = "self_destruct", target = "left", token = "tok" }, chanPolicy, cAct4)
 t.check(cr4.ok == false and cr4.reason == "unknown action", "valid sender, unknown action -> rejected by dispatch")
 t.eq(#actuatorCalls, 0, "unknown action never actuates")
+
+-- CTRL-3: the redstone actuator, driven through dispatch (gated by allowRedstone)
+local rsCalls, rsState = {}, {}
+local fakeRs = { setOutput = function(side, on) rsCalls[#rsCalls + 1] = { side = side, on = on } end }
+local rsActuator = control.redstoneActuator(fakeRs, rsState)
+-- capability off -> dispatch rejects, setOutput never called
+control.dispatch(control.command({ action = "redstone_toggle", target = "left" }), control.policy({ allowRedstone = false }), rsActuator)
+t.eq(#rsCalls, 0, "redstone toggle blocked when allowRedstone is false (no setOutput)")
+-- allowed -> toggle ON
+control.dispatch(control.command({ action = "redstone_toggle", target = "left" }), control.policy({ allowRedstone = true }), rsActuator)
+t.eq(#rsCalls, 1, "allowed toggle drives setOutput exactly once")
+t.check(rsCalls[1].side == "left" and rsCalls[1].on == true, "toggle turns the configured side ON")
+-- toggle again -> OFF (state tracked per side)
+control.dispatch(control.command({ action = "redstone_toggle", target = "left" }), control.policy({ allowRedstone = true }), rsActuator)
+t.check(rsCalls[2].on == false, "second toggle on the same side turns it OFF")
+-- redstone_set on a different side
+control.dispatch(control.command({ action = "redstone_set", target = "back", args = { on = true } }), control.policy({ allowRedstone = true }), rsActuator)
+t.check(rsCalls[3].side == "back" and rsCalls[3].on == true, "redstone_set on drives the configured side ON")
 end -- end control-command test scope
 
 -- ---------------------------------------------------------------------------

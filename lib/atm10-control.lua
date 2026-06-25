@@ -367,4 +367,41 @@ function control.handleMessage(senderId, message, policy, actuator)
   return control.dispatch(control.command(message or {}), policy, actuator)
 end
 
+-- CTRL-3: a redstone actuator for dispatch -- the first REAL control output. The
+-- redstone API is injected (the CC `rs`/`redstone` global on the host, a fake in
+-- tests) and `state` tracks each side's current level so redstone_toggle can flip
+-- it. It only ever drives the command's target side; dispatch has already enforced
+-- the redstone capability, so reaching here means the action is authorized.
+--   redstone_toggle: flip the side between 0 and 15.
+--   redstone_set:    args.level (0-15) or args.on (bool); defaults ON.
+-- Returns the level set (0-15).
+function control.redstoneActuator(rsApi, state)
+  rsApi = rsApi or {}
+  state = state or {}
+  return function(cmd)
+    local side = cmd.target
+    if type(side) ~= "string" or side == "" then error("missing redstone side", 0) end
+    local args = (type(cmd.args) == "table") and cmd.args or {}
+
+    local level
+    if cmd.action == "redstone_toggle" then
+      level = ((tonumber(state[side]) or 0) > 0) and 0 or 15
+    elseif args.level ~= nil then
+      level = math.max(0, math.min(15, math.floor(tonumber(args.level) or 0)))
+    elseif args.on ~= nil then
+      level = (args.on == true) and 15 or 0
+    else
+      level = 15
+    end
+
+    state[side] = level
+    if level > 0 and level < 15 and type(rsApi.setAnalogOutput) == "function" then
+      rsApi.setAnalogOutput(side, level)
+    else
+      rsApi.setOutput(side, level > 0)
+    end
+    return level
+  end
+end
+
 return control

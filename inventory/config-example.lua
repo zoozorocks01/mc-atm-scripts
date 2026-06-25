@@ -13,6 +13,17 @@ return {
   -- computer regardless of mode.
   allowAutocraft = true,
 
+  -- CONTROL CENTER (CTRL): OFF by default. When enabled, this computer accepts
+  -- gated "atm10-control-v1" rednet commands (e.g. a redstone toggle) from
+  -- allowlisted senders, dispatched through the same capability gates as autocraft.
+  -- This is the foundation for a factory/base control surface; build it out as you
+  -- add controllable outputs. Leave disabled unless you are wiring control.
+  controlEnabled = false,      -- master switch: receive control commands at all
+  allowRedstone = false,       -- capability: permit redstone_set / redstone_toggle
+  -- allowExport = false,      -- (future) capability: permit item exports
+  controlToken = nil,          -- shared secret a command must carry (nil = no token)
+  controlAllowedSenders = nil, -- { 7, 12 } = only these computer IDs (nil = any sender)
+
   -- Bridge poll interval (seconds, floored at 2). A tuning knob, NOT a TPS fix:
   -- live /spark profiling found the once-per-poll getItems() is not a measurable
   -- server cost (an entity cull, not a slower poll, is what restored TPS). Lower

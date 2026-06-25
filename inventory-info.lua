@@ -16,8 +16,7 @@ local BROADCAST_PROTOCOL = "atm10-inventory-v1"
 local CONFIG_FILE = "inventory-config"
 local LEDGER_FILE = ".atm10-stock-ledger"
 local QUEUE_FILE = ".atm10-craft-queue"
-local CRAFT_RESULTS_FILE = ".atm10-craft-results" -- per-item last-craft outcome (QUICK-5)
-local CRAFT_RESULTS_MAX = 150 -- cap: bounded like every other on-disk state (~1MB disk)
+local CRAFT_RESULTS = { file = ".atm10-craft-results", max = 150 } -- last-craft outcome (QUICK-5); bounded
 local MANAGED_FILE = ".atm10-managed" -- operator-set quotas (tap-to-manage store)
 local TRENDS_FILE = ".atm10-trends" -- smart-mode consumption history (survives reboot)
 local DISMISSED_FILE = ".atm10-dismissed" -- smart suggestions the operator cleared (survives reboot)
@@ -96,8 +95,7 @@ local pageShownAt = nil
 local firedTimes = {}      -- ms timestamps of crafts fired in the last 60s (throughput readout)
 local lastCraftAt = nil    -- ms of the most recent craftItem (unpruned; drives reboot-safety)
 local craftQueue = nil
-local craftResults = {}          -- name -> { ok, reason, at }: last-craft outcome (QUICK-5)
-local craftResultsLoaded = false -- lazily load the persisted results on first use
+local craftResults = nil -- name -> { ok, reason, at } (QUICK-5); nil = not yet loaded from disk
 local managedStore = nil
 local itemsByName = {}      -- name -> item, rebuilt each scan (avoids per-item bridge.getItem)
 local craftableCache = {}   -- name -> { v = bool, at = ms } (TTL'd, see constants)
@@ -138,8 +136,7 @@ local TREND_MAX_WINDOW_MS = 21600000  -- restart a trend window after 6h so drai
 local TREND_MAX_ENTRIES = 800
 local dismissedSuggestions = {} -- names the operator cleared (persisted to disk)
 local dismissedLoaded = false   -- lazily load persisted dismissals on first smart cycle
-local DISMISSED_MAX_AGE_MS = 604800000 -- re-surface a cleared suggestion after 7d (drain may have changed)
-local DISMISSED_MAX_ENTRIES = 400      -- hard cap (drop-oldest); same ~1MB-disk discipline as trends
+local DISMISSED_OPTS = { maxAgeMs = 604800000, maxEntries = 400 } -- 7d TTL + 400 cap (drop-oldest)
 local browsePage = 1
 local browseFilter = false  -- false = whole grid; true = managed (quota'd) items only
 local browseFilterBtn = nil -- hit region for the Browse ALL/MANAGED toggle
@@ -415,8 +412,8 @@ end
 -- craft outcome survives reboots and is debuggable from the editor/queue without
 -- coupling to the ledger's error semantics.
 local function loadCraftResults()
-  if not fs.exists(CRAFT_RESULTS_FILE) then return {} end
-  local file = fs.open(CRAFT_RESULTS_FILE, "r")
+  if not fs.exists(CRAFT_RESULTS.file) then return {} end
+  local file = fs.open(CRAFT_RESULTS.file, "r")
   if not file then return {} end
   local text = file.readAll()
   file.close()
@@ -426,14 +423,11 @@ local function loadCraftResults()
 end
 
 local function saveCraftResults(map)
-  return atomicWrite(CRAFT_RESULTS_FILE, textutils.serialize(map or {}))
+  return atomicWrite(CRAFT_RESULTS.file, textutils.serialize(map or {}))
 end
 
 local function ensureCraftResults()
-  if not craftResultsLoaded then
-    craftResults = loadCraftResults()
-    craftResultsLoaded = true
-  end
+  if craftResults == nil then craftResults = loadCraftResults() end
   return craftResults
 end
 
@@ -880,6 +874,30 @@ local function buildPolicy()
   })
 end
 
+-- CTRL-3: the control-center foundation, wired into the console. Off by default
+-- (config.controlEnabled). A control command arrives over the "atm10-control-v1"
+-- rednet protocol; handleControlMessage authorizes the sender + token and dispatches
+-- it through the SAME capability gates as autocraft, then a real redstone output
+-- fires. redstoneState tracks each side so a toggle flips it.
+local redstoneState = {}
+local function handleControlMessage(senderId, message)
+  if config.controlEnabled ~= true then return end -- master off-switch (default off)
+  local policy = control.policy({
+    allowRedstone = config.allowRedstone == true,
+    allowExport = config.allowExport == true,
+    token = config.controlToken,
+    allowedSenders = config.controlAllowedSenders,
+  })
+  local result = control.handleMessage(senderId, message, policy,
+    control.redstoneActuator(rs, redstoneState))
+  if result and result.ok then
+    flashMsg = "control: " .. tostring(result.action)
+  else
+    flashMsg = "control denied: " .. tostring(result and result.reason or "?")
+  end
+  flashAt = nowMs()
+end
+
 -- Run the approved craft queue through the gated runner. The runner performs at
 -- most one bridge request per approval; nothing crafts unless mode + capability
 -- + approval all pass. Returns nothing; prints a short line per request/failure.
@@ -925,7 +943,7 @@ local function processCraftQueue(now)
     ensureCraftResults()
     for _, r in ipairs(summary.requested) do cqueue.recordResult(craftResults, r.name, true, nil, now) end
     for _, f in ipairs(summary.failed) do cqueue.recordResult(craftResults, f.name, false, f.reason, now) end
-    cqueue.pruneResults(craftResults, CRAFT_RESULTS_MAX)
+    cqueue.pruneResults(craftResults, CRAFT_RESULTS.max)
     saveCraftResults(craftResults)
   end
 
@@ -1056,8 +1074,7 @@ local function scan()
       trendsLoaded = true
     end
     if not dismissedLoaded then
-      dismissedSuggestions = suggest.pruneDismissed(loadDismissed(), nowMs(),
-        { maxAgeMs = DISMISSED_MAX_AGE_MS, maxEntries = DISMISSED_MAX_ENTRIES })
+      dismissedSuggestions = suggest.pruneDismissed(loadDismissed(), nowMs(), DISMISSED_OPTS)
       dismissedLoaded = true
     end
     -- track drain for ALL items, not just craftable ones: with the live grid
@@ -2076,8 +2093,7 @@ local function handleTouch(x, y)
     for _, s in ipairs((lastData and lastData.suggestions) or {}) do
       if s.name then dismissedSuggestions[s.name] = clearedAt end
     end
-    dismissedSuggestions = suggest.pruneDismissed(dismissedSuggestions, clearedAt,
-      { maxAgeMs = DISMISSED_MAX_AGE_MS, maxEntries = DISMISSED_MAX_ENTRIES })
+    dismissedSuggestions = suggest.pruneDismissed(dismissedSuggestions, clearedAt, DISMISSED_OPTS)
     saveDismissed(dismissedSuggestions)
     pageShownAt = nowMs()
     renderCurrent()
@@ -2203,5 +2219,9 @@ while true do
       if monitor then pickTextScale() end
       renderCurrent()
     end)
+  elseif kind == "rednet_message" and ev[4] == control.PROTOCOL then
+    -- CTRL-3: inbound control command (off unless config.controlEnabled). Guarded
+    -- like every loop step so a malformed command can't freeze the console.
+    guard(handleControlMessage, ev[2], ev[3])
   end
 end
