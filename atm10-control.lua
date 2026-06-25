@@ -350,4 +350,21 @@ function control.dispatch(cmd, policy, actuator)
   return { ok = true, reason = "ok", action = cmd.action }
 end
 
+-- CTRL-2: receive an inbound control message (e.g. from a rednet "control" channel).
+-- Authorizes the SENDER (allowlist) + TOKEN against the policy, then feeds the
+-- command to dispatch. On an auth failure it returns WITHOUT dispatching, so the
+-- actuator is never reached -- the transport layer is the first gate, dispatch the
+-- second. senderId comes from the transport; message is the received table carrying
+-- the command fields { action, target, args, token }. actuator injected by the host.
+function control.handleMessage(senderId, message, policy, actuator)
+  policy = policy or {}
+
+  local okAuth, authReason = control.authorize(senderId, message, policy)
+  if not okAuth then
+    return { ok = false, reason = authReason, action = (type(message) == "table") and message.action or nil }
+  end
+
+  return control.dispatch(control.command(message or {}), policy, actuator)
+end
+
 return control

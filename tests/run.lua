@@ -94,6 +94,7 @@ t.check((control.authorize(99, {}, control.policy({}))) == true, "open policy ac
 
 -- ---------------------------------------------------------------------------
 print("control commands (CTRL-1 dispatch chokepoint)")
+do -- scope the control-command test locals (Lua caps locals at 200 per function)
 local ctrlPolicy = control.policy({ allowRedstone = true, token = "t0k" })
 local actuatorCalls
 local function mkActuator() actuatorCalls = {}; return function(cmd, spec) actuatorCalls[#actuatorCalls + 1] = { target = cmd.target, cap = spec.capability } end end
@@ -128,6 +129,31 @@ local r6 = control.dispatch(control.command({ action = "redstone_set", target = 
   control.policy({ allowRedstone = true }), act6)
 t.check(r6.ok == true, "no-token policy accepts a command without a token")
 t.eq(#actuatorCalls, 1, "token-less permitted command still actuates once")
+
+-- ---------------------------------------------------------------------------
+print("control channel (CTRL-2 authorize -> dispatch)")
+local chanPolicy = control.policy({ allowRedstone = true, token = "tok", allowedSenders = { 7, 12 } })
+-- allowlisted sender + good token -> authorized and dispatched (actuator once)
+local cAct1 = mkActuator()
+local cr1 = control.handleMessage(7, { action = "redstone_toggle", target = "left", token = "tok" }, chanPolicy, cAct1)
+t.check(cr1.ok == true and cr1.action == "redstone_toggle", "allowlisted sender + good token dispatches")
+t.eq(#actuatorCalls, 1, "valid control message actuates exactly once")
+-- non-allowlisted sender -> dropped before dispatch (actuator never reached)
+local cAct2 = mkActuator()
+local cr2 = control.handleMessage(99, { action = "redstone_toggle", target = "left", token = "tok" }, chanPolicy, cAct2)
+t.check(cr2.ok == false and cr2.reason == "sender not allowed", "non-allowlisted sender is dropped")
+t.eq(#actuatorCalls, 0, "dropped sender never reaches the actuator")
+-- bad token -> dropped before dispatch
+local cAct3 = mkActuator()
+local cr3 = control.handleMessage(7, { action = "redstone_toggle", target = "left", token = "NOPE" }, chanPolicy, cAct3)
+t.check(cr3.ok == false and cr3.reason == "bad token", "bad token is dropped")
+t.eq(#actuatorCalls, 0, "bad-token message never reaches the actuator")
+-- unknown action from a valid sender -> authorized but dispatch rejects it
+local cAct4 = mkActuator()
+local cr4 = control.handleMessage(12, { action = "self_destruct", target = "left", token = "tok" }, chanPolicy, cAct4)
+t.check(cr4.ok == false and cr4.reason == "unknown action", "valid sender, unknown action -> rejected by dispatch")
+t.eq(#actuatorCalls, 0, "unknown action never actuates")
+end -- end control-command test scope
 
 -- ---------------------------------------------------------------------------
 print("reboot safety (drain guard against the AP detach crash)")
