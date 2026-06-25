@@ -60,6 +60,11 @@ while true do
   term.setCursorPos(1, 1)
   term.setTextColor(colors.white)
   print("Starting " .. PROGRAM)
+  -- The ONLY real fix for the AdvancedPeripherals detach crash is keeping this CC
+  -- chunk loaded; a reboot/unload while a craft job is pending crashes the server
+  -- tick. Remind the operator on every boot (see README "Stability").
+  term.setTextColor(colors.orange)
+  print("STABILITY: this computer must be chunk force-loaded (see README).")
 
   -- drop any prior run's heartbeat so the watchdog measures THIS run only
   if fs.exists(HEARTBEAT_FILE) then pcall(fs.delete, HEARTBEAT_FILE) end
