@@ -76,9 +76,14 @@ local function readRole()
 end
 
 local function writeRole(role)
-  local file = fs.open(ROLE_FILE, "w")
+  -- Atomic: write to a tmp then move over, so the live role file is never left
+  -- truncated/empty if a crash interrupts the write (open "w" truncates at once).
+  local tmp = ROLE_FILE .. ".new"
+  local file = fs.open(tmp, "w")
   file.write(role)
   file.close()
+  if fs.exists(ROLE_FILE) then fs.delete(ROLE_FILE) end
+  fs.move(tmp, ROLE_FILE)
 end
 
 local function ensureParentDir(path)
@@ -104,6 +109,17 @@ local function download(remote, localName)
 
   ensureParentDir(localName)
 
+  -- Self-heal: if a prior run crashed in the tiny window between deleting the live
+  -- script and moving the freshly-downloaded replacement into place, the verified
+  -- replacement is still staged in tmp while localName is missing. Finish that move
+  -- BEFORE deleting tmp to re-download, so an interrupted update can't leave the
+  -- computer with a deleted-but-unreplaced script. (localName is only ever deleted
+  -- below AFTER tmp is verified complete, so "localName missing + tmp present" means
+  -- tmp is the complete replacement.)
+  if not fs.exists(localName) and fs.exists(tmp) then
+    fs.move(tmp, localName)
+  end
+
   if fs.exists(tmp) then fs.delete(tmp) end
 
   print("Downloading " .. remote .. " -> " .. localName)
@@ -112,6 +128,9 @@ local function download(remote, localName)
     error("Download failed: " .. remote, 0)
   end
 
+  -- The replacement is fully downloaded + verified above; only now replace the live
+  -- script. CC's fs.move won't overwrite, so the delete is unavoidable; the staged
+  -- tmp + self-heal above make that one-rename gap recoverable on the next run.
   if fs.exists(localName) then fs.delete(localName) end
   fs.move(tmp, localName)
 end
