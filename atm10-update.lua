@@ -15,6 +15,7 @@ local commonFiles = {
   { remote = "lib/atm10-presets.lua", localName = "atm10-presets.lua" },
   { remote = "lib/atm10-console.lua", localName = "atm10-console.lua" },
   { remote = "atm10-bridge-probe.lua", localName = "atm10-bridge-probe" }, -- READ-ONLY RS Bridge diagnostic
+  { remote = "safereboot.lua", localName = "safereboot" }, -- drain-safe reboot (avoids AP detach crash)
   { remote = "atm10-theme", localName = "atm10-theme", onlyIfMissing = true },
 }
 
@@ -151,4 +152,7 @@ end
 
 print("")
 print("Update complete.")
-print("Run reboot to restart with the new files.")
+-- Use safereboot, NOT reboot: rebooting while AdvancedPeripherals still has a
+-- craft job pending crashes the whole server (NotAttachedException). safereboot
+-- waits out the craft drain first; on a viewer/power computer it reboots at once.
+print("Run safereboot to restart safely (NOT reboot).")

@@ -19,6 +19,7 @@ local QUEUE_FILE = ".atm10-craft-queue"
 local MANAGED_FILE = ".atm10-managed" -- operator-set quotas (tap-to-manage store)
 local TRENDS_FILE = ".atm10-trends" -- smart-mode consumption history (survives reboot)
 local DISMISSED_FILE = ".atm10-dismissed" -- smart suggestions the operator cleared (survives reboot)
+local CRAFTSTATE_FILE = ".atm10-craftstate" -- drain snapshot read by `safereboot` to avoid the AP detach-crash
 -- Cycleable +/- step sizes in the quota editor: by count AND by stacks (a stack
 -- is 64), so big late-game numbers are quick to dial in. {value, label}.
 local STACK = 64
@@ -90,6 +91,7 @@ local paletteApplied = false
 local pageIndex = 1
 local pageShownAt = nil
 local firedTimes = {}      -- ms timestamps of crafts fired in the last 60s (throughput readout)
+local lastCraftAt = nil    -- ms of the most recent craftItem (unpruned; drives reboot-safety)
 local craftQueue = nil
 local managedStore = nil
 local itemsByName = {}      -- name -> item, rebuilt each scan (avoids per-item bridge.getItem)
@@ -347,6 +349,18 @@ end
 
 local function saveQueue(q)
   return atomicWrite(QUEUE_FILE, textutils.serialize(q))
+end
+
+-- Persist a tiny drain snapshot so `safereboot` can decide whether detaching this
+-- computer is safe even after the manager is terminated (the file outlives the
+-- process). Fixed-size; overwrites in place (no growth). Fail-safe: best effort.
+local function writeCraftState(now, crafting, craftingNames)
+  pcall(atomicWrite, CRAFTSTATE_FILE, textutils.serialize({
+    at = now,
+    lastCraftAt = lastCraftAt,
+    crafting = tonumber(crafting) or 0,
+    craftingNames = craftingNames or {},
+  }))
 end
 
 -- Smart-mode trend history is wall-clock based (os.epoch), so persisting it lets
@@ -836,6 +850,7 @@ local function processCraftQueue(now)
 
   for _, r in ipairs(summary.requested) do
     firedTimes[#firedTimes + 1] = now
+    lastCraftAt = now -- unpruned: marks the start of the AP drain window for safereboot
     print("Craft requested: " .. tostring(r.name) .. " x" .. tostring(r.amount))
   end
   -- keep only the last 60s so #firedTimes == crafts/min (bounds the list too)
@@ -845,6 +860,12 @@ local function processCraftQueue(now)
   for _, f in ipairs(summary.failed) do
     print("Craft failed (" .. tostring(f.reason) .. "): " .. tostring(f.name))
   end
+
+  -- Persist the drain snapshot every cycle so `safereboot` (which runs after the
+  -- manager is terminated) can tell whether detaching now would crash the server.
+  local craftingNames = {}
+  for _, e in ipairs(inflight) do craftingNames[#craftingNames + 1] = e.name end
+  writeCraftState(now, #inflight, craftingNames)
 end
 
 -- AUTO MODE: maintain quotas hands-free. Auto-approve every craftable deficit

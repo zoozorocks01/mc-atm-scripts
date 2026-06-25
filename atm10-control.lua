@@ -14,6 +14,11 @@ control.CAPABILITY_EXPORT = "export"
 control.CAPABILITY_REDSTONE = "redstone"
 control.CAPABILITY_SECURITY = "security"
 
+-- How long after the last craftItem a computer must stay attached before it is
+-- safe to detach (reboot/shutdown/update). Covers the window in which
+-- AdvancedPeripherals still holds the craft job and may fire its final event.
+control.DEFAULT_DRAIN_MS = 120000
+
 local validModes = {
   ["monitor"] = true,
   ["dry-run"] = true,
@@ -236,6 +241,46 @@ function control.execute(action, policy)
   end
 
   return action.execute(action)
+end
+
+-- Whether it is safe to detach this computer (reboot / shutdown / update) without
+-- risking the AdvancedPeripherals NotAttachedException server crash. AP keeps its
+-- own craft-job list and fires each job's completion event back into the computer;
+-- if the computer has gone away by then, that uncaught throw kills the whole
+-- server tick. So detaching is safe ONLY when nothing is crafting AND enough time
+-- has elapsed since the last craftItem for AP to finish and fire its final events.
+-- Note AP's job list lags our queue, so "nothing crafting" alone is not enough --
+-- the drain window is what makes it safe.
+--   state = { now = ms, lastCraftAt = ms|nil, crafting = count, drainMs = ms }
+-- Returns { safe = bool, reason = str, crafting = n, secondsLeft = n|nil }.
+function control.rebootSafety(state)
+  state = state or {}
+  local now = tonumber(state.now) or 0
+  local drainMs = tonumber(state.drainMs) or control.DEFAULT_DRAIN_MS
+  local crafting = math.max(0, math.floor(tonumber(state.crafting) or 0))
+  local lastCraftAt = tonumber(state.lastCraftAt)
+
+  if crafting > 0 then
+    return {
+      safe = false,
+      crafting = crafting,
+      reason = crafting .. " craft" .. (crafting == 1 and "" or "s") .. " in flight",
+    }
+  end
+
+  if lastCraftAt then
+    local elapsed = now - lastCraftAt
+    if elapsed < drainMs then
+      return {
+        safe = false,
+        crafting = 0,
+        secondsLeft = math.ceil((drainMs - elapsed) / 1000),
+        reason = "draining recent craft jobs",
+      }
+    end
+  end
+
+  return { safe = true, crafting = 0, secondsLeft = 0, reason = "no crafts in flight" }
 end
 
 return control

@@ -93,6 +93,27 @@ t.check((control.authorize(7, { token = "secret" }, pSecured)) == true, "listed 
 t.check((control.authorize(99, {}, control.policy({}))) == true, "open policy accepts any sender")
 
 -- ---------------------------------------------------------------------------
+print("reboot safety (drain guard against the AP detach crash)")
+local DRAIN = control.DEFAULT_DRAIN_MS
+-- nothing crafting + no recent craft -> safe
+local rsClean = control.rebootSafety({ now = 1000000, lastCraftAt = nil, crafting = 0, drainMs = DRAIN })
+t.check(rsClean.safe == true, "no crafts + no history -> safe")
+-- something in flight -> never safe, regardless of time
+local rsBusy = control.rebootSafety({ now = 1000000, lastCraftAt = 0, crafting = 2, drainMs = DRAIN })
+t.check(rsBusy.safe == false, "crafts in flight -> not safe")
+t.eq(rsBusy.crafting, 2, "reports the in-flight count")
+-- recent craft within the drain window -> not safe + reports a countdown
+local rsDraining = control.rebootSafety({ now = 5000, lastCraftAt = 0, crafting = 0, drainMs = DRAIN })
+t.check(rsDraining.safe == false, "recent craft within drain window -> not safe")
+t.eq(rsDraining.secondsLeft, math.ceil((DRAIN - 5000) / 1000), "countdown = remaining drain seconds")
+-- past the drain window -> safe again
+local rsDrained = control.rebootSafety({ now = DRAIN + 1, lastCraftAt = 0, crafting = 0, drainMs = DRAIN })
+t.check(rsDrained.safe == true, "past drain window -> safe")
+-- a custom shorter window is honored
+local rsShort = control.rebootSafety({ now = 10000, lastCraftAt = 0, crafting = 0, drainMs = 5000 })
+t.check(rsShort.safe == true, "elapsed beyond custom drainMs -> safe")
+
+-- ---------------------------------------------------------------------------
 print("craft action (queue -> control gate)")
 local entry = { name = "mek:alloy", label = "Infused Alloy", request = 128 }
 
@@ -810,7 +831,7 @@ local luaFiles = {
   "inventory/manager.lua", "inventory/remote.lua",
   "inventory/config.lua", "inventory/config-example.lua",
   "power/display.lua", "power/probe.lua",
-  "atm10-update.lua",
+  "atm10-update.lua", "safereboot.lua",
   "inventory-info.lua", "inventory-remote.lua", "power-display.lua",
   "atm10-status.lua", "atm10-palette.lua", "atm10-control.lua",
   "atm10-draw.lua", "atm10-stockplan.lua", "atm10-queue.lua",
