@@ -1244,8 +1244,17 @@ local function drawPlanPage(data)
   local pg = console.paginate(#plans, perPage, planPage)
   planPage = pg.page
 
+  -- CRAFT-3: flag quotas whose item isn't in the live grid. isCraftable is NOT a
+  -- trustworthy signal here (the CC export reports craftable_rows=0 even for items
+  -- that craft fine), so presence in getItems is the only reliable check: a quota
+  -- not in the grid is a typo / version-drift ID, or an item never stocked.
+  local notInGrid = 0
+  for _, e in ipairs(managed.list(managedStore or managed.new())) do
+    if e.name and not itemsByName[e.name] then notInGrid = notInGrid + 1 end
+  end
   line(planLabelY, "Stock Keeper Plan [" .. tostring(effectiveMode()) ..
-    "]   page " .. pg.page .. "/" .. pg.pages, colors.cyan)
+    "]   page " .. pg.page .. "/" .. pg.pages ..
+    (notInGrid > 0 and ("   " .. notInGrid .. " not in grid") or ""), colors.cyan)
   if w >= 72 then
     line(planLabelY + 1, uiDraw.fit("ITEM", math.max(18, w - 39)) .. "     HAVE   TARGET    PLAN   STATUS", colors.gray)
   end
@@ -1547,6 +1556,13 @@ local function drawEditor()
     { label = "x+", key = "ratio:+" },
     { label = "CLR OVF", key = "clrovf" },
   }, 14)
+
+  -- CRAFT-3: a quota whose item isn't in the live grid does nothing useful. Flag it
+  -- distinctly from a recognized item (presence in getItems is the reliable signal;
+  -- isCraftable reads blind here -- see the Plan-page note).
+  if not itemsByName[e.name] then
+    line(15, uiDraw.fit("NOT IN GRID: 0 stored - typo/version-drift ID, or never stocked.", w), colors.orange)
+  end
 
   local actions = { { label = "SAVE", key = "save" } }
   if already then actions[#actions + 1] = { label = "REMOVE", key = "remove" } end
