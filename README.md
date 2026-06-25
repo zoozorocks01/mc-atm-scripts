@@ -180,12 +180,13 @@ numbers are reachable), then use `[-]` / `[+]` on each field:
   set the `x` **ratio** (source units per crafted unit, e.g. 9 ingots → 1 block).
   `CLR OVF` removes the overflow rule.
 
-If `CRAFTTO` is equal to `TARGET`, the planner keeps the saved numbers but uses
-an effective refill band so a dip by one item does not craft one item forever.
-The default band is `max(target * 0.25, 4)` above the floor, tunable in
-`stockKeeper.refillMarginRatio` and `stockKeeper.minRefillMargin`. If a quota
-also has a compress `CEILING`, the refill target is kept below that ceiling; an
-impossible band is shown as blocked instead of silently refill/compress thrashing.
+Refill uses your **exact** numbers (like RS/AE2 level emitters): set one number
+(`TARGET == CRAFTTO`) to maintain that floor, or set `CRAFTTO` higher than `TARGET`
+for a min→max buffer. The planner refills the actual deficit up to `CRAFTTO` — no
+auto-inflation or rounding. The per-item `cooldownSeconds` limits how often it
+re-fires. If a quota also has a compress `CEILING`, `CRAFTTO` is kept below that
+ceiling; an impossible setup (ceiling ≤ target) is shown as blocked instead of
+silently refill/compress thrashing.
 
 `SAVE` stores it; `CRAFT` queues a one-off craft; `REMOVE` deletes the quota;
 `BACK` exits. Items with a quota show `Q <target>` in the grid. Overflow/compress
@@ -258,8 +259,6 @@ The stock manager is organized by categories:
 ```lua
 stockKeeper = {
   enabled = true,
-  refillMarginRatio = 0.25,
-  minRefillMargin = 4,
   categories = {
     {
       label = "Mekanism",

@@ -5,26 +5,10 @@
 -- This NEVER crafts. It only classifies each managed item into a plan row.
 local stockplan = {}
 
-local DEFAULT_REFILL_MARGIN_RATIO = 0.25
-local DEFAULT_MIN_REFILL_MARGIN = 4
-
 local function floorNumber(value, fallback)
   local n = tonumber(value)
   if not n then return fallback end
   return math.floor(n)
-end
-
-local function positiveNumber(value, fallback)
-  local n = tonumber(value)
-  if not n or n <= 0 then return fallback end
-  return n
-end
-
-local function refillMargin(target, stock)
-  local ratio = positiveNumber(target.refillMarginRatio, positiveNumber(stock.refillMarginRatio, DEFAULT_REFILL_MARGIN_RATIO))
-  local minMargin = math.max(1, floorNumber(target.minRefillMargin,
-    floorNumber(stock.minRefillMargin, DEFAULT_MIN_REFILL_MARGIN)))
-  return math.max(minMargin, math.ceil((tonumber(target.target) or 0) * ratio))
 end
 
 function stockplan.deficitPriority(amount, target)
@@ -34,34 +18,21 @@ function stockplan.deficitPriority(amount, target)
   return math.max(0, (target - amount) / target)
 end
 
--- Round a banded refill target UP to a clean, human number so the display shows
--- "2k" not "1.3k": nearest 1000 once >= 1000, else nearest 100 / 10.
-local function roundCleanUp(n)
-  n = math.floor(tonumber(n) or 0)
-  if n >= 1000 then return math.ceil(n / 1000) * 1000 end
-  if n >= 100 then return math.ceil(n / 100) * 100 end
-  if n >= 10 then return math.ceil(n / 10) * 10 end
-  return n
-end
-
 function stockplan.effectiveCraftTo(target, stock)
   target = target or {}
   stock = stock or {}
 
+  -- Exact numbers: craftTo is exactly what the operator set. One number => refill to
+  -- that floor; set a higher craftTo for a min->max buffer. No auto-band, no rounding
+  -- (matches how RS/AE2 level emitters + keep-stock scripts work). Cooldown limits
+  -- re-craft frequency; overflow stacks extra above the floor.
   local trigger = math.max(0, floorNumber(target.target, 0))
-  local configuredCraftTo = math.max(trigger, 1, floorNumber(target.craftTo, trigger))
-  local craftTo = configuredCraftTo
-  local banded = false
-
-  if craftTo <= trigger then
-    craftTo = roundCleanUp(trigger + refillMargin(target, stock))
-    banded = true
-  end
+  local craftTo = math.max(trigger, 1, floorNumber(target.craftTo, trigger))
 
   local meta = {
     craftTo = craftTo,
-    configuredCraftTo = configuredCraftTo,
-    banded = banded,
+    configuredCraftTo = craftTo,
+    banded = false,
   }
 
   local ceiling = tonumber(target.ceiling)

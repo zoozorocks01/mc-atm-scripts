@@ -224,17 +224,17 @@ t.eq(wcP[1].name, "x", "plan row carries the registry name (for approve/reconcil
 t.check(wcP[1].capped == false, "not capped below maxRequest")
 t.eq(wcP[1].category, "Stock Keeper", "items-only config falls back to Stock Keeper category")
 
--- target==craftTo gets an effective refill band without rewriting the configured value
+-- exact numbers: refill to exactly the configured floor (no auto-band, no rounding)
 local bandP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100, craftTo = 100 } }),
   ledger = emptyLedger, resolve = function() return 99, true, false end })
-t.eq(bandP[1].action, "WOULD CRAFT", "target==craftTo still plans a refill")
-t.eq(bandP[1].craftTo, 200, "refill band (25% above floor) rounds up to a clean number")
-t.eq(bandP[1].configuredCraftTo, 100, "configured craftTo is preserved on the row")
-t.eq(bandP[1].request, 101, "dip by one still refills the full band, not one item")
-t.check(bandP[1].banded == true, "row marks that the refill band was inferred")
-local tinyBand = stockplan.plan({ stockKeeper = SK({ { name = "star", target = 4, craftTo = 4 } }),
-  ledger = emptyLedger, resolve = function() return 3, true, false end })
-t.eq(tinyBand[1].request, 5, "tiny quotas get a minimum refill margin")
+t.eq(bandP[1].action, "WOULD CRAFT", "below the floor plans a refill")
+t.eq(bandP[1].craftTo, 100, "craftTo is exactly the configured number (no auto-band)")
+t.eq(bandP[1].configuredCraftTo, 100, "configured craftTo preserved on the row")
+t.eq(bandP[1].request, 1, "request is the exact deficit to the floor")
+t.check(bandP[1].banded == false, "no auto-band is applied")
+local deepP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100, craftTo = 100 } }),
+  ledger = emptyLedger, resolve = function() return 40, true, false end })
+t.eq(deepP[1].request, 60, "a larger deficit refills the full gap to the floor")
 
 -- a refill band must not fight an overflow ceiling
 local guardBand = stockplan.plan({ stockKeeper = SK({

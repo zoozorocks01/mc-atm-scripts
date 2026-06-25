@@ -73,8 +73,6 @@ local DEFAULT_CONFIG = {
     cooldownSeconds = 300,
     maxCraftsPerCycle = 8,    -- new craft requests issued per cycle (late-game default)
     maxRequest = 65536,       -- cap per single craft request (bigger batches)
-    refillMarginRatio = 0.25, -- when craftTo<=target, refill this margin above target
-    minRefillMargin = 4,      -- minimum above-target refill margin for tiny quotas
     items = {},
     categories = {},
   },
@@ -240,10 +238,6 @@ local function normalizeConfig(raw)
   cfg.stockKeeper.cooldownSeconds = (cd and cd > 0) and cd or 300
   cfg.stockKeeper.maxCraftsPerCycle = tonumber(cfg.stockKeeper.maxCraftsPerCycle) or 8
   cfg.stockKeeper.maxRequest = tonumber(cfg.stockKeeper.maxRequest) or 65536
-  local ratio = tonumber(cfg.stockKeeper.refillMarginRatio)
-  cfg.stockKeeper.refillMarginRatio = (ratio and ratio > 0) and ratio or 0.25
-  local minMargin = tonumber(cfg.stockKeeper.minRefillMargin)
-  cfg.stockKeeper.minRefillMargin = (minMargin and minMargin > 0) and math.floor(minMargin) or 4
   if type(cfg.stockKeeper.items) ~= "table" then cfg.stockKeeper.items = {} end
   if type(cfg.stockKeeper.categories) ~= "table" then cfg.stockKeeper.categories = {} end
 
@@ -686,8 +680,6 @@ local function effectiveStockKeeper()
     -- the craft runner per cycle, not on the plan display.
     maxCraftsPerCycle = math.huge,
     maxRequest = stock.maxRequest,
-    refillMarginRatio = stock.refillMarginRatio,
-    minRefillMargin = stock.minRefillMargin,
     categories = categories,
   }
 end
