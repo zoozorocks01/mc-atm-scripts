@@ -1447,6 +1447,69 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+print("power graph helpers (POWER-GRAPH)")
+do
+  -- downsample: 4 samples into 2 buckets -> {min,max,avg,last,n} per bucket.
+  -- bucket1 = {1,2}, bucket2 = {3,4} (contiguous, oldest-first).
+  local ds = power.downsample({ 1, 2, 3, 4 }, 2)
+  t.eq(#ds, 2, "downsample: returns exactly width buckets")
+  t.eq(ds[1].min, 1, "downsample: bucket1 min")
+  t.eq(ds[1].max, 2, "downsample: bucket1 max")
+  t.eq(ds[1].avg, 1.5, "downsample: bucket1 avg")
+  t.eq(ds[1].last, 2, "downsample: bucket1 last")
+  t.eq(ds[1].n, 2, "downsample: bucket1 count")
+  t.eq(ds[2].min, 3, "downsample: bucket2 min")
+  t.eq(ds[2].max, 4, "downsample: bucket2 max")
+  t.eq(ds[2].avg, 3.5, "downsample: bucket2 avg")
+  t.eq(ds[2].n, 2, "downsample: bucket2 count")
+  -- BITE: revert the bucketing (1:1 last-N indexing) and bucket2.max becomes 2 not 4 -- this
+  -- asserts the WHOLE window is aggregated, not just the last `width` samples.
+  -- whole-window: 180 samples compressed into 50 cols still sees the oldest value.
+  local big = {}
+  for i = 1, 180 do big[i] = i end
+  local wide = power.downsample(big, 50)
+  t.eq(#wide, 50, "downsample: 180 -> 50 buckets")
+  t.eq(wide[1].min, 1, "downsample: first bucket holds the OLDEST sample (window not dropped)")
+  t.eq(wide[50].max, 180, "downsample: last bucket holds the NEWEST sample")
+  -- fewer samples than width -> data sits at the left, trailing buckets empty (n=0)
+  local sparse = power.downsample({ 7, 9 }, 5)
+  t.eq(sparse[1].last, 7, "downsample: sparse keeps chronological order (left)")
+  t.eq(sparse[2].last, 9, "downsample: sparse second sample in second bucket")
+  t.eq(sparse[3].n, 0, "downsample: trailing buckets empty when fewer samples than width")
+  -- guards
+  t.eq(#power.downsample({ 1, 2 }, 0), 0, "downsample: width 0 -> empty")
+  t.eq(power.downsample({}, 3)[1].n, 0, "downsample: no values -> empty buckets")
+
+  -- bucketByTimeframe: slice the last windowSeconds then bucket. 100 samples at 1Hz, want
+  -- last 10s -> samples 91..100 into 5 cols. bucket1 covers {91,92}, bucket5 covers {99,100}.
+  local series = {}
+  for i = 1, 100 do series[i] = i end
+  local tf = power.bucketByTimeframe(series, 10, 5, 1)
+  t.eq(#tf, 5, "bucketByTimeframe: returns columns buckets")
+  t.eq(tf[1].min, 91, "bucketByTimeframe: window starts at the right TAIL (last 10s)")
+  t.eq(tf[5].max, 100, "bucketByTimeframe: window ends at the newest sample")
+  -- BITE: if the slice took the HEAD instead of the tail, tf[1].min would be 1 not 91.
+  -- window longer than the buffer -> uses everything available (no crash, no empty tail jump)
+  local tfBig = power.bucketByTimeframe(series, 3600, 4, 1)
+  t.eq(tfBig[1].min, 1, "bucketByTimeframe: window > buffer falls back to whole buffer")
+  t.eq(tfBig[4].max, 100, "bucketByTimeframe: window > buffer keeps newest")
+  -- sampleHz scales the window: 50 samples at 2Hz, want 5s -> 10 samples (41..50)
+  local hz = {}
+  for i = 1, 50 do hz[i] = i end
+  local tfHz = power.bucketByTimeframe(hz, 5, 2, 2)
+  t.eq(tfHz[1].min, 41, "bucketByTimeframe: sampleHz scales sample count (5s @ 2Hz = 10)")
+  t.eq(#power.bucketByTimeframe(series, 10, 0, 1), 0, "bucketByTimeframe: columns 0 -> empty")
+
+  -- computeScale: auto tracks max(abs); fixed pins to caller; both floor at 1.
+  t.eq(power.computeScale({ 10, -40, 25 }, "auto"), 40, "computeScale: auto = max(abs)")
+  t.eq(power.computeScale({ 5, -3 }, "fixed", 200), 200, "computeScale: fixed pins to caller value")
+  -- BITE: fixed must IGNORE the data peak -- data peaks at 999 but fixed stays 200.
+  t.eq(power.computeScale({ 999, -50 }, "fixed", 200), 200, "computeScale: fixed ignores data peak")
+  t.eq(power.computeScale({ 0, 0, 0 }, "auto"), 1, "computeScale: auto floors at 1 (no divide-by-zero)")
+  t.eq(power.computeScale({}, "fixed", 0), 1, "computeScale: fixed floors at 1")
+end
+
+-- ---------------------------------------------------------------------------
 print("all scripts compile")
 -- loadfile parses without executing, so the display while-loops and peripheral
 -- wraps never run. This guards every shipped Lua file against syntax errors.

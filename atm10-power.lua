@@ -101,4 +101,108 @@ function power.alarmDecision(status, active, opts)
   return false, active                -- in-between (e.g. LOW): hold the latch, no re-fire
 end
 
+-- POWER-GRAPH: downsample a raw sample series into exactly `width` buckets so the WHOLE
+-- history window is shown in a narrow graph instead of silently dropping older samples off
+-- the left edge. Each output bucket is {min,max,avg,last,n}: min/max give a volatility RANGE
+-- the renderer can draw as a vertical bar (a real sparkline), avg/last are point summaries,
+-- n is how many raw samples fell in the bucket (0 = empty bucket, renderer draws nothing).
+-- Samples are partitioned contiguously oldest->newest; if there are fewer samples than width,
+-- trailing buckets are empty (n=0) and the data sits at the LEFT, preserving chronological
+-- order. Pure -> unit-tested. Returns {} for width<=0 or no values.
+function power.downsample(values, width)
+  values = values or {}
+  width = math.floor(tonumber(width) or 0)
+  local out = {}
+  if width <= 0 then return out end
+
+  local total = #values
+  for b = 1, width do
+    out[b] = { min = 0, max = 0, avg = 0, last = 0, n = 0 }
+  end
+  if total == 0 then return out end
+
+  -- Assign each raw sample (index 1..total, oldest->newest) to a bucket 1..width so the
+  -- buckets are contiguous and ordered. When total < width, each sample maps to its own
+  -- early bucket (b = i), leaving later buckets empty. When total >= width, samples are
+  -- spread evenly across all buckets.
+  for i = 1, total do
+    local v = tonumber(values[i]) or 0
+    local b
+    if total <= width then
+      b = i
+    else
+      b = math.floor((i - 1) * width / total) + 1
+      if b > width then b = width end
+    end
+    local bk = out[b]
+    if bk.n == 0 then
+      bk.min = v
+      bk.max = v
+      bk.avg = v
+      bk.last = v
+      bk.n = 1
+    else
+      if v < bk.min then bk.min = v end
+      if v > bk.max then bk.max = v end
+      bk.avg = bk.avg + v        -- accumulate; divide once below
+      bk.last = v
+      bk.n = bk.n + 1
+    end
+  end
+  for b = 1, width do
+    local bk = out[b]
+    if bk.n > 1 then bk.avg = bk.avg / bk.n end
+  end
+  return out
+end
+
+-- POWER-GRAPH: select the last `windowSeconds` of a 1-sample-per-(1/sampleHz)s series and
+-- downsample that slice into `columns` buckets. The probe emits ~1 sample/s (sampleHz~=1), so
+-- history index ~= seconds-ago; this gives 1m / 10m / 1h windows from the SAME ring buffer
+-- (provided the buffer is long enough to hold the window -- a 1h window needs ~3600 samples).
+-- sampleHz is samples-per-second (default 1). Pure -> unit-tested (slice picks the correct
+-- tail, then downsample() does the bucketing). Returns {} for bad args.
+function power.bucketByTimeframe(values, windowSeconds, columns, sampleHz)
+  values = values or {}
+  windowSeconds = tonumber(windowSeconds) or 0
+  columns = math.floor(tonumber(columns) or 0)
+  sampleHz = tonumber(sampleHz) or 1
+  if columns <= 0 then return {} end
+  if windowSeconds <= 0 or sampleHz <= 0 then
+    return power.downsample(values, columns)
+  end
+
+  local wantSamples = math.floor(windowSeconds * sampleHz)
+  if wantSamples < 1 then wantSamples = 1 end
+
+  local total = #values
+  local startIdx = total - wantSamples + 1
+  if startIdx < 1 then startIdx = 1 end
+
+  local slice = {}
+  for i = startIdx, total do
+    slice[#slice + 1] = values[i]
+  end
+  return power.downsample(slice, columns)
+end
+
+-- POWER-GRAPH: pick a y-axis maximum so the graph can stop jumping every frame. mode 'fixed'
+-- pins the scale to the caller's `fixedMax` (operator-chosen, ignores the data peak) so a
+-- transient spike does not rescale everything; mode 'auto' (default) tracks max(abs(value))
+-- so the graph fills the height. Both floor at 1 to avoid a divide-by-zero / flat graph when
+-- everything is ~0. Pure -> unit-tested. Returns a positive number.
+function power.computeScale(values, mode, fixedMax)
+  if mode == "fixed" then
+    local m = tonumber(fixedMax) or 0
+    return math.max(1, m)
+  end
+  values = values or {}
+  local maxAbs = 1
+  for i = 1, #values do
+    local v = tonumber(values[i])
+    if v then maxAbs = math.max(maxAbs, math.abs(v)) end
+  end
+  return maxAbs
+end
+
 return power
