@@ -251,10 +251,16 @@ local function drawView(data)
     "   Default: " .. tostring(data.defaultHandling or "unmanaged"), colors.gray)
 
   if data.usedItemStorage and data.totalItemStorage then
-    line(5, "Item Storage: " .. fmt(data.usedItemStorage) .. " / " .. fmt(data.totalItemStorage), colors.white)
+    -- QUICK-6: surface free headroom alongside used/total
+    local free = data.availableItemStorage or (data.totalItemStorage - data.usedItemStorage)
+    line(5, "Item Storage: " .. fmt(data.usedItemStorage) .. " / " .. fmt(data.totalItemStorage) ..
+      "   free " .. fmt(free), colors.white)
     bar(6, "Items", data.usedItemStorage, data.totalItemStorage)
   else
-    line(5, "Item Storage: capacity unavailable", colors.gray)
+    -- QUICK-6: fallback so the section never degrades to a single gray line when the disk
+    -- capacity API is unavailable -- show what we DO know (unique type count + total count)
+    line(5, "Stored: " .. fmt(data.unique or data.listedItemCount or 0) .. " types   " ..
+      fmt(data.totalAmount or 0) .. " items", colors.white)
   end
 
   if data.storedEnergy and data.energyCapacity then
@@ -275,6 +281,11 @@ local function drawView(data)
   viewPage = pg.page
   line(headerY, "Stored Items   " .. #items .. " shown   page " .. pg.page .. "/" .. pg.pages ..
     "   sort:" .. console.sortLabel(viewSort), colors.cyan)
+  -- QUICK-6: magnitude bar per row, scaled to the largest amount in the list (the #1), so
+  -- quantities are scannable at a glance. Monochrome uiDraw.barText fits the single-color
+  -- line(); shown only when the monitor is wide enough, else the row degrades to name+amount.
+  local maxAmt = 0
+  for _, it in ipairs(items) do local a = tonumber(it.amount) or 0; if a > maxAmt then maxAmt = a end end
   for i = pg.from, pg.to do
     local item = items[i]
     if item then
@@ -285,8 +296,13 @@ local function drawView(data)
         local arrow = (item.trend.dir == "up" and "^") or (item.trend.dir == "down" and "v") or "-"
         trend = " " .. rjust(arrow .. fmt(math.abs(item.trend.perMin or 0)) .. "/m", 8)
       end
-      line(y, rjust(i, 4) .. ". " .. uiDraw.fit(tostring(item.name), math.max(8, w - 27)) ..
-        "  " .. rjust(fmt(item.amount), 10) .. trend, colors.white)
+      local mag = ""
+      if w >= 50 and maxAmt > 0 then
+        mag = " " .. uiDraw.barText((tonumber(item.amount) or 0) / maxAmt * 100, 6)
+      end
+      local nameW = (mag ~= "") and math.max(6, w - 34) or math.max(8, w - 27)
+      line(y, rjust(i, 4) .. ". " .. uiDraw.fit(tostring(item.name), nameW) ..
+        mag .. "  " .. rjust(fmt(item.amount), 10) .. trend, colors.white)
     end
   end
   -- nav row (reuses the tested console.buttonRow / buttonHit)
