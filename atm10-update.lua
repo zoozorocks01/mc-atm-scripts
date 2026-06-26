@@ -41,6 +41,7 @@ local roles = {
     files = {
       { remote = "inventory/manager.lua", localName = "inventory-info" },
       { remote = "inventory/manager-startup.lua", localName = "startup" },
+      { remote = "reboot-guard.lua", localName = "reboot" }, -- shadow `reboot` -> safereboot (manager only)
       { remote = "inventory/config-example.lua", localName = "inventory-config-example" },
       { remote = "inventory/config.lua", localName = "inventory-config", onlyIfMissing = true },
     },
