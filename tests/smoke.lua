@@ -177,5 +177,35 @@ check(blob:find("Stock Keeper Plan", 1, true) ~= nil or blob:find("PLAN", 1, tru
 check(blob:find("Attach monitor", 1, true) == nil,
   "scan did not fall back to the waiting/error screen")
 
+-- ---- resilience: a throwing rednet.broadcast must NOT cost the primary render -
+-- The viewer broadcast is a best-effort, secondary path. If rednet.broadcast
+-- raises (modem closed/removed mid-run), refreshAndDraw must still reach
+-- renderCurrent() so the console paints, and the loop must survive. broadcast()
+-- wraps the send in pcall for exactly this. This run flips broadcast to throw,
+-- enables the modem so broadcast() is actually reached, and asserts a real page
+-- still rendered (not the waiting/error screen).
+do
+  screen = {}
+  ei = 0
+  -- present a modem on "back" so openBroadcastModems flips broadcastReady = true
+  _G.peripheral.getType = function(n)
+    if n == "monitor_0" then return "monitor" end
+    if n == "rs_bridge_0" then return "rs_bridge" end
+    if n == "back" then return "modem" end
+    return "unknown"
+  end
+  _G.rednet = {
+    open = function() end,
+    broadcast = function() error("modem detached mid-broadcast", 0) end,
+  }
+  local ok2 = pcall(function() dofile("inventory/manager.lua") end)
+  check(ok2 == false, "throwing-broadcast run still hit the sentinel (loop survived)")
+  local blob2 = table.concat(screen, "\n")
+  check(blob2:find("Stock Keeper Plan", 1, true) ~= nil or blob2:find("PLAN", 1, true) ~= nil,
+    "primary console rendered despite the broadcast throw (pcall contained it)")
+  check(blob2:find("Attach monitor", 1, true) == nil,
+    "broadcast throw did not blank the console to the waiting screen")
+end
+
 print((failures == 0) and "SMOKE OK" or ("SMOKE FAILED (" .. failures .. ")"))
 os.exit(failures == 0 and 0 or 1)

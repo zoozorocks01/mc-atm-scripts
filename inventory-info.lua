@@ -1217,7 +1217,9 @@ end
 local function broadcast(data)
   if not BROADCAST_ENABLED or not broadcastReady or not data then return end
 
-  rednet.broadcast({
+  -- The payload table is built OUTSIDE the send pcall so a logic error here still
+  -- throws (the pcall must never mask a payload-build bug).
+  local payload = {
     kind = "inventory_snapshot",
     source = os.getComputerID(),
     bridgeName = bridgeName,
@@ -1247,7 +1249,15 @@ local function broadcast(data)
     stockTally = data.stockTally,
     categorySummaries = data.categorySummaries,
     craftQueue = data.craftQueue,
-  }, BROADCAST_PROTOCOL)
+  }
+
+  -- The viewer broadcast is a strictly-secondary, best-effort path. rednet.broadcast
+  -- can throw if the modem was closed/removed mid-run; that transient must NOT abort
+  -- refreshAndDraw before renderCurrent(), which would deny the PRIMARY console its
+  -- frame (and make guard() needlessly null a healthy monitor). Genuine runtime
+  -- resilience for an optional outbound transport -- the payload is already built,
+  -- so this pcall cannot hide a logic bug.
+  pcall(rednet.broadcast, payload, BROADCAST_PROTOCOL)
 end
 
 local function drawWaiting(message)
