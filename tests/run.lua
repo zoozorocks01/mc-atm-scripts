@@ -1238,6 +1238,25 @@ do
   t.eq(power.headroom(5, 0), nil, "headroom: cap 0 -> nil (display hides it)")
   t.eq(power.headroom(nil, 100), 0, "headroom: nil used -> 0%")
   t.check(power.headroom(150, 100) > 100, "headroom: over-cap is not clamped (anomaly shows)")
+  -- QUICK-3: edge-triggered alarm (fires on ENTRY to an alarming status, not while it persists)
+  local fire, active = power.alarmDecision("CRITICAL", false)
+  t.check(fire == true and active == true, "alarm: fires on entry to CRITICAL")
+  fire, active = power.alarmDecision("CRITICAL", active)
+  t.check(fire == false and active == true, "alarm: does NOT re-fire while still CRITICAL (hysteresis)")
+  fire, active = power.alarmDecision("OK", active)
+  t.check(fire == false and active == false, "alarm: clears when status returns to OK")
+  t.check((power.alarmDecision("STALE DATA", false)), "alarm: fires on entry to STALE DATA")
+  t.check(not (power.alarmDecision("LOW", false)), "alarm: LOW is not an alarming status by default")
+  t.check((power.alarmDecision("DRAINING", false, { states = { DRAINING = true } })),
+    "alarm: states are configurable (DRAINING alarms when opted in)")
+  -- deadband: pct jitter across the CRITICAL line (CRITICAL -> LOW -> CRITICAL) must NOT re-fire
+  local af, aa = power.alarmDecision("CRITICAL", false)
+  af, aa = power.alarmDecision("LOW", aa)
+  t.check(af == false and aa == true, "alarm: LOW holds the latch (deadband, stays active)")
+  af, aa = power.alarmDecision("CRITICAL", aa)
+  t.check(af == false, "alarm: re-entering CRITICAL after a dip to LOW does NOT chatter")
+  af, aa = power.alarmDecision("DRAINING", aa)
+  t.check(aa == false, "alarm: only a full recovery (OK/DRAINING, pct out of the LOW band) re-arms")
 end
 
 -- ---------------------------------------------------------------------------

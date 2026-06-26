@@ -11,6 +11,12 @@ local SHOW_STORED_GRAPH = true
 local CRITICAL_PERCENT = 15
 local LOW_PERCENT = 35
 local STALE_SECONDS = 10
+-- QUICK-3: alarm on ENTRY to an alarming status. A speaker beep is harmless so it defaults ON
+-- when a speaker is attached; redstone output drives external contraptions, so it stays OFF
+-- until ALARM_REDSTONE_SIDE is set to a side ("back"/"top"/...). Edge-triggered (no chatter).
+local ALARM_ENABLED = true
+local ALARM_REDSTONE_SIDE = nil
+local ALARM_SOUND = true
 
 local uiStatus = require("atm10-status")
 local uiDraw = require("atm10-draw")
@@ -61,6 +67,8 @@ local last = nil
 local lastSeen = nil
 local lastNonzeroInput = 0
 local lastNonzeroOutput = 0
+local alarmActive = false -- QUICK-3: carries the alarm edge-state across frames
+local speaker = (peripheral and peripheral.find) and peripheral.find("speaker") or nil
 
 local function now()
   if os.epoch then return math.floor(os.epoch("utc") / 1000) end
@@ -283,6 +291,15 @@ local function draw()
   elseif pct < CRITICAL_PERCENT then statusText = "CRITICAL"
   elseif pct < LOW_PERCENT then statusText = "LOW"
   elseif net < 0 then statusText = "DRAINING" end
+
+  -- QUICK-3: edge-triggered alarm (decision unit-tested in atm10-power). Redstone is held while
+  -- alarming and cleared when it clears; the beep fires once on entry so it can't chatter.
+  if ALARM_ENABLED then
+    local fire
+    fire, alarmActive = power.alarmDecision(statusText, alarmActive)
+    if ALARM_REDSTONE_SIDE and redstone then pcall(redstone.setOutput, ALARM_REDSTONE_SIDE, alarmActive) end
+    if fire and ALARM_SOUND and speaker then pcall(speaker.playNote, "bell", 3, 12) end
+  end
 
   if (last.input or 0) == 0 and (last.output or 0) == 0 and (lastNonzeroInput > 0 or lastNonzeroOutput > 0) then
     line(11, timeText, timeColor)

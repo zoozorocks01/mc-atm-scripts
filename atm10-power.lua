@@ -80,4 +80,25 @@ function power.headroom(used, cap)
   return math.max(0, (used / cap) * 100)
 end
 
+-- QUICK-3: latching alarm decision with a recovery DEADBAND so it does not chatter at the
+-- threshold. The alarm FIRES once on the rising edge into an alarming status and stays latched
+-- (active) until the status fully RECOVERS to a healthy one -- statuses in between (e.g. LOW,
+-- which sits in the 15-35% band right next to CRITICAL) HOLD the latch, so pct jitter across
+-- the CRITICAL line does not re-fire. Defaults: alarm on CRITICAL/STALE; clear on OK/DRAINING
+-- (both pct >= the LOW band, i.e. genuinely recovered). Pure: the caller drives the
+-- redstone/speaker and persists `active` across frames. Returns (fire, active).
+function power.alarmDecision(status, active, opts)
+  opts = opts or {}
+  local alarmStates = opts.states or { ["CRITICAL"] = true, ["STALE DATA"] = true, ["STALE"] = true }
+  local clearStates = opts.clearStates or { ["OK"] = true, ["DRAINING"] = true }
+  active = active == true
+  if alarmStates[status] then
+    local fire = not active           -- rising edge: fire once on entry
+    return fire, true                 -- latch on
+  elseif clearStates[status] then
+    return false, false               -- recovered: re-arm
+  end
+  return false, active                -- in-between (e.g. LOW): hold the latch, no re-fire
+end
+
 return power
