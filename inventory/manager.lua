@@ -1022,7 +1022,16 @@ local function scan()
   -- names and never pairs()-iterated, so a reserved __-key can't collide; locals
   -- are at the 186 cap so this avoids a new bare top-level local). The single
   -- per-cycle bridge outcome is fed below; gateCrafts decides fire-vs-hold.
-  craftingCache.__health = craftingCache.__health or require("atm10-health")
+  -- A3 health module is OPTIONAL: pcall the require and fall back to an always-allow
+  -- stub, so a not-yet-deployed / missing atm10-health can NEVER crash the manager --
+  -- it just degrades to pre-A3 "always fire". require() throws a HARD error in CC if
+  -- the file isn't on the computer (it previously crash-looped the whole manager when
+  -- the update manifest shipped this caller but not the module). Cached once (nil-check,
+  -- not `or`) so a missing module isn't re-required every scan.
+  if craftingCache.__health == nil then
+    local ok, mod = pcall(require, "atm10-health")
+    craftingCache.__health = (ok and mod) or { gateCrafts = function() return true end }
+  end
   craftingCache.__bridge = craftingCache.__bridge or {}
 
   if not monitor then

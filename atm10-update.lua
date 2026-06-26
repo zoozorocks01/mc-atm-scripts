@@ -15,6 +15,7 @@ local commonFiles = {
   { remote = "lib/atm10-power.lua", localName = "atm10-power.lua" },
   { remote = "lib/atm10-presets.lua", localName = "atm10-presets.lua" },
   { remote = "lib/atm10-console.lua", localName = "atm10-console.lua" },
+  { remote = "lib/atm10-health.lua", localName = "atm10-health.lua" }, -- bridge-health gating (A3)
   { remote = "atm10-bridge-probe.lua", localName = "atm10-bridge-probe" }, -- READ-ONLY RS Bridge diagnostic
   { remote = "atm10-patterns.lua", localName = "atm10-patterns" }, -- READ-ONLY patterns worklist (CRAFT-4)
   { remote = "safereboot.lua", localName = "safereboot" }, -- drain-safe reboot (avoids AP detach crash)

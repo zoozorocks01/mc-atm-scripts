@@ -325,5 +325,43 @@ check(okR == false and tostring(errR):find(SENTINEL, 1, true) ~= nil,
 check(#craftedResume >= 1,
   "A3: craft-firing AUTO-RESUMES after recover consecutive clean reads")
 
+-- ---- A3 module-missing resilience: a missing atm10-health must NOT crash ---------
+-- This is the exact in-game failure that happened: the update manifest shipped the
+-- manager (which require()s atm10-health) but not the module, so every scan threw
+-- "module 'atm10-health' not found" and the screen was dead. The require is now
+-- pcall-guarded with an always-allow stub, so a missing optional module degrades to
+-- pre-A3 firing instead of breaking the manager. Simulate absence by failing require
+-- for that one module. Bite: revert to a hard require("atm10-health") and the deficit
+-- never crafts (scan throws every cycle) -> the degraded-fire assertion fails.
+files = { [MANAGED_FILE] = "MANAGED" }
+clock = 0
+local craftedNoHealth = {}
+local BRNH = fakeBridge()
+BRNH.craftItem = function(arg) craftedNoHealth[#craftedNoHealth + 1] = arg; return true end
+_G.peripheral.wrap = function(n)
+  if n == "monitor_0" then return MON end
+  if n == "rs_bridge_0" then return BRNH end
+  return nil
+end
+local eventsNH, einh = { { "timer", 1 } }, 0
+_G.os.pullEvent = function()
+  einh = einh + 1
+  local ev = eventsNH[einh]
+  if not ev then error(SENTINEL, 0) end
+  return table.unpack(ev)
+end
+local realRequire = require
+_G.require = function(m)
+  if m == "atm10-health" then error("module 'atm10-health' not found", 0) end
+  return realRequire(m)
+end
+print("smoke-auto: simulating a MISSING atm10-health module (must degrade, not crash)")
+local okNH, errNH = pcall(function() dofile("inventory/manager.lua") end)
+_G.require = realRequire
+check(okNH == false and tostring(errNH):find(SENTINEL, 1, true) ~= nil,
+  "A3: manager reached the sentinel with atm10-health missing (no hard crash): " .. tostring(errNH))
+check(#craftedNoHealth >= 1,
+  "A3: a missing atm10-health degrades to always-fire (pre-A3), it does NOT break crafting")
+
 print((failures == 0) and "SMOKE-AUTO OK" or ("SMOKE-AUTO FAILED (" .. failures .. ")"))
 os.exit(failures == 0 and 0 or 1)
