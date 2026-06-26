@@ -83,4 +83,29 @@ function health.gateCrafts(state, ok, threshold, recoverCycles)
          state.bridgeFails or 0, state.cleanStreak or 0
 end
 
+-- sweepTmps(fsApi, paths): resolve leftover ".tmp" files from a crashed atomicWrite.
+-- atomicWrite writes "<path>.tmp" then delete(path) + move(tmp,path); a crash in that
+-- window leaves a ".tmp". atomicWrite only clears it on the NEXT write to THAT file,
+-- so a rarely-written file's orphan lingers on the ~1MB CC disk. For each path: if
+-- "<path>.tmp" exists, DISCARD it when <path> also exists (orphan -- the main file is
+-- authoritative) or RECOVER it (move tmp -> path) when <path> is missing (the tmp is
+-- then the complete, only copy: the crash hit between delete(main) and move). fsApi is
+-- the caller's fs, passed in so this stays pure/testable off-CC (no global fs). Each
+-- op is guarded; a single bad file can't abort the sweep. Returns (discarded, recovered).
+function health.sweepTmps(fsApi, paths)
+  local discarded, recovered = 0, 0
+  if type(fsApi) ~= "table" or type(paths) ~= "table" then return discarded, recovered end
+  for _, p in ipairs(paths) do
+    local tmp = p .. ".tmp"
+    if fsApi.exists(tmp) then
+      if fsApi.exists(p) then
+        if pcall(fsApi.delete, tmp) then discarded = discarded + 1 end
+      else
+        if pcall(function() fsApi.move(tmp, p) end) then recovered = recovered + 1 end
+      end
+    end
+  end
+  return discarded, recovered
+end
+
 return health

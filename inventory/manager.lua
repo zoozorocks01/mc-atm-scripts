@@ -2308,6 +2308,18 @@ local function guard(fn, ...)
   end
 end
 
+-- Boot: resolve any leftover .tmp from a crashed atomicWrite -- discard orphans whose
+-- main file survived, recover a tmp whose main file is gone. Without this, a rarely-
+-- written file's orphan lingers on the ~1MB disk until that file's next write. Own
+-- do-scope (no new top-level local; manager is at the locals cap) + defensive require
+-- so a missing atm10-health can't block startup.
+do
+  local ok, hmod = pcall(require, "atm10-health")
+  if ok and hmod and hmod.sweepTmps then
+    hmod.sweepTmps(fs, { FILES.queue, FILES.managed, FILES.trends, FILES.dismissed, FILES.ledger, CRAFT_RESULTS.file })
+  end
+end
+
 local refreshTimer = os.startTimer(0)
 
 while true do

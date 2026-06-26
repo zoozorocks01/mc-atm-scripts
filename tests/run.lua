@@ -1256,6 +1256,28 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+-- .tmp-orphan sweep: crash-recovery for atomicWrite leftovers (own do-scope).
+print("atomicWrite .tmp sweep (health.sweepTmps)")
+do
+  local store = {
+    ["a"] = "A", ["a.tmp"] = "Anew",  -- orphan: main exists -> discard the tmp
+    ["b.tmp"] = "Bnew",               -- main missing -> recover (move tmp -> b)
+    ["c"] = "C",                      -- no tmp -> untouched
+  }
+  local fakeFs = {
+    exists = function(p) return store[p] ~= nil end,
+    delete = function(p) store[p] = nil end,
+    move = function(s, d) store[d] = store[s]; store[s] = nil end,
+  }
+  local disc, rec = health.sweepTmps(fakeFs, { "a", "b", "c" })
+  t.check(disc == 1 and rec == 1, "sweepTmps: 1 discarded + 1 recovered")
+  t.check(store["a"] == "A" and store["a.tmp"] == nil, "sweepTmps: orphan tmp discarded, main file kept intact")
+  t.check(store["b"] == "Bnew" and store["b.tmp"] == nil, "sweepTmps: tmp recovered to main when main was missing")
+  t.check(store["c"] == "C", "sweepTmps: a file with no .tmp is left untouched")
+  t.check((select(1, health.sweepTmps(nil, {}))) == 0, "sweepTmps: nil fs is a guarded no-op")
+end
+
+-- ---------------------------------------------------------------------------
 -- operatingTier: the one high-level switch that resolves to mode + capability flags.
 -- Own do-scope + one reused scratch local (run.lua main chunk is near Lua's cap).
 print("operating tiers (control.applyTier)")
