@@ -633,6 +633,7 @@ t.eq(craftingCount, 2, "both same-item entries move to CRAFTING (one fired, one 
 
 -- ---------------------------------------------------------------------------
 print("CRAFT-5 fireOrder: reserved compress floor + round-robin refill categories")
+do -- scope these locals: tests/run.lua's main chunk is near Lua's 200-local cap
 local fo = craftrunner.fireOrder
 local function names(order)
   local out = {}
@@ -748,6 +749,7 @@ local f11, q11 = runFired({ { name = "a1", category = "Alpha", priority = 0.5 },
   { maxPerCycle = 2 })
 t.eq(table.concat(f11, ","), "b1,g1", "runner: round-robin fires highest-priority lane heads first under a tight cap")
 t.eq(q11.entries.a1.state, cqueue.APPROVED, "runner: lowest-priority category waits a cycle (priority rotates as deficit grows)")
+end
 
 -- ---------------------------------------------------------------------------
 print("managed quotas (tap-to-manage store)")
@@ -923,6 +925,55 @@ t.check(aged.old == nil and aged.fresh ~= nil, "pruneDismissed ages out entries 
 -- legacy boolean `true` values are normalized to a timestamp (now), not dropped
 local legacy = suggest.pruneDismissed({ a = true }, 777, { maxAgeMs = 5000, maxEntries = 400 })
 t.eq(legacy.a, 777, "pruneDismissed upgrades a legacy boolean dismissal to a timestamp")
+
+-- ---------------------------------------------------------------------------
+print("CRAFT-6 smart suggestions: cooldown buffer + compress chains + re-surface")
+do -- scope these locals (200-local cap); inner block still reads outer hist/grow/sg
+-- (A) craftTo buffers perMin * cooldownSeconds/60; default 300 reproduces the legacy *5
+-- hist: steel 1000 -> 200 over 2m => decline 800, perMin 400, minA/target 200
+t.eq(suggest.analyze(hist, { managed = {} })[1].craftTo, 2200,
+  "CRAFT-6: default cooldown 300 reproduces the legacy *5 buffer (200 + 2000)")
+t.eq(suggest.analyze(hist, { managed = {}, cooldownSeconds = 600 })[1].craftTo, 4200,
+  "CRAFT-6: craftTo buffers perMin * cooldownSeconds/60 (600s doubles the buffer)")
+t.check(suggest.analyze(hist, { managed = {} })[1].perMin and suggest.analyze(hist, { managed = {} })[1].perMin > 0,
+  "CRAFT-6: a suggestion exposes perMin (so the manager can capture a baseline at dismissal)")
+
+-- (B) compress chain is opt-in: off by default the climbing item stays a cap; on, it promotes
+t.eq(suggest.analyze(grow, { managed = {} })[1].kind, "cap",
+  "CRAFT-6: compressChains absent -> a growing item is still a cap (backward compatible)")
+local cc = suggest.analyze(grow, { managed = {}, compressChains = true })
+t.eq(cc[1].kind, "compress", "CRAFT-6: compressChains on -> a band-climbing item becomes compress")
+t.eq(cc[1].target, 1000, "CRAFT-6: compress seeds the band floor (minA) as the keep-stock target")
+t.check(cc[1].ceiling > cc[1].target, "CRAFT-6: compress ceiling is strictly above the target")
+t.check(cc[1].target < cc[1].craftTo and cc[1].craftTo < cc[1].ceiling,
+  "CRAFT-6: compress refill floor sits below the cap (target < craftTo < ceiling)")
+t.eq(cc[1].ratio, 1, "CRAFT-6: compress seeds a generic ratio default")
+t.check(cc[1].into == nil, "CRAFT-6: compress leaves `into` nil (operator picks it; no item heuristics)")
+-- grew but did not climb past a stable band (aN - minA < minDrain) -> stays cap even when opted in
+local osc = { z = { label = "Z", t0 = 0, a0 = 1000, tN = 120000, aN = 1100, minA = 1090 } }
+t.eq(suggest.analyze(osc, { managed = {}, compressChains = true })[1].kind, "cap",
+  "CRAFT-6: growth without a band climb stays cap even with compressChains on")
+
+-- (C) re-surface a dismissed item only when drain materially accelerates past its baseline
+t.eq(#suggest.analyze(hist, { dismissed = { steel = { ts = 0, baseline = 400 } } }), 0,
+  "CRAFT-6: dismissed item with steady drain (perMin ~ baseline) stays suppressed")
+local rsv = suggest.analyze(hist, { dismissed = { steel = { ts = 0, baseline = 100 } } })
+t.eq(#rsv, 1, "CRAFT-6: dismissed item re-surfaces when perMin >= 2x baseline")
+t.eq(rsv[1].name, "steel", "CRAFT-6: the re-surfaced suggestion names the accelerating item")
+t.eq(#suggest.analyze(hist, { dismissed = { steel = { ts = 0, baseline = 100 } }, resurfaceFactor = 5 }), 0,
+  "CRAFT-6: resurfaceFactor raises the acceleration bar (400 < 5x100)")
+t.eq(#suggest.analyze(hist, { dismissed = { steel = 0 } }), 0,
+  "CRAFT-6: a legacy numeric dismissal (no baseline) never re-surfaces")
+t.eq(#suggest.analyze(hist, { dismissed = { steel = true } }), 0,
+  "CRAFT-6: a legacy boolean dismissal never re-surfaces")
+
+-- pruneDismissed preserves a rich {ts,baseline} value through aging, and still ages by ts
+local rich = suggest.pruneDismissed({ a = { ts = 9000, baseline = 250 } }, 10000, { maxAgeMs = 5000 })
+t.eq(type(rich.a), "table", "CRAFT-6: pruneDismissed preserves the rich {ts,baseline} shape")
+t.eq(rich.a.baseline, 250, "CRAFT-6: pruneDismissed keeps the baseline through a prune")
+t.check(suggest.pruneDismissed({ a = { ts = 100, baseline = 250 } }, 10000, { maxAgeMs = 5000 }).a == nil,
+  "CRAFT-6: pruneDismissed still ages out a rich entry by its ts")
+end
 
 -- ---------------------------------------------------------------------------
 print("overflow balancer (compress above ceiling)")

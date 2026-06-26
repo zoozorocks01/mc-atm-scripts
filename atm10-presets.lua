@@ -174,7 +174,7 @@ do
     label = "Zoozo Late-Game",
     description = "Personal starter from base recon (partial) - tune in-game",
     personal = true,
-    settings = { smartMode = true },
+    settings = { smartMode = true, compressChains = true },
     items = items,
   }
 end

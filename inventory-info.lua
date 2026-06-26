@@ -1109,8 +1109,13 @@ local function scan()
     for _, e in ipairs(managed.list(managedStore)) do
       quotasMap[e.name] = { target = e.target, craftTo = e.craftTo }
     end
+    -- CRAFT-6: thread the real craft cooldown (buffers a suggested craftTo to last until the next
+    -- allowed craft) + the opt-in compress-chain promotion (a managed setting, like smartMode).
     suggestions = suggest.analyze(trendHistory,
-      { managed = managedNames, quotas = quotasMap, dismissed = dismissedSuggestions, max = 8 })
+      { managed = managedNames, quotas = quotasMap, dismissed = dismissedSuggestions, max = 8,
+        cooldownSeconds = (config.stockKeeper or {}).cooldownSeconds,
+        compressChains = managed.getSetting(managedStore, "compressChains") == true,
+        resurfaceFactor = (config.stockKeeper or {}).resurfaceFactor })
   end
   local stockTally = uiStatus.tally(stockPlans)
 
@@ -1661,13 +1666,14 @@ local function drawSmartPage(data)
   line(9, "Suggested quotas (tap to review + save):", colors.cyan)
   local start = 10
   local rows = math.min(#sugg, math.max(0, h - start - 1))
-  local kindTag = { quota = "STOCK", raise = "RAISE", cap = "CAP" }
+  local kindTag = { quota = "STOCK", raise = "RAISE", cap = "CAP", compress = "COMPRESS" }
   for i = 1, rows do
     local s = sugg[i]
     local y = start + (i - 1)
-    local detail = (s.kind == "cap")
-      and ("cap " .. fmt(s.ceiling))
-      or ("keep " .. fmt(s.target) .. "/" .. fmt(s.craftTo))
+    local detail
+    if s.kind == "cap" then detail = "cap " .. fmt(s.ceiling)
+    elseif s.kind == "compress" then detail = "band " .. fmt(s.target) .. "-" .. fmt(s.ceiling) .. ", set INTO"
+    else detail = "keep " .. fmt(s.target) .. "/" .. fmt(s.craftTo) end
     line(y, uiDraw.fit("[" .. (kindTag[s.kind] or "?") .. "] " .. s.label .. " -> " .. detail ..
       "  (" .. tostring(s.reason) .. ")", w), colors.white)
     smartRowRegions[#smartRowRegions + 1] = { y = y, entry = s }
@@ -1945,6 +1951,10 @@ local function applyPreset(p)
     managed.setSetting(managedStore, "smartMode", true)
     extra = "  + smart mode ON"
   end
+  if settings.compressChains then
+    managed.setSetting(managedStore, "compressChains", true)
+    extra = extra .. " + compress chains ON"
+  end
   saveManaged(managedStore)
   presetStatus = "Applied " .. tostring(p.label) .. ": " .. n .. " quotas." .. extra
   pageShownAt = nowMs()
@@ -2105,7 +2115,9 @@ local function handleTouch(x, y)
   elseif smartKey == "smartclear" then
     local clearedAt = nowMs()
     for _, s in ipairs((lastData and lastData.suggestions) or {}) do
-      if s.name then dismissedSuggestions[s.name] = clearedAt end
+      -- CRAFT-6: record the drain rate at dismissal so analyze can re-surface this item if its
+      -- drain later materially accelerates (legacy bare-timestamp entries never re-surface).
+      if s.name then dismissedSuggestions[s.name] = { ts = clearedAt, baseline = tonumber(s.perMin) or 0 } end
     end
     dismissedSuggestions = suggest.pruneDismissed(dismissedSuggestions, clearedAt, DISMISSED_OPTS)
     saveDismissed(dismissedSuggestions)

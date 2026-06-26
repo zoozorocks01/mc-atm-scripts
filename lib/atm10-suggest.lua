@@ -79,13 +79,27 @@ function suggest.prune(history, now, opts)
   return history, removed
 end
 
+-- A dismissed-set entry is one of: a number (dismissal ts), a legacy boolean `true`, or a
+-- rich { ts, baseline } table (CRAFT-6: baseline = abs drain rate, items/min, frozen at
+-- dismissal, used to re-surface when drain materially accelerates). These helpers read either
+-- field from any shape so analyze() + pruneDismissed stay backward-compatible with old data.
+local function dismissedTs(v)
+  if type(v) == "number" then return v end
+  if type(v) == "table" then return tonumber(v.ts) end
+  return nil
+end
+local function dismissedBaseline(v)
+  if type(v) == "table" then return tonumber(v.baseline) end
+  return nil
+end
+
 -- Bound the operator's dismissed-suggestion set the same way the trend history is
 -- bounded: it persists on the same ~1MB CC disk and would otherwise grow forever
--- (each "clear all" only ever ADDS names). Values are dismissal timestamps; legacy
--- boolean-true entries are normalized to `now`. Age out entries older than maxAgeMs
--- (drain may have changed -> let the suggestion return) and, if still over
--- maxEntries, drop the OLDEST. Returns a NEW set and the number removed. (0 for an
--- option disables it.)
+-- (each "clear all" only ever ADDS names). Values are dismissal timestamps (or a rich
+-- { ts, baseline } table); legacy boolean-true entries are normalized to `now`. Age out
+-- entries older than maxAgeMs (drain may have changed -> let the suggestion return) and, if
+-- still over maxEntries, drop the OLDEST. The original value shape is PRESERVED on output so
+-- a {ts,baseline} survives a prune. Returns a NEW set and the number removed. (0 disables.)
 function suggest.pruneDismissed(set, now, opts)
   opts = opts or {}
   now = tonumber(now) or 0
@@ -93,11 +107,12 @@ function suggest.pruneDismissed(set, now, opts)
   local maxEntries = tonumber(opts.maxEntries) or 0
 
   local total, kept = 0, {}
-  for name, ts in pairs(set or {}) do
+  for name, v in pairs(set or {}) do
     total = total + 1
-    if type(ts) ~= "number" then ts = now end -- legacy boolean `true` -> timestamp
+    local ts = dismissedTs(v)
+    if ts == nil then ts, v = now, now end -- legacy boolean `true` -> timestamp (a NUMBER)
     if maxAgeMs <= 0 or (now - ts) <= maxAgeMs then
-      kept[#kept + 1] = { name = name, ts = ts }
+      kept[#kept + 1] = { name = name, ts = ts, val = v } -- preserve value so a {ts,baseline} survives
     end
   end
 
@@ -107,7 +122,7 @@ function suggest.pruneDismissed(set, now, opts)
   end
 
   local out, count = {}, 0
-  for _, e in ipairs(kept) do out[e.name] = e.ts; count = count + 1 end
+  for _, e in ipairs(kept) do out[e.name] = e.val; count = count + 1 end
   return out, total - count
 end
 
@@ -133,15 +148,23 @@ end
 local function mins(span) return math.max(1, math.floor(span / 60000)) end
 
 -- analyze(history, ctx) -> array of suggestions (each seeded for the editor):
---   { kind, name, label, seeded=true, target, craftTo, ceiling?, reason }
+--   { kind, name, label, seeded=true, target, craftTo, ceiling?, ratio?, perMin, reason }
 -- ctx: { managed = {[name]=true}, quotas = {[name]={target,craftTo}},
---        dismissed = {[name]=true}, minDrain = 64, minWindowMs = 60000, max = 8 }
+--        dismissed = {[name]=ts|true|{ts,baseline}}, minDrain = 64, minWindowMs = 60000,
+--        max = 8, cooldownSeconds = 300, compressChains = false, resurfaceFactor = 2 }
 --
--- Over a window of >= minWindowMs:
+-- Over a window of >= minWindowMs (skipping a dismissed item unless its drain has materially
+-- accelerated past the baseline frozen at dismissal -- see resurfaceFactor):
 --   * UNMANAGED + net decline >= minDrain  -> "quota": keep it stocked.
---   * UNMANAGED + net growth  >= minDrain  -> "cap":   set a compress ceiling.
+--   * UNMANAGED + net growth  >= minDrain  -> "cap":      set a compress ceiling, OR
+--                                            "compress":  (when ctx.compressChains AND it climbed
+--                                            past a stable band) seed a full overflow chain
+--                                            (floor quota + ceiling + ratio; `into` left for the
+--                                            operator -- the denser target can't be derived generically).
 --   * MANAGED (has quota) + below target the whole window + still draining
 --                                          -> "raise": refill can't keep up.
+-- CRAFT-6: a "quota"/"raise"/"compress" craftTo buffers max(minDrain, perMin * cooldownSeconds/60)
+-- so the refill lasts one craft cooldown. cooldownSeconds default 300 reproduces the legacy *5.
 function suggest.analyze(history, ctx)
   ctx = ctx or {}
   local managedSet = ctx.managed or {}
@@ -149,37 +172,68 @@ function suggest.analyze(history, ctx)
   local dismissed = ctx.dismissed or {}
   local minDrain = tonumber(ctx.minDrain) or 64
   local minWindow = tonumber(ctx.minWindowMs) or 60000
+  local cooldownSec = tonumber(ctx.cooldownSeconds) or 300 -- 300/60 = 5 => byte-identical to the old *5
+  local compressChains = ctx.compressChains == true        -- opt-in: promote a band-climb to "compress"
+  local resurfaceFactor = tonumber(ctx.resurfaceFactor) or 2
 
   local out = {}
   for name, h in pairs(history or {}) do
-    if not dismissed[name] then
-      local span = (h.tN or 0) - (h.t0 or 0)
-      if span >= minWindow then
-        local decline = (h.a0 or 0) - (h.aN or 0)
-        local perMin = math.abs(decline) / (span / 60000)
+    local span = (h.tN or 0) - (h.t0 or 0)
+    if span >= minWindow then
+      local decline = (h.a0 or 0) - (h.aN or 0)
+      local perMin = math.abs(decline) / (span / 60000)
+      -- a dismissed item stays suppressed UNLESS drain has materially accelerated past the
+      -- baseline recorded at dismissal; legacy/no-baseline entries never re-surface this way.
+      local dv = dismissed[name]
+      local suppressed = dv ~= nil
+      if suppressed then
+        local base = dismissedBaseline(dv)
+        if base and base > 0 and resurfaceFactor > 0 and perMin >= resurfaceFactor * base then
+          suppressed = false
+        end
+      end
+      if not suppressed then
         local q = quotas[name]
         local isManaged = managedSet[name] == true or q ~= nil
+        local buffer = math.max(minDrain, math.floor(perMin * (cooldownSec / 60)))
 
         if not isManaged and decline >= minDrain then
           local target = math.max(0, math.floor(h.minA or 0))
           out[#out + 1] = {
             kind = "quota", name = name, label = h.label or name, seeded = true,
-            target = target, craftTo = target + math.max(minDrain, math.floor(perMin * 5)),
+            target = target, craftTo = target + buffer, perMin = perMin,
             reason = "down " .. decline .. " in " .. mins(span) .. "m", _rank = decline,
           }
         elseif not isManaged and -decline >= minDrain then
-          out[#out + 1] = {
-            kind = "cap", name = name, label = h.label or name, seeded = true,
-            target = 0, craftTo = 0, ceiling = math.max(0, math.floor(h.aN or 0)),
-            reason = "up " .. (-decline) .. " in " .. mins(span) .. "m", _rank = -decline,
-          }
+          if compressChains and ((h.aN or 0) - (h.minA or 0)) >= minDrain then
+            -- climbed past a stable band: seed a full compress chain. `into` is intentionally
+            -- nil (no generic way to pick the denser item); until the operator sets INTO,
+            -- managed.set keeps the ceiling inert and the row is just a low refill quota
+            -- (target..craftTo), so the seed is never invalid/partial.
+            local target = math.max(0, math.floor(h.minA or 0))
+            local ceiling = math.max(target + 1, math.floor(h.aN or 0)) -- band climb => aN>=target+minDrain
+            out[#out + 1] = {
+              kind = "compress", name = name, label = h.label or name, seeded = true,
+              target = target, ceiling = ceiling, ratio = 1, perMin = perMin,
+              -- the cooldown buffer is sized off the GROWTH rate (unrelated to the band height),
+              -- so clamp the refill floor strictly below the cap: target < craftTo < ceiling.
+              craftTo = math.max(target + 1, math.min(target + buffer, ceiling - 1)),
+              reason = "up " .. (-decline) .. " in " .. mins(span) .. "m, past band", _rank = -decline,
+            }
+          else
+            out[#out + 1] = {
+              kind = "cap", name = name, label = h.label or name, seeded = true,
+              target = 0, craftTo = 0, ceiling = math.max(0, math.floor(h.aN or 0)), perMin = perMin,
+              reason = "up " .. (-decline) .. " in " .. mins(span) .. "m", _rank = -decline,
+            }
+          end
         elseif q and decline >= minDrain
             and (h.aN or 0) < (q.target or 0) and (h.a0 or 0) < (q.target or 0) then
-          local proposed = (q.target or 0) + math.max(minDrain, math.floor(perMin * 5))
+          local proposed = (q.target or 0) + buffer
           if proposed > (q.craftTo or 0) then
             out[#out + 1] = {
               kind = "raise", name = name, label = h.label or name, seeded = true,
-              target = q.target, craftTo = proposed,
+              target = q.target, craftTo = proposed, perMin = perMin,
               reason = "below target, still draining", _rank = decline,
             }
           end
