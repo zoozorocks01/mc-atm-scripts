@@ -985,6 +985,30 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+print("draw double-buffer (UI-1)")
+do
+  local buf = draw.newBuffer(10, 3)
+  t.eq(#buf.rows, 3, "newBuffer makes height rows")
+  t.eq(buf.rows[1].text, "          ", "newBuffer rows start blank (width spaces)")
+  t.eq(#buf.rows[1].fg, 10, "newBuffer fg run matches width")
+  draw.bufferWrite(buf, 3, 2, "HI", colors.red, colors.white)
+  t.eq(buf.rows[2].text, "  HI      ", "bufferWrite places text at x")
+  t.eq(buf.rows[2].fg:sub(3, 4), "ee", "bufferWrite sets fg on the written cells (red=e)")
+  t.eq(buf.rows[2].bg:sub(3, 4), "00", "bufferWrite sets bg on the written cells (white=0)")
+  draw.bufferWrite(buf, 9, 1, "ABCDE", colors.white, colors.black)
+  t.eq(buf.rows[1].text, "        AB", "bufferWrite clips at the right edge")
+  -- renderBuffer: blit only changed rows; same-as-previous -> no writes
+  local writes = {}
+  local target = { getSize = function() return 10, 3 end, setCursorPos = function() end,
+    blit = function(txt) writes[#writes + 1] = txt end }
+  draw.renderBuffer(target, buf, nil)
+  t.eq(#writes, 3, "renderBuffer with no previous blits every row")
+  writes = {}
+  draw.renderBuffer(target, buf, buf)
+  t.eq(#writes, 0, "renderBuffer skips unchanged rows (diff)")
+end
+
+-- ---------------------------------------------------------------------------
 print("power math (QUICK-2)")
 do
   -- fmt thresholds (FE / kFE / MFE / GFE / TFE)

@@ -22,6 +22,8 @@ local paletteApplied = false
 local viewPage = 1     -- VIEW-2: current page of the paginated stored-items list
 local viewNavRow = nil -- VIEW-2: [< PREV]/[NEXT >]/[SORT] button row, rebuilt each draw
 local viewSort = "qty" -- VIEW-3: current sort mode (qty / az / mod)
+local frame = nil      -- UI-1: current render buffer (set during present())
+local prevFrame = nil  -- UI-1: last rendered buffer, for diff (flicker-free redraw)
 
 local function peripheralTypeMatches(actual, expected)
   if actual == expected then return true end
@@ -183,39 +185,63 @@ local function colorForPercent(value)
   return colors.lime
 end
 
+-- UI-1: write through the frame buffer when one is active (the flicker-free path),
+-- else straight to the monitor (defensive fallback).
 local function line(y, text, color)
-  uiDraw.line(monitor, y, text, color or colors.white, colors.black)
+  if frame then
+    uiDraw.bufferWrite(frame, 1, y, uiDraw.fit(text, frame.width), color or colors.white, colors.black)
+  else
+    uiDraw.line(monitor, y, text, color or colors.white, colors.black)
+  end
 end
 
 local function bar(y, label, used, total)
-  local w = monitor.getSize()
+  local w = frame and frame.width or monitor.getSize()
   local p = pct(used, total)
   local barWidth = math.max(10, w - #label - 12)
   local filled = math.floor((p / 100) * barWidth)
+  local barX = #label + 3
+
+  if frame then
+    uiDraw.bufferWrite(frame, 1, y, label .. " [", colors.white, colors.black)
+    uiDraw.bufferWrite(frame, barX, y, string.rep(" ", filled), colors.white, colorForPercent(p))
+    uiDraw.bufferWrite(frame, barX + filled, y, string.rep(" ", barWidth - filled), colors.white, colors.gray)
+    uiDraw.bufferWrite(frame, barX + barWidth, y, "] " .. string.format("%3.0f%%", p), colors.white, colors.black)
+    return
+  end
 
   monitor.setCursorPos(1, y)
   monitor.setTextColor(colors.white)
   monitor.setBackgroundColor(colors.black)
   monitor.clearLine()
   monitor.write(label .. " [")
-
   for i = 1, barWidth do
     monitor.setBackgroundColor(i <= filled and colorForPercent(p) or colors.gray)
     monitor.write(" ")
   end
-
   monitor.setBackgroundColor(colors.black)
   monitor.setTextColor(colors.white)
   monitor.write("] " .. string.format("%3.0f%%", p))
 end
 
-local function drawWaiting(message)
+-- UI-1: render a frame through the diff double-buffer. The renderFn draws via
+-- line()/bar() into `frame`; renderBuffer rewrites only the rows that changed
+-- (blit), so there is no whole-screen monitor.clear flash between frames.
+local function present(renderFn)
   if not monitor then return end
-  monitor.setBackgroundColor(colors.black)
-  monitor.clear()
-  line(1, TITLE, colors.cyan)
-  line(3, message, colors.yellow)
-  line(5, "Needs modem on " .. PROTOCOL, colors.gray)
+  local w, h = monitor.getSize()
+  frame = uiDraw.newBuffer(w, h)
+  renderFn(w, h)
+  prevFrame = uiDraw.renderBuffer(monitor, frame, prevFrame)
+  frame = nil
+end
+
+local function drawWaiting(message)
+  present(function()
+    line(1, TITLE, colors.cyan)
+    line(3, message, colors.yellow)
+    line(5, "Needs modem on " .. PROTOCOL, colors.gray)
+  end)
 end
 
 -- VIEW profile: the inventory viewer (storage, RS energy, top stored items).
@@ -372,33 +398,33 @@ local function draw(data)
     return
   end
 
-  monitor.setBackgroundColor(colors.black)
-  monitor.clear()
-  line(1, TITLE .. "  [" .. PROFILE .. "]", colors.cyan)
+  present(function()
+    line(1, TITLE .. "  [" .. PROFILE .. "]", colors.cyan)
 
-  -- Readiness banner: say plainly whether this screen is live or reconnecting, so
-  -- a frozen-looking display is never mistaken for current data.
-  local age = os.clock() - (lastSeen or os.clock())
-  if not lastSeen then
-    line(2, "STARTING - waiting for source...", colors.yellow)
-  elseif age > STALE_SECONDS then
-    line(2, "RECONNECTING - last update " .. math.floor(age) .. "s ago", colors.orange)
-  else
-    line(2, "LIVE - source " .. tostring(data.source or "?") .. "   updated " .. math.floor(age) .. "s ago", colors.lime)
-  end
+    -- Readiness banner: say plainly whether this screen is live or reconnecting, so
+    -- a frozen-looking display is never mistaken for current data.
+    local age = os.clock() - (lastSeen or os.clock())
+    if not lastSeen then
+      line(2, "STARTING - waiting for source...", colors.yellow)
+    elseif age > STALE_SECONDS then
+      line(2, "RECONNECTING - last update " .. math.floor(age) .. "s ago", colors.orange)
+    else
+      line(2, "LIVE - source " .. tostring(data.source or "?") .. "   updated " .. math.floor(age) .. "s ago", colors.lime)
+    end
 
-  local onlineText, onlineColor = "unknown", colors.yellow
-  if data.online == true then onlineText, onlineColor = "ONLINE", colors.lime
-  elseif data.online == false then onlineText, onlineColor = "OFFLINE", colors.red end
-  line(3, "Grid: " .. onlineText .. "   Types: " .. fmt(data.unique) .. "   Items: " .. fmt(data.totalAmount), onlineColor)
+    local onlineText, onlineColor = "unknown", colors.yellow
+    if data.online == true then onlineText, onlineColor = "ONLINE", colors.lime
+    elseif data.online == false then onlineText, onlineColor = "OFFLINE", colors.red end
+    line(3, "Grid: " .. onlineText .. "   Types: " .. fmt(data.unique) .. "   Items: " .. fmt(data.totalAmount), onlineColor)
 
-  if PROFILE == "autocraft" then
-    drawAutocraft(data)
-  elseif PROFILE == "alerts" then
-    drawAlerts(data)
-  else
-    drawView(data)
-  end
+    if PROFILE == "autocraft" then
+      drawAutocraft(data)
+    elseif PROFILE == "alerts" then
+      drawAlerts(data)
+    else
+      drawView(data)
+    end
+  end)
 end
 
 -- VIEW-2: redraw + touch paging helpers.
@@ -428,7 +454,7 @@ while true do
 
   if not monitor then
     monitor = findPeripheral({ "monitor" }, MONITOR_SIDE)
-    if monitor then pickTextScale() end
+    if monitor then pickTextScale(); prevFrame = nil end -- fresh buffer baseline on (re)acquire
   end
 
   if not modemsOpen then
