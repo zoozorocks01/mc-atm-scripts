@@ -1,13 +1,53 @@
 # Automation Plan — automated vs manual, per resource
 
-The complete classification of the operator's ~79 quotas: **automated** (on the
-autocrafter) or **manual** (left off by design), with the specific registry id(s)
-and the reason, grouped by category, plus dependencies and rollout order.
+The complete classification of resources: **automated** (on the autocrafter) or
+**manual** (left off by design), with the specific registry id(s) and the reason,
+grouped by category, plus dependencies and rollout order.
 
-> Source: the live-recon classification (computer 6: `.atm10-managed` ~70 quotas,
-> `.atm10-craft-results`, `.atm10-patterns-needed.txt` — RS has 29 craftable, 63
-> still need patterns) cross-checked against `lib/atm10-presets.lua` (zoozo-late-game),
-> `docs/RS_PATTERN_SPAWNING.md`, and `docs/MACHINE_INTEGRATION_PLAN.md`.
+> ⚠️ **DEPLOYED ≠ DOCUMENTED — read this first (round-2 recon, 2026-06-26).**
+> This doc describes the **INTENDED late-game end-state** (the banded balancer). It
+> is **NOT what is running on computer 6 today.** The deployed `inventory-config.lua`
+> (computer 6's real file) is a **small hand-written set**: ~13 quota items across
+> Base / Mekanism / MystAgri / MI, `mode = "manual"`, `stockKeeper` on,
+> `cooldownSeconds = 300`, `maxCraftsPerCycle = 8`, `overflowReserve = 0`,
+> `maxRequest = 65536`. It has **NO compress chains, NO 264k dust bands, NO
+> ceiling/into/ratio overflow rules, and no metals beyond iron/gold/quartz/redstone.**
+> The banded balancer below lives ONLY in the **`zoozo-late-game` preset**
+> (`lib/atm10-presets.lua`), which must be **explicitly applied from the console**
+> (applying it also flips `smartMode` on). It has **not** been applied. So: late-game
+> banding is **DESIGNED + preset-ready but NOT deployed**. Deploying = apply
+> `zoozo-late-game`. (Round-2 finding #1.)
+
+> ⚠️ **Recon freshness — this pass could NOT read the live base (SSH locked).** The
+> round-2 recon attempted SSH to `zjn-home-two` and **failed: the 1Password ED25519
+> agent was locked** ("communication with agent failed; Permission denied"). Per the
+> hard rules SSH is best-effort, so this pass fell back to **repo files** (which mirror
+> computer 6's deployed scripts) cross-checked against the `base-recon-findings`
+> memory (point-in-time 2026-06-24/25) and the K2 inbox. **Every live-state claim
+> below — `.atm10-managed` quota counts, what's mid-craft, craft-results rows — is
+> from that earlier snapshot, NOT a fresh read.** When 1Password is unlocked, one
+> read-only pass (cat the five `.atm10-*` files under `computercraft/computer/6/` +
+> tail the latest server log) confirms which preset/quotas are actually loaded,
+> current mode, and what's mid-craft. **Items needing the live grid/ledger are flagged
+> `in-game-pending`.**
+
+> **Three disagreeing quota sources of truth** (round-2 finding #2). Quotas are
+> specified in three places that disagree — name the precedence before editing any:
+> 1. **Deployed** `inventory-config.lua` — ~13 items, manual, no control fields. *This
+>    is what is actually running.*
+> 2. **Example** `inventory-config-example.lua` — ~33 items, adds Refined Storage + a
+>    full Mekanism circuit ladder + the control-center fields (all OFF/nil). A template.
+> 3. **Preset** `zoozo-late-game` in `lib/atm10-presets.lua` — ~80 banded items. *This
+>    is the late-game TARGET, applied on top of a minimal config.*
+>
+> Canonical intent: the **preset is the late-game target**; the deployed file is an
+> early hand-written subset. Do not silently mistake the deployed file for this spec.
+
+> Source for the *intended* classification: `lib/atm10-presets.lua` (zoozo-late-game)
+> cross-checked against the `base-recon-findings` memory, `docs/RS_PATTERN_SPAWNING.md`,
+> and `docs/MACHINE_INTEGRATION_PLAN.md`. The earlier `.atm10-managed`/`.atm10-craft-
+> results`/`.atm10-patterns-needed.txt` counts (RS ~29 craftable) are from the
+> 2026-06-24/25 snapshot, not re-verified this pass (`in-game-pending`).
 
 > **Ground truth on craftability:** CC-side `getCraftableItems`/`isCraftable` read
 > blind (every `getItems` row shows `isCraftable=false`, `getCraftableItems`=29) yet
@@ -52,9 +92,33 @@ chains because they share the same 9:1 / dust→ingot recipes.
 
 ## 2. Metals — AUTOMATED (the workhorse) + a few BLOCKED
 
-The metal **compress chains** are the proven core: `dust (264k band) → ingot (100k
-band) → block`, overflow-only direction = compress surplus into dense blocks. 13
-items were mid-craft at recon time; all relevant rows are `ok=true`.
+The metal **compress chains** are the *designed* core: `dust (264k band) → ingot
+(100k band) → block`, overflow-only direction = compress surplus into dense blocks.
+At the 2026-06-24 snapshot 13 items were mid-craft (`in-game-pending` — not
+re-verified this pass).
+
+> ⚠️ **The 264k dust FLOOR is a refill target the chain CANNOT currently satisfy**
+> (round-2 finding #6). The `chain()` helper sets every metal `*_dust` to
+> `target = craftTo = 264000`, i.e. it asks the planner to **refill** dust up to 264k.
+> But `dust → ingot` is the *reverse* direction (a smelt/PROCESSING recipe, §below),
+> and per `RS_PATTERN_SPAWNING.md` processing patterns are **not yet hand-authorable**
+> (gated on one in-world reference pattern, operator Q1). There is **no grid recipe
+> that produces dust**, so a 264k dust floor with no processing pattern makes the
+> planner **perpetually try and fail** to refill dust it cannot craft. Until the
+> reference processing pattern exists, the dust rows should be **floors-to-WATCH /
+> compress-SOURCE only (no `craftTo` refill)**. The only proven autocraft direction is
+> the **block** step (the 9:1 grid pattern). Reconcile each metal's dust step against
+> `.atm10-craft-results` live (`in-game-pending`).
+
+> ⚠️ **Namespace conflict across presets** (round-2 finding #3). The early/mid generic
+> presets use `mekanism:steel_ingot`, `mekanism:bronze_ingot`, `mekanism:enriched_iron`,
+> `mysticalagriculture:prosperity_ingot`, `mysticalagriculture:soulium_ingot` — but
+> recon (and the `zoozo-late-game` chain itself, `alltheores:steel_ingot`) say
+> steel/bronze and the alloys are **`alltheores:*`**. The same metal is quota'd under
+> two namespaces across presets. The `mekanism:`/`mysticalagriculture:` ingot forms
+> will read **NOT CRAFTABLE / UNKNOWN** against the live `getItems` grid and never
+> craft. **`alltheores:` is the recon-confirmed form.** Reconcile against the live grid
+> (`in-game-pending`) before relying on the early/mid presets.
 
 ### AUTOMATED — proven live (alltheores + vanilla)
 
@@ -183,7 +247,16 @@ Treated as buffers/targets pending machine integration, or left manual.
 
 The automation frontier advances in this order (each stage unblocks the next):
 
-1. **Metals AUTOMATED (done/in-progress).** Compress chains are live. Confirm every
+0. **Deploy the late-game config (the actual first action, not yet done).** The
+   banded balancer above is preset-ready but **not running** — the live config is the
+   ~13-item hand-written set. Stage 0 is: on the console, **apply the `zoozo-late-game`
+   preset** (which flips `smartMode` on), THEN apply the dust-floor fix (finding #6:
+   dust rows = watch/compress-source, no `craftTo` refill) and the namespace
+   reconciliation (finding #3: `alltheores:` forms). Until this is done, "metals
+   AUTOMATED" describes the preset, not the live system. The Ultra Autocrafter
+   reference is at world coords **~1128, 72, 2660** (from recon memory;
+   `in-game-pending` to re-confirm location + which patterns it hosts).
+1. **Metals AUTOMATED (the proven core once deployed).** Compress chains. Confirm every
    metal's `dust→ingot` step has a processing pattern; the few that don't are the
    first Machine-Integration Track A targets. *Tooling: CRAFT-3 (validate IDs),
    CRAFT-5 (per-category budgets so a dust flood can't starve alloys/essences).*

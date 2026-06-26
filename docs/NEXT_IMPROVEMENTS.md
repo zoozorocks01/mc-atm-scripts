@@ -6,7 +6,7 @@ the operator's stated priority order: reliability → control → autocraft-trut
 viewer → polish).
 
 > **Line numbers are from the recon snapshot.** The repo has since advanced
-> (HEAD `bc7f611`); `inventory-info.lua` is at **186** top-level locals (over the 185
+> (HEAD `e4bdcba`); `inventory-info.lua` is at **186** top-level locals (over the 185
 > soft cap) — any new manager state MUST go into an existing table, never a bare
 > top-level local. CC's Cobalt counts stricter than Lua 5.4, so a green gate is NOT
 > proof CC accepts it. Verify each line:area against current code before editing.
@@ -19,6 +19,42 @@ viewer → polish).
 - **Phase:** `Code` = the Code phase will attempt · `discuss` = pinned as
   major-for-discussion (too large/risky to fire unattended).
 - Size · Value · Risk as reported by recon.
+
+---
+
+## Session log — 2026-06-26 (round 2: smart-mode accuracy sweep + recon)
+
+- **SMART-1 confidence-weighted ranking — SHIPPED** (`8b35ac3`). `analyze()` weights
+  `_rank` by `(0.5 + 0.5*conf)` where `conf = nSamples-confidence × span-confidence`;
+  thin/short evidence is demoted but never zeroed. Exposes `s.conf`. Pure lib, biting
+  tests.
+- **SMART-2 maxA + spiky detection — SHIPPED** (`db2b73f`). `record()` tracks a running
+  max; `analyze()` seeds cap/compress ceilings from `max(aN, maxA)` (not a possibly-low
+  last sample) and tags self-replenishing items `spiky`, damping their confidence so
+  they rank below monotone drainers of equal net decline. Backward-compatible (maxA
+  defaults to aN). Pure lib.
+- **SMART-3 surface rate + confidence on the SMART row — SHIPPED** (`195c096`). New pure
+  `suggest.confLabel`; row shows `~N/min, conf lo/med/hi[, spiky]`. Render-only, no
+  hit-region or local-count change. `in-game-verify: pending` (exact row layout is
+  in-world-visual).
+- **SMART-6 suggestion invariants pinned — SHIPPED** (`e4bdcba`). Test-only:
+  at-most-one-suggestion-per-name + max-truncation-keeps-highest-confidence. Both bite.
+- **Gate after round 2:** 553 passed / 0 failed (+28 tests), both smokes OK, mirrors
+  identical, manager locals unchanged at 186.
+- **SKIPPED (conservative):**
+  - **SMART-4 (regression/min-floor slope gate):** behavior-changing, can suppress
+    legitimate quotas, and overlaps the spiky-confidence damping already shipped in
+    SMART-2 (a safer mechanism for the same recovery-spike false-quota concern). See
+    SMART-7 below for the residual idea, kept as flag-only.
+  - **SMART-5 (needpattern/CRAFT-4 advisory branch):** blocked on the live-grid
+    `craftable`-blind recon blocker; not shipping a dead pure branch with no value
+    alone. Pinned as SMART-8 below, gated on a craftable source.
+- **RECON (SSH locked):** the round-2 base recon could **not** read the live base —
+  the 1Password ED25519 agent was locked, so SSH to `zjn-home-two` failed. All
+  base-state findings this pass are from repo files + the 2026-06-24/25 memory snapshot.
+  The big finding (deployed config is the ~13-item hand-written set, NOT the late-game
+  banded spec; control not enabled live) is now flagged in `AUTOMATION_PLAN.md` and
+  `BASE_INTEGRATION.md`. Re-verify on the next unlocked pass.
 
 ---
 
@@ -188,6 +224,85 @@ viewer → polish).
 
 ---
 
+## Tier S — Smart mode (pure lib, gate-provable; round-2 follow-ons)
+
+> The four highest-value smart-mode wins (SMART-1/2/3/6) shipped round 2. These are the
+> remaining ideas from the smart-mode lens, ranked. All are pure `lib/atm10-suggest.lua`
+> (mirror to root `atm10-suggest.lua`) except where noted — gate-provable, ship
+> unattended once tests bite.
+
+### S7. Robust slope / min-floor sustained-drain gate (residual of SMART-4)
+- **M · value med · risk med · Verify: gate · Phase: discuss**
+- `lib/atm10-suggest.lua` `decline = a0 - aN` is two-point and hostage to the first/last
+  sample. The full SMART-4 (least-squares slope) was **skipped** as behavior-changing +
+  overlapping SMART-2's spiky damping. The residual safe idea: require `minA` to be
+  within `minDrain` of `aN` before firing a steady-quota, so a single recovered dip
+  (`1000→100→900`) does **not** emit a quota while a monotone `1000→…→100` does.
+- **Why discuss, not Code:** still behavior-changing (can suppress a real quota); SMART-2
+  already damps the same false-quota case via confidence. Only ship if SMART-2's damping
+  proves insufficient in-world. Test must BITE: recovery-spike series emits no steady
+  quota; monotone drainer still does.
+
+### S8. needpattern advisory branch (pure now, wire on CRAFT-4)
+- **M · value med · risk low · Verify: gate (pure) + blocked (wiring) · Phase: discuss**
+- `analyze()` has no craftability input, so it can't separate "drains hard AND we can
+  autocraft it" (actionable quota) from "drains hard but has NO pattern" (operator must
+  spawn one — CRAFT-4). Add an optional `ctx.patternless = {[name]=true}`; for an
+  unmanaged steady drainer in that set, emit `kind='needpattern'` (advisory, rendered
+  `[NEEDS PATTERN]`). When `ctx.patternless` is absent, behavior is byte-identical
+  (backward compatible).
+- **Blocked:** the live grid reads `craftable` blind (recon blocker — see
+  `base-recon-findings`), so there is no source to populate `patternless` today. Ship
+  the **pure branch + tests** now is possible, but it is a dead branch with no caller
+  until CRAFT-4 lands a craftable source — so it is pinned, not fired. Manager wiring
+  (`inventory-info.lua:1118-1122` feed) deferred to CRAFT-4.
+
+---
+
+## Tier F — Base / config truth (docs + deploy; round-2 recon)
+
+> Not code-shippable unattended (most need the operator + a live base). Pinned so the
+> deployed-vs-documented gap and the SSH-locked staleness are not lost.
+
+### F1. Deploy the late-game config (or decide to stay minimal)
+- **operator action · value high · risk med · Verify: in-game · Phase: discuss**
+- Deployed `inventory-config.lua` = ~13-item hand-written manual set; the banded
+  balancer lives only in the `zoozo-late-game` preset and is **not applied**. Deploying =
+  apply the preset on the console (flips smart mode on) + the dust-floor fix (F2) + the
+  namespace fix (F3). See `AUTOMATION_PLAN.md` §0/§8 and `BASE_INTEGRATION.md` §1.
+
+### F2. Dust rows: floors-to-watch, NOT craftTo refill
+- **S · value med · risk med · Verify: in-game · Phase: discuss**
+- `chain()` sets every `*_dust` to `target = craftTo = 264000`, but `dust→ingot` is a
+  processing recipe with no spawnable pattern yet (operator Q1) and no grid recipe
+  produces dust — so the planner perpetually tries+fails to refill it. Change dust rows
+  to watch/compress-source only (no `craftTo`) until the reference processing pattern
+  exists. `lib/atm10-presets.lua` chain helper.
+
+### F3. Reconcile preset metal namespaces (`alltheores:` is canonical)
+- **S · value med · risk med · Verify: in-game · Phase: discuss**
+- Early/mid presets use `mekanism:steel_ingot` / `mekanism:bronze_ingot` /
+  `mysticalagriculture:prosperity_ingot` etc.; recon + the zoozo chain say these are
+  `alltheores:*`. The wrong-namespace rows read NOT CRAFTABLE and never craft. Reconcile
+  against the live `getItems` grid (`in-game-pending`).
+
+### F4. Enable + lock down control on the live config
+- **S · value high · risk low · Verify: in-game · Phase: discuss**
+- Deployed config has NO `controlEnabled`/`allowRedstone`/`controlToken`/
+  `controlAllowedSenders` keys → computer 6 cannot accept a control command today
+  ("proven end-to-end" was a test config, finding #4). Stage 0 real work: add the keys
+  (enabled + redstone), set trusted sender IDs + token (operator Q5). `BASE_INTEGRATION.md`
+  §3 Stage 0.
+
+### F5. Re-run live recon when 1Password is unlocked
+- **S · value med · risk low · Verify: in-game · Phase: discuss**
+- This pass's base findings are from repo + the 2026-06-24/25 memory (SSH locked). One
+  read-only pass when unlocked (cat the five `.atm10-*` under `computercraft/computer/6/`
+  + tail the latest server log) confirms which preset/quotas are loaded, current mode,
+  what's mid-craft, and whether control was ever enabled — confirms/refutes F1, F2, F4.
+
+---
+
 ## Tier E — Low value / flag-only
 
 ### E1. Pause auto page-rotation after any recent interaction on an auto page
@@ -218,11 +333,27 @@ viewer → polish).
 | D4 | viewer zebra rows | S | med | low | visual | Code |
 | D5 | UI-5 empty/too-small panels | M | med | low | gate+visual | Code |
 | E1 | pause auto-rotation on interaction | S | low | low | gate | Code/skip |
+| SMART-1 | confidence-weighted ranking | S | high | low | gate | DONE (`8b35ac3`) |
+| SMART-2 | maxA + spiky detection | M | high | low | gate | DONE (`db2b73f`) |
+| SMART-3 | surface rate+conf on SMART row | S | med | low | gate | DONE (`195c096`, in-game-verify pending) |
+| SMART-6 | suggestion invariants (tests) | S | low | low | gate | DONE (`e4bdcba`) |
+| S7 | robust slope / min-floor gate | M | med | med | gate | discuss (overlaps SMART-2) |
+| S8 | needpattern advisory branch | M | med | low | gate+blocked | discuss (gated on CRAFT-4) |
+| F1 | deploy late-game config | op | high | med | in-game | discuss |
+| F2 | dust rows = watch, not refill | S | med | med | in-game | discuss |
+| F3 | reconcile preset namespaces | S | med | med | in-game | discuss |
+| F4 | enable+lock down live control | S | high | low | in-game | discuss |
+| F5 | re-run live recon (SSH unlocked) | S | med | low | in-game | discuss |
 
 **Code phase will attempt (gate-provable, ship unattended):** A1, A2, A3, B2 (parts),
-C1, C2, D2, D4, D5, E1.
+C1, C2, D2, D4, D5, E1. *(Round 2: SMART-1/2/3/6 shipped.)*
 
 **Pinned major-for-discussion (in-game-visual and/or high-risk):** B1 (manager double
 buffer), C3 (tap targets), D1 (power double buffer), D3 (header band). These touch
 mirror pairs + hit-regions and their payoff is only verifiable on a live monitor; do
 B1 first since C3/D3 depend on it.
+
+**Pinned for discussion (smart mode + base):** S7 (overlaps SMART-2's damping — only if
+insufficient in-world), S8 (gated on CRAFT-4 craftable source), F1–F5 (operator + live
+base; the deployed-vs-documented gap and SSH-locked staleness — see `AUTOMATION_PLAN.md`
++ `BASE_INTEGRATION.md`).
