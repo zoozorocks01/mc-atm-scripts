@@ -22,6 +22,74 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-26 (reliability PASS 1 — 4 safe wins shipped)
+
+Four pure-logic / genuine-resilience reliability wins, each its own commit, gate
+green throughout (606 -> 610 passed), mirrors identical, manager locals unchanged
+at 186 (state folded onto existing tables).
+
+- **A3 bridge-degraded GATING wired (back-off) — SHIPPED** (`bb73312`). New pure
+  `health.gateCrafts(state, ok, threshold)` (allowFire = not degraded) in
+  `atm10-health.lua`. `scan()` feeds the single per-cycle bridge outcome (false on
+  no-bridge / offline / stale, true on a clean read) and stashes `allowFire` on
+  `craftingCache.__bridge` (reserved __-keys on a never-pairs()-iterated table → no
+  new local). `refreshAndDraw` SKIPS `autoApprovePlans` + `processCraftQueue` while
+  degraded — pausing the mutating `craftItem` at a half-attached bridge (the
+  uncatchable AP `NotAttachedException` trigger). Auto-resumes on the first clean
+  scan. `data.bridgeDegraded` is set but NOT rendered — the header **chip stays
+  PINNED** (B1, in-game-visual). Biting test on `gateCrafts` (HOLD-at-threshold).
+- **Thrown rednet.broadcast contained — SHIPPED** (`acd60da`). `broadcast()` built
+  its payload inline then called `rednet.broadcast` raw, before `renderCurrent()`;
+  a modem closed/removed mid-run threw into `guard()`, which nulled a healthy
+  monitor and skipped the primary console's frame for a refresh interval. Payload
+  now built outside a `pcall` that wraps only the send (genuine resilience for an
+  optional outbound transport — payload-build bugs still throw). Biting smoke test:
+  a throwing broadcast must still render PLAN; reverting the pcall fails it.
+- **craftResults prune-on-load — SHIPPED** (`aa49927`). `loadCraftResults` now
+  bounds via `cqueue.pruneResults` on load (was only pruned on the craft-fired
+  path), matching the dismissed prune-on-load pattern. Biting test (300 → 150).
+- **trendHistory prune-on-load — SHIPPED** (`358eb83`). `loadTrends` now bounds via
+  `suggest.prune` on load (was only pruned in the throttled save block, never with
+  smart mode off). Biting test (1000 → 800).
+
+### Reliability PASS 1 — PINNED (not fired unattended)
+
+- **Persistence: .tmp-orphan recovery on load** — `S · value high · risk MED-for-this-pass`.
+  `atomicWrite` (`inventory-info.lua:316-330`) deletes the live file then moves tmp
+  over it; on a move failure the new data lives ONLY in `path..'.tmp'`, and no
+  loader checks for it — worse, the NEXT `atomicWrite` deletes the orphan (line 318)
+  before writing, discarding the only surviving copy on a disk-full incident (the
+  exact scenario that locked the disk once). The fix (copy `download()`'s self-heal
+  at `atm10-update.lua:122-124` into a shared "read state file, recovering .tmp if
+  the main file is missing" helper used by all 6 loaders) is the **largest-blast-radius**
+  persistence change: it couples the write path (must NOT blindly delete a tmp that
+  is the only copy) with all 6 read paths, and getting the recover-vs-discard
+  ordering wrong could resurrect stale data over good. Not trivially gate-provable
+  without a multi-file crash-simulation harness → **pinned for a careful, owned
+  commit** rather than fired unattended this pass.
+- **Scan-loop: scope guard()'s monitor-drop to render/peripheral faults only** —
+  `S · value med`. `guard()` (`inventory-info.lua:2237-2244`) nulls the monitor on
+  ANY error class, so a logic/persistence fault needlessly drops a healthy monitor +
+  forces a full palette/redraw. Refinement, not a crash hole (the loop already
+  survives). Pinned: distinguishing fault classes is a behavior change worth doing
+  deliberately, lower value than the four shipped.
+- **Scan-loop: hold-last-good on a THROWN scan** — `S · value med`. The pcall-failed
+  branch (`2227-2229`) nulls `lastData` and drops to WAITING, unlike the `stale`
+  branch which holds the last plan. A transient scan throw should hold last-good with
+  a banner. Pinned: behavior change to the error-display path; do with the guard()
+  scoping above as one owned display-resilience commit.
+- **Scan-loop: per-field hold-last-good on bridgeStats** — `S · value low`. The
+  whole `bridgeStats` table is replaced each throttled refresh, so a transient nil
+  blanks all six display stats. Display-only, lowest value. Pinned.
+- **AP-window micro-shrinks (both already incidentally contained, low value)** —
+  (a) craftrunner offline sentinel: have `requestCraft` return a distinguishable
+  `'bridge offline'` so the runner STOPS the rest of the fire loop and leaves
+  entries APPROVED not ERROR; (b) `isConnected` recheck at the top of
+  `processCraftQueue`. Both are defense-in-depth on a path already contained by
+  STAB-2 + the per-call recheck; low value, pinned.
+
+---
+
 ## Session log — 2026-06-26 (round 3: two safe wins — C1 flash + A3 health helper)
 
 - **C1 tap-flash ack on Smart / Presets / editor — SHIPPED** (`166a75c`). Reuses the
@@ -362,7 +430,7 @@ viewer → polish).
 |---|---|---|---|---|---|---|
 | A1 | STAB-2 craftItem isConnected recheck | S | high | med | gate | DONE (already shipped, test bites) |
 | A2 | STAB-1 pin with smoke tests | S | high | low | gate | DONE (smoke_auto bites) |
-| A3 | bridge-degraded helper / chip | S | med | low | gate | pure helper DONE (`atm10-health`, 20 biting tests); chip still pinned (visual + state at local cap, wire with B1) |
+| A3 | bridge-degraded helper / gating / chip | S | med | low | gate | helper + GATING (craft back-off) DONE (`bb73312`, gateCrafts wired into scan/refreshAndDraw); chip still pinned (visual, wire with B1) |
 | B1 | UI-2 manager double buffer | major | high | high | visual | discuss |
 | B2 | shrink touch-block window | M | high | med | gate | Code/discuss |
 | C1 | tap flash on Browse/Smart/Presets/editor | S | med | low | gate | DONE (`166a75c`, in-game-verify pending) |
