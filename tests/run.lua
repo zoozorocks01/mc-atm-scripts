@@ -955,6 +955,17 @@ local pn = {
 suggest.prune(pn, 100, { maxEntries = 2 })
 t.check(pn.busy ~= nil and pn.mid ~= nil and pn.blip == nil, "prune keeps high-sample entries, evicts a one-off blip")
 
+-- prune-on-LOAD shape: loadTrends bounds the table on load via
+-- `(suggest.prune(data, now, {maxEntries=TREND_MAX_ENTRIES, ...}))`, so a trend
+-- file already over the 800-entry cap is bounded at boot, not only on the first
+-- throttled save. Pin that the parenthesized single-return bounds 1000 -> 800.
+local pl = {}
+for i = 1, 1000 do pl["t" .. i] = { tN = i, n = i } end -- t1000 most-sampled
+local plLoaded = (suggest.prune(pl, 2000, { maxEntries = 800 }))
+local plN = 0; for _ in pairs(plLoaded) do plN = plN + 1 end
+t.eq(plN, 800, "prune-on-load bounds an oversized trend table (1000 -> 800)")
+t.check(plLoaded.t1000 ~= nil and plLoaded.t1 == nil, "prune-on-load keeps high-sample entries, drops thin ones")
+
 -- pruneDismissed: bound the operator's dismissed set (cap drops oldest, TTL ages out)
 -- STAB-4 acceptance: inserting cap+50 dismissals leaves the saved set <= cap.
 local big = {}

@@ -394,7 +394,14 @@ local function loadTrends()
   file.close()
   local ok, data = pcall(textutils.unserialize, text)
   if not ok or type(data) ~= "table" then return {} end
-  return data
+  -- Bound on load: suggest.prune otherwise runs ONLY in the throttled save block
+  -- (and never when smart mode is off), so a trend file already over the cap (an
+  -- older build, a long session persisted then reloaded after a watchdog restart)
+  -- would sit oversized in memory + on disk until the first 2-min save tick. Prune
+  -- here so the size is bounded from boot regardless of save timing or smart mode.
+  return (suggest.prune(data, nowMs(), {
+    maxAgeMs = TREND_MAX_AGE_MS, maxWindowMs = TREND_MAX_WINDOW_MS, maxEntries = TREND_MAX_ENTRIES,
+  }))
 end
 
 local function saveTrends(history)
