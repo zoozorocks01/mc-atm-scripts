@@ -1090,6 +1090,44 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+print("CONF-4 invariants: one suggestion per name + truncation keeps highest-conf")
+do
+  -- INVARIANT 1: each item takes exactly one branch -> at most one suggestion per name.
+  -- A history with a mix of draining / growing / managed-below-target items must never
+  -- emit two rows for the same name (guards future branch additions like needpattern).
+  local mix = {
+    drain = { label = "Drain", t0 = 0, a0 = 1000, tN = 120000, aN = 200, minA = 200, maxA = 1000, n = 20 },
+    grow  = { label = "Grow",  t0 = 0, a0 = 1000, tN = 120000, aN = 5000, minA = 1000, maxA = 5000, n = 20 },
+    okmgd = { label = "OkMgd", t0 = 0, a0 = 900,  tN = 120000, aN = 800,  minA = 800,  maxA = 900,  n = 20 },
+  }
+  local sg = suggest.analyze(mix, { managed = {}, quotas = { okmgd = { target = 256, craftTo = 300 } }, minDrain = 64 })
+  local seen = {}
+  for _, s in ipairs(sg) do
+    t.check(not seen[s.name], "CONF-4: item '" .. s.name .. "' appears at most once")
+    seen[s.name] = true
+  end
+
+  -- INVARIANT 2: when truncating to max, the KEPT set is the highest-ranked. Build many
+  -- equal-decline drainers with varying evidence; with max=2 the two kept must be the two
+  -- with the strongest confidence (most samples + longest span), not arbitrary tail items.
+  -- Spans stay below idealWindow (4*60000=240000) so spanConf is strictly monotone in i and
+  -- no two items tie on _rank: it1 (n=3, span=30000) is thinnest, it6 (n=8, span=180000) richest.
+  local many = {}
+  for i = 1, 6 do
+    many["it" .. i] = { label = "It" .. i, t0 = 0, a0 = 1000, tN = 30000 * i, aN = 200, minA = 200, maxA = 1000, n = 2 + i }
+  end
+  -- max=3 keeps the three full-confidence items (it4/it5/it6, conf saturates at 1) and drops
+  -- the thinner-evidence tail (it1/it2/it3) even though all share the same net decline (800).
+  local capped = suggest.analyze(many, { managed = {}, minDrain = 64, minWindowMs = 30000, max = 3 })
+  t.eq(#capped, 3, "CONF-4: truncation respects max")
+  local keptNames = {}; for _, s in ipairs(capped) do keptNames[s.name] = true end
+  t.check(keptNames["it4"] and keptNames["it5"] and keptNames["it6"],
+    "CONF-4: truncation keeps the full-confidence drainers, not the thin tail")
+  t.check(not keptNames["it1"] and not keptNames["it2"],
+    "CONF-4 BITE: the thinnest-evidence drainers are dropped (would survive without conf weighting)")
+end
+
+-- ---------------------------------------------------------------------------
 print("CONF-3 confLabel bucketing (lo/med/hi for the SMART row)")
 do
   t.eq(suggest.confLabel(0.0), "lo", "CONF-3: 0 -> lo")
