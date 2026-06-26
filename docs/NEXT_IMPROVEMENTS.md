@@ -213,6 +213,27 @@ viewer → polish).
 - **Why:** removes the largest "feels cheap" tell on the most-watched screen. Graph
   cells are the only nontrivial port.
 
+### D1b. Power graph tap-to-expand + interactive timeframe/scale cycle — PINNED
+- **M · value med · risk high · Verify: visual (in-game only) · Phase: discuss**
+- **Pure groundwork DONE (shipped):** `power.downsample`, `power.bucketByTimeframe`,
+  `power.computeScale` in `atm10-power.lua` (gate-tested), and the nicer min-max
+  sparkline render + `NET_SCALE_MODE`/`NET_SCALE_FIXED` config in `power/display.lua`.
+  What remains is purely the INTERACTIVE layer.
+- **Why pinned:** the display main loop is passive —
+  `power-display.lua` `while true do local _, msg = rednet.receive(PROTOCOL, 1) ... pcall(draw)`.
+  It never calls `os.pullEvent`/`monitor_touch`/`os.startTimer`, so it cannot see a tap.
+  Tap-to-expand and a tap-to-cycle timeframe (1m/10m/1h via `bucketByTimeframe`) / scale
+  (auto↔fixed via `computeScale`) selector REQUIRE converting it to an event-driven
+  `os.pullEvent` loop like the viewer (`remote.lua:465-498`). That rewrite must preserve
+  the existing `pcall(draw)` self-heal and history-on-receive append exactly, AND it
+  overlaps the D1 double-buffer rewrite — so do it **with D1, one owner, in-game only.**
+- **Also:** a 1h window needs `HISTORY_LIMIT` raised from 180 (3 min) to ~3600 (and
+  optionally a pure save/load so the trend survives reboot — currently RAM-only,
+  `power-display.lua` `history={}`/`netHistory={}`). The cap raise is low-risk but
+  pointless without the timeframe UI, so it lands with this item.
+- **Whether the power monitor is physically touch-capable is unknowable from code** —
+  verify in-world before building the touch path. NOT to be fired unattended.
+
 ### D2. Decide: wire box/gauge into the viewer panels OR delete them
 - **S · value med · risk low · Verify: gate · Phase: Code**
 - `atm10-draw.lua:85-108` `box`/`gauge` have **zero callers** repo-wide. The plan says
