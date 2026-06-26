@@ -170,4 +170,134 @@ function console.sortItems(items, mode, acc)
   return items
 end
 
+-- ===========================================================================
+-- A2 REQUEST-PANEL helpers. Pure browse/quantity/job-row logic for the new
+-- craft-request touch program (inventory/request.lua). No peripherals; unit
+-- tested in tests/run.lua. The program does the rendering + hit-testing; these
+-- supply the data shapes + the filtering/clamping/formatting math.
+-- ===========================================================================
+
+-- Case-insensitive substring filter over BOTH the display name and the registry
+-- id. An empty/nil query returns the list UNCHANGED (a NEW array; never mutates
+-- the input). `acc` supplies non-default accessors (same shape as sortItems).
+function console.filterItems(items, query, acc)
+  if type(items) ~= "table" then return {} end
+  acc = acc or {}
+  local getName = acc.name or function(it) return it.name end
+  local getId = acc.id or function(it) return it.id or it.name end
+
+  local out = {}
+  local q = (type(query) == "string") and query:lower():gsub("^%s+", ""):gsub("%s+$", "") or ""
+  if q == "" then
+    for i = 1, #items do out[i] = items[i] end
+    return out
+  end
+
+  for _, it in ipairs(items) do
+    local name = tostring(getName(it) or ""):lower()
+    local id = tostring(getId(it) or ""):lower()
+    if name:find(q, 1, true) or id:find(q, 1, true) then
+      out[#out + 1] = it
+    end
+  end
+  return out
+end
+
+-- Clamp a request quantity into [min, max]. opts.min (default 1) / opts.max
+-- (default 99999) override. A non-numeric `current` snaps to min, then delta is
+-- applied. Mirrors the paginate clamp discipline.
+function console.stepQuantity(current, delta, opts)
+  opts = opts or {}
+  local min = math.floor(tonumber(opts.min) or 1)
+  local max = math.floor(tonumber(opts.max) or 99999)
+  if max < min then max = min end
+  local n = math.floor(tonumber(current) or min)
+  n = n + math.floor(tonumber(delta) or 0)
+  if n < min then n = min end
+  if n > max then n = max end
+  return n
+end
+
+-- The quantity step buttons offered on the detail screen.
+console.quantitySteps = { 1, 8, 16, 64, 256, 1024 }
+
+-- Build the quantity picker button row: [-1024][-64]...[-1] [qty] [+1]...[+1024]
+-- [SUBMIT], laid out via buttonRow so buttonHit works unchanged. Decrement keys
+-- are "dec:<n>", increments "inc:<n>", the SUBMIT key is "submit"; the current
+-- quantity is a non-actionable display cell (key "qty"). `qty` is rendered into
+-- the display cell's label. Layout only -- the program does the draw call.
+function console.quantityButtonRow(qty, y, startX)
+  local specs = {}
+  for i = #console.quantitySteps, 1, -1 do
+    specs[#specs + 1] = { label = "-" .. console.quantitySteps[i], key = "dec:" .. console.quantitySteps[i] }
+  end
+  specs[#specs + 1] = { label = tostring(math.floor(tonumber(qty) or 1)), key = "qty" }
+  for i = 1, #console.quantitySteps do
+    specs[#specs + 1] = { label = "+" .. console.quantitySteps[i], key = "inc:" .. console.quantitySteps[i] }
+  end
+  specs[#specs + 1] = { label = "SUBMIT", key = "submit" }
+  return console.buttonRow(specs, y, startX or 1)
+end
+
+-- Map a craftQueue / manual-job entry to a short live-progress status label.
+-- Recognizes the manual-job made/requested progress (A1) and the queue states.
+-- Pure; the program colors it via console.jobRowFormat's colorKey.
+function console.requestStatusLabel(entry)
+  if type(entry) ~= "table" then return "queued" end
+  if entry.error or entry.failed then
+    return "FAILED: " .. tostring(entry.error or entry.reason or "no recipe")
+  end
+  local requested = tonumber(entry.requested)
+  local made = tonumber(entry.made)
+  if requested and requested > 0 then
+    if (made or 0) >= requested then return "done" end
+    if entry.state == "CRAFTING" then return "crafting " .. (made or 0) .. "/" .. requested end
+    return "queued " .. (made or 0) .. "/" .. requested
+  end
+  if entry.state == "CRAFTING" then return "crafting" end
+  if entry.state == "APPROVED" then return "queued" end
+  if entry.state == "done" then return "done" end
+  return tostring(entry.state or "queued"):lower()
+end
+
+-- Format one live-progress row "<label>  +<request>  <STATUS>" fitted to width.
+-- Returns { text, colorKey } where colorKey is one of "error"/"crafting"/
+-- "done"/"queued" -> the program maps it to a uiStatus color at draw time.
+function console.jobRowFormat(entry, width)
+  width = math.max(1, math.floor(tonumber(width) or 1))
+  entry = entry or {}
+  local label = tostring(entry.label or entry.name or "?")
+  local status = console.requestStatusLabel(entry)
+
+  local colorKey = "queued"
+  if entry.error or entry.failed or status:find("FAILED", 1, true) then colorKey = "error"
+  elseif status:find("crafting", 1, true) then colorKey = "crafting"
+  elseif status == "done" then colorKey = "done" end
+
+  local request = tonumber(entry.request) or tonumber(entry.requested) or 0
+  local text = label .. "  +" .. tostring(math.floor(request)) .. "  " .. status
+  if #text > width then text = string.sub(text, 1, width) end
+  return { text = text, colorKey = colorKey }
+end
+
+-- The one-line config file holding the control token this panel sends with each
+-- craft request. Same pattern as resolveProfile/atm10-display: read the file,
+-- skip comment lines (# or --), trim whitespace; missing => nil (the panel then
+-- sends no token and the manager denies if it requires one -- safe default).
+console.controlTokenFile = "atm10-control-token"
+
+function console.resolveControlToken()
+  if not (fs and fs.exists and fs.exists(console.controlTokenFile)) then return nil end
+  local file = fs.open(console.controlTokenFile, "r")
+  if not file then return nil end
+  local raw = file.readAll() or ""
+  file.close()
+  for chunk in string.gmatch(raw, "[^\r\n]+") do
+    local line = chunk:gsub("%-%-.*$", ""):gsub("#.*$", "")
+    local token = line:gsub("^%s+", ""):gsub("%s+$", "")
+    if token ~= "" then return token end
+  end
+  return nil
+end
+
 return console

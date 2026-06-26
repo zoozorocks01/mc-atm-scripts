@@ -22,6 +22,33 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-26 (A2 — request-panel program shipped)
+
+New viewer-style touch program **inventory/request.lua** (+ root mirror +
+request-startup wrapper + `inventory-request` role in atm10-update.lua). Browses
+the snapshot's `viewItems`, taps to a detail screen, picks a quantity (step
+buttons), and submits a one-shot **craft_request** over `atm10-control-v1`
+(token-gated via `console.resolveControlToken`, A1's `args={count,force}` shape).
+Live jobs strip reconciles against the broadcast `craftQueue` (matches by name),
+lingers finished jobs, and offers CANCEL (sends a forward-compatible `craft_cancel`
+— A1 ships only `craft_request`, so the manager default-denies it and the panel
+surfaces that reply; no client no-op). New pure console helpers
+(`filterItems`/`stepQuantity`/`quantityButtonRow`/`quantitySteps`/`jobRowFormat`/
+`requestStatusLabel`/`resolveControlToken`) with biting unit tests; biting
+load+submit smoke (`tests/smoke_request.lua`, SMOKE-REQUEST OK) proves the SUBMIT
+touch emits exactly one craft_request with the right target/count/token.
+
+- **Gate:** 722 passed / 0 failed (+41); SMOKE OK; SMOKE-AUTO OK; SMOKE-REQUEST OK;
+  all four mirror pairs byte-identical.
+- **in-game-verify: pending** — rendering + monitor_touch on a real panel, and the
+  real manager round-trip (craft_request enqueues a job; CANCEL is denied until A1
+  adds craft_cancel). Free-text search deferred (CC monitors have no soft keyboard;
+  v1 ships sort + pagination only). The panel cannot pre-filter to craftable-only
+  (isCraftable reads blind — CRAFT-3); it submits any item and surfaces the
+  manager's no-recipe rejection as the job error.
+
+---
+
 ## Session log — 2026-06-26 (reliability PASS 1 — 4 safe wins shipped)
 
 Four pure-logic / genuine-resilience reliability wins, each its own commit, gate

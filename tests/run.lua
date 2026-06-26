@@ -1704,6 +1704,80 @@ do
   t.eq(console.sortLabel("az"), "A-Z", "sortLabel maps az")
 end
 
+-- A2 request-panel helpers (filter / quantity / job-row / token)
+do
+  local function items()
+    return {
+      { name = "Zinc Ingot", id = "alltheores:zinc_ingot", amount = 100 },
+      { name = "Iron Ingot", id = "minecraft:iron_ingot", amount = 200 },
+      { name = "Copper Ingot", id = "alltheores:copper_ingot", amount = 50 },
+    }
+  end
+
+  -- filterItems: substring over name AND id; empty query unchanged; no mutation
+  local src = items()
+  local all = console.filterItems(src, "")
+  t.eq(#all, 3, "filterItems: empty query returns all")
+  t.check(all ~= src, "filterItems: returns a new array (no aliasing)")
+  t.eq(#console.filterItems(items(), "zinc"), 1, "filterItems: matches display name (case-insensitive)")
+  t.eq(console.filterItems(items(), "zinc")[1].id, "alltheores:zinc_ingot", "filterItems: returns the matching entry")
+  t.eq(#console.filterItems(items(), "minecraft:"), 1, "filterItems: matches registry id substring")
+  t.eq(#console.filterItems(items(), "alltheores:"), 2, "filterItems: id-namespace matches both alltheores rows")
+  t.eq(#console.filterItems(items(), "nonsuch"), 0, "filterItems: no match -> empty")
+  local pre = items()
+  console.filterItems(pre, "iron")
+  t.eq(#pre, 3, "filterItems: does NOT mutate the input list")
+
+  -- stepQuantity: clamps >=1, applies delta, saturates at max, non-numeric -> min
+  t.eq(console.stepQuantity(5, 8), 13, "stepQuantity: +8")
+  t.eq(console.stepQuantity(5, -64), 1, "stepQuantity: clamps to min 1")
+  t.eq(console.stepQuantity(1, -1), 1, "stepQuantity: never below 1")
+  t.eq(console.stepQuantity(99998, 64), 99999, "stepQuantity: saturates at default max")
+  t.eq(console.stepQuantity(50, 0, { max = 64 }), 50, "stepQuantity: opts.max honored (in range)")
+  t.eq(console.stepQuantity(50, 64, { max = 64 }), 64, "stepQuantity: opts.max caps")
+  t.eq(console.stepQuantity("oops", 8), 9, "stepQuantity: non-numeric current snaps to min then steps")
+
+  -- quantityButtonRow / quantitySteps: keys + biting hit-test
+  local qr = console.quantityButtonRow(64, 5, 1)
+  t.eq(console.buttonHit(qr, qr.buttons[1].x1, 5), "dec:1024", "quantityButtonRow: first button is -1024")
+  local submitBtn
+  for _, b in ipairs(qr.buttons) do if b.key == "submit" then submitBtn = b end end
+  t.check(submitBtn ~= nil, "quantityButtonRow: has a SUBMIT button")
+  t.eq(console.buttonHit(qr, submitBtn.x1, 5), "submit", "quantityButtonRow: tap SUBMIT x -> submit (BITING)")
+  t.eq(console.buttonHit(qr, submitBtn.x2 + 1, 5), nil, "quantityButtonRow: one column past SUBMIT -> nil (BITING)")
+  local incBtn
+  for _, b in ipairs(qr.buttons) do if b.key == "inc:64" then incBtn = b end end
+  t.eq(console.buttonHit(qr, incBtn.x1, 5), "inc:64", "quantityButtonRow: +64 button hits inc:64")
+
+  -- requestStatusLabel + jobRowFormat: distinct text/colorKey per state, fits width
+  local approved = console.jobRowFormat({ label = "Zinc", request = 64, state = "APPROVED" }, 40)
+  local crafting = console.jobRowFormat({ label = "Zinc", request = 64, state = "CRAFTING" }, 40)
+  local errored = console.jobRowFormat({ label = "Zinc", request = 64, error = "no recipe" }, 40)
+  t.eq(approved.colorKey, "queued", "jobRowFormat: APPROVED -> queued colorKey")
+  t.eq(crafting.colorKey, "crafting", "jobRowFormat: CRAFTING -> crafting colorKey")
+  t.eq(errored.colorKey, "error", "jobRowFormat: error entry -> error colorKey")
+  t.check(approved.text ~= crafting.text, "jobRowFormat: APPROVED and CRAFTING render distinct text")
+  t.check(errored.text:find("FAILED", 1, true) ~= nil, "jobRowFormat: error row surfaces FAILED + reason")
+  t.check(errored.text:find("no recipe", 1, true) ~= nil, "jobRowFormat: error row carries the reason")
+  t.check(#console.jobRowFormat({ label = string.rep("x", 200), request = 1 }, 30).text <= 30, "jobRowFormat: fits width")
+  t.eq(console.requestStatusLabel({ requested = 64, made = 16, state = "CRAFTING" }), "crafting 16/64",
+    "requestStatusLabel: manual made/requested in CRAFTING")
+  t.eq(console.requestStatusLabel({ requested = 64, made = 64 }), "done", "requestStatusLabel: made>=requested -> done")
+  t.eq(console.requestStatusLabel({ requested = 64, made = 0, state = "APPROVED" }), "queued 0/64",
+    "requestStatusLabel: queued progress")
+
+  -- resolveControlToken: reads + trims; missing file -> nil
+  local realFs = _G.fs
+  _G.fs = {
+    exists = function(p) return p == console.controlTokenFile end,
+    open = function() return { readAll = function() return "# my token file\n  s3cret-token  \n" end, close = function() end } end,
+  }
+  t.eq(console.resolveControlToken(), "s3cret-token", "resolveControlToken: trims comments + whitespace")
+  _G.fs = { exists = function() return false end }
+  t.eq(console.resolveControlToken(), nil, "resolveControlToken: missing file -> nil")
+  _G.fs = realFs
+end
+
 -- trend (VIEW-5): direction + per-min rate, graceful on missing history
 do
   local h = {
@@ -1876,7 +1950,8 @@ local luaFiles = {
   "lib/atm10-health.lua", "atm10-health.lua",
   "power-probe.lua",
   "lib/atm10-console.lua", "atm10-console.lua",
-  "inventory/manager.lua", "inventory/remote.lua",
+  "inventory/manager.lua", "inventory/remote.lua", "inventory/request.lua",
+  "inventory-request.lua", "inventory/request-startup.lua", "inventory-request-startup.lua",
   "inventory/config.lua", "inventory/config-example.lua",
   "power/display.lua", "power/probe.lua",
   "atm10-update.lua", "safereboot.lua", "atm10-bridge-probe.lua", "atm10-patterns.lua",
@@ -1916,6 +1991,7 @@ local requireGuards = {
     "atm10-suggest", "atm10-presets", "atm10-console",
   },
   ["inventory/remote.lua"] = { "atm10-status", "atm10-draw", "atm10-palette", "atm10-console" },
+  ["inventory/request.lua"] = { "atm10-status", "atm10-draw", "atm10-palette", "atm10-console", "atm10-control" },
 }
 for file, libs in pairs(requireGuards) do
   local src = readFile(file)

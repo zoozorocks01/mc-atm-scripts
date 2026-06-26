@@ -55,6 +55,18 @@ local roles = {
       { remote = "atm10-display", localName = "atm10-display", onlyIfMissing = true },
     },
   },
+  -- A2: the craft-request touch panel. Browses the snapshot's viewItems, submits a
+  -- one-shot craft_request over atm10-control-v1 (token-gated). Reuses the shared
+  -- viewer libs (all in commonFiles). The control token is a one-line file deployed
+  -- onlyIfMissing so an update never clobbers the operator's token.
+  ["inventory-request"] = {
+    label = "atm10-inventory-request",
+    files = {
+      { remote = "inventory/request.lua", localName = "inventory-request" },
+      { remote = "inventory/request-startup.lua", localName = "startup" },
+      { remote = "atm10-control-token", localName = "atm10-control-token", onlyIfMissing = true },
+    },
+  },
 }
 
 local function filesForRole(roleConfig)
@@ -103,6 +115,7 @@ local function printUsage()
   print("  update power-probe")
   print("  update inventory-source")
   print("  update inventory-remote")
+  print("  update inventory-request")
   print("")
   print("After role is set, just run: update")
 end
