@@ -148,6 +148,17 @@ end
 
 local function mins(span) return math.max(1, math.floor(span / 60000)) end
 
+-- Map a confidence weight (0..1, from analyze) to a compact lo/med/hi bucket for the
+-- SMART row + any viewer. Pure + unit-testable so the row text and a future viewer agree.
+-- nil/non-number -> nil (caller hides it). Buckets: <0.33 lo, <0.66 med, else hi.
+function suggest.confLabel(conf)
+  local c = tonumber(conf)
+  if not c then return nil end
+  if c < 0.33 then return "lo" end
+  if c < 0.66 then return "med" end
+  return "hi"
+end
+
 -- analyze(history, ctx) -> array of suggestions (each seeded for the editor):
 --   { kind, name, label, seeded=true, target, craftTo, ceiling?, ratio?, perMin, reason }
 -- ctx: { managed = {[name]=true}, quotas = {[name]={target,craftTo}},

@@ -1677,8 +1677,15 @@ local function drawSmartPage(data)
     if s.kind == "cap" then detail = "cap " .. fmt(s.ceiling)
     elseif s.kind == "compress" then detail = "band " .. fmt(s.target) .. "-" .. fmt(s.ceiling) .. ", set INTO"
     else detail = "keep " .. fmt(s.target) .. "/" .. fmt(s.craftTo) end
+    -- append a compact rate + confidence hint so the operator can judge how strongly the
+    -- suggestion is observed (conf) and the rate they're being asked to keep up with (perMin).
+    local reason = tostring(s.reason)
+    if s.perMin and s.perMin > 0 then reason = reason .. ", ~" .. fmt(math.floor(s.perMin)) .. "/min" end
+    local cl = suggest.confLabel(s.conf)
+    if cl then reason = reason .. ", conf " .. cl end
+    if s.spiky then reason = reason .. ", spiky" end
     line(y, uiDraw.fit("[" .. (kindTag[s.kind] or "?") .. "] " .. s.label .. " -> " .. detail ..
-      "  (" .. tostring(s.reason) .. ")", w), colors.white)
+      "  (" .. reason .. ")", w), colors.white)
     smartRowRegions[#smartRowRegions + 1] = { y = y, entry = s }
   end
   line(h, "Tapping opens the editor pre-filled; SAVE to apply.", colors.gray)

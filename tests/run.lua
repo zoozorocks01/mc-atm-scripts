@@ -1090,6 +1090,19 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+print("CONF-3 confLabel bucketing (lo/med/hi for the SMART row)")
+do
+  t.eq(suggest.confLabel(0.0), "lo", "CONF-3: 0 -> lo")
+  t.eq(suggest.confLabel(0.32), "lo", "CONF-3: just below 0.33 -> lo")
+  t.eq(suggest.confLabel(0.33), "med", "CONF-3: 0.33 boundary -> med")
+  t.eq(suggest.confLabel(0.5), "med", "CONF-3: mid -> med")
+  t.eq(suggest.confLabel(0.66), "hi", "CONF-3: 0.66 boundary -> hi")
+  t.eq(suggest.confLabel(1.0), "hi", "CONF-3: 1 -> hi")
+  t.eq(suggest.confLabel(nil), nil, "CONF-3: nil -> nil (caller hides it)")
+  t.eq(suggest.confLabel("x"), nil, "CONF-3: non-number -> nil")
+end
+
+-- ---------------------------------------------------------------------------
 print("overflow balancer (compress above ceiling)")
 local function ovItem(over) local i = { name = "dust", label = "Steel Dust",
   ceiling = 1000, into = { name = "ingot", label = "Steel Ingot" }, ratio = 1 }
