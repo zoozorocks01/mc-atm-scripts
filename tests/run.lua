@@ -19,6 +19,7 @@ local balance = require("atm10-balance")
 local suggest = require("atm10-suggest")
 local presets = require("atm10-presets")
 local console = require("atm10-console")
+local power = require("atm10-power")
 
 -- ---------------------------------------------------------------------------
 print("status vocabulary")
@@ -984,6 +985,37 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+print("power math (QUICK-2)")
+do
+  -- fmt thresholds (FE / kFE / MFE / GFE / TFE)
+  t.eq(power.fmt(999), "999 FE", "fmt: < 1k stays FE")
+  t.eq(power.fmt(1500), "1.5 kFE", "fmt: kFE threshold")
+  t.eq(power.fmt(2500000), "2.50 MFE", "fmt: MFE threshold")
+  t.eq(power.fmt(3000000000), "3.00 GFE", "fmt: GFE threshold")
+  t.eq(power.fmt(4000000000000), "4.00 TFE", "fmt: TFE threshold")
+  -- percent normalization (0-1 fraction / 1-100 / fallback / maxEnergy=0)
+  t.eq(power.percent(0.45), 45, "percent: 0-1 fraction -> *100")
+  t.eq(power.percent(45), 45, "percent: already 1-100 -> as-is")
+  t.eq(power.percent(0, 500, 1000), 50, "percent: falls back to energy/maxEnergy")
+  t.eq(power.percent(0, 500, 0), 0, "percent: maxEnergy 0 -> 0 (no divide-by-zero)")
+  -- effectiveNet: reported vs estimated switch
+  local n1, s1 = power.effectiveNet({ input = 100, output = 40 })
+  t.eq(n1, 60, "effectiveNet: reported input-output when IO present")
+  t.eq(s1, "reported", "effectiveNet: source reported")
+  local n2, s2 = power.effectiveNet({ input = 0, output = 0, estimatedNet = -250 })
+  t.eq(n2, -250, "effectiveNet: switches to estimated when IO both zero")
+  t.eq(s2, "estimated", "effectiveNet: source estimated")
+  -- estimateTime: stable / empty / full + the /20 (FE/t -> FE/s) conversion
+  local _, st = power.estimateTime(1000, 2000, 0)
+  t.eq(st, "stable", "estimateTime: |net|<1 -> stable")
+  local et, se = power.estimateTime(1200, 5000, -1)
+  t.eq(se, "empty", "estimateTime: net<0 -> empty")
+  t.eq(et, "Empty in 1m", "estimateTime: drains 1200 at 1/t (/20) -> 60s = 1m")
+  local _, sf = power.estimateTime(1000, 5000, 1)
+  t.eq(sf, "full", "estimateTime: net>0 -> full")
+end
+
+-- ---------------------------------------------------------------------------
 print("all scripts compile")
 -- loadfile parses without executing, so the display while-loops and peripheral
 -- wraps never run. This guards every shipped Lua file against syntax errors.
@@ -991,7 +1023,8 @@ local luaFiles = {
   "lib/atm10-status.lua", "lib/atm10-draw.lua", "lib/atm10-palette.lua",
   "lib/atm10-control.lua", "lib/atm10-stockplan.lua", "lib/atm10-queue.lua",
   "lib/atm10-craftrunner.lua", "lib/atm10-managed.lua", "lib/atm10-balance.lua",
-  "lib/atm10-suggest.lua", "lib/atm10-presets.lua",
+  "lib/atm10-suggest.lua", "lib/atm10-presets.lua", "lib/atm10-power.lua", "atm10-power.lua",
+  "power-probe.lua",
   "lib/atm10-console.lua", "atm10-console.lua",
   "inventory/manager.lua", "inventory/remote.lua",
   "inventory/config.lua", "inventory/config-example.lua",

@@ -15,6 +15,7 @@ local STALE_SECONDS = 10
 local uiStatus = require("atm10-status")
 local uiDraw = require("atm10-draw")
 local uiPalette = require("atm10-palette")
+local power = require("atm10-power") -- QUICK-2: pure FE/duration/percent/net math (tested off-CC)
 
 local mon = peripheral.wrap(MONITOR_SIDE)
 if not mon then error("No monitor on " .. MONITOR_SIDE) end
@@ -66,49 +67,15 @@ local function now()
   return os.clock()
 end
 
-local function fmt(n)
-  n = tonumber(n) or 0
-  local a = math.abs(n)
-  if a >= 1000000000000 then return string.format("%.2f TFE", n / 1000000000000) end
-  if a >= 1000000000 then return string.format("%.2f GFE", n / 1000000000) end
-  if a >= 1000000 then return string.format("%.2f MFE", n / 1000000) end
-  if a >= 1000 then return string.format("%.1f kFE", n / 1000) end
-  return tostring(math.floor(n)) .. " FE"
-end
-
-local function fmtDuration(seconds)
-  seconds = math.max(0, math.floor(tonumber(seconds) or 0))
-  if seconds >= 86400 then return string.format("%.1fd", seconds / 86400) end
-  if seconds >= 3600 then return string.format("%.1fh", seconds / 3600) end
-  if seconds >= 60 then return string.format("%dm", math.floor(seconds / 60)) end
-  return tostring(seconds) .. "s"
-end
+-- QUICK-2: math moved to the tested atm10-power lib. Thin aliases keep the call
+-- sites unchanged; estimateTime maps the lib's state string to a display color.
+local fmt = power.fmt
+local effectiveNet = power.effectiveNet
 
 local function estimateTime(energy, maxEnergy, net)
-  energy = tonumber(energy) or 0
-  maxEnergy = tonumber(maxEnergy) or 0
-  net = tonumber(net) or 0
-
-  if math.abs(net) < 1 then return "Time: stable", colors.gray end
-
-  if net < 0 then
-    return "Empty in " .. fmtDuration(energy / math.abs(net) / 20), colors.red
-  end
-
-  return "Full in  " .. fmtDuration((maxEnergy - energy) / net / 20), colors.lime
-end
-
-local function effectiveNet(sample)
-  local input = tonumber(sample.input) or 0
-  local output = tonumber(sample.output) or 0
-  local reported = tonumber(sample.reportedNet) or (input - output)
-  local estimated = tonumber(sample.estimatedNet) or 0
-
-  if input == 0 and output == 0 and math.abs(estimated) > 1 then
-    return estimated, "estimated"
-  end
-
-  return reported, "reported"
+  local text, state = power.estimateTime(energy, maxEnergy, net)
+  local color = (state == "empty" and colors.red) or (state == "full" and colors.lime) or colors.gray
+  return text, color
 end
 
 local function colorForPercent(p)

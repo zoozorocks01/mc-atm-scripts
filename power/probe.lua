@@ -5,6 +5,8 @@ local INDUCTION_SIDE = "bottom"
 
 rednet.open(MODEM_SIDE)
 
+local power = require("atm10-power") -- QUICK-2: shared percent normalization (tested off-CC)
+
 local port = peripheral.wrap(INDUCTION_SIDE)
 if not port then error("No induction port on " .. INDUCTION_SIDE) end
 
@@ -24,17 +26,8 @@ local function call(name)
 end
 
 local function getPercent(energy, maxEnergy)
-  local p = call("getEnergyFilledPercentage")
-  p = tonumber(p) or 0
-
-  if p > 0 and p <= 1 then return p * 100 end
-  if p > 1 and p <= 100 then return p end
-
-  if maxEnergy and maxEnergy > 0 then
-    return (energy / maxEnergy) * 100
-  end
-
-  return 0
+  -- QUICK-2: normalization lives in the tested atm10-power lib; the port read stays here.
+  return power.percent(call("getEnergyFilledPercentage"), energy, maxEnergy)
 end
 
 local function findDisplay()
