@@ -11,6 +11,7 @@ status.CRITICAL = "CRITICAL"
 status.DRAINING = "DRAINING"
 status.STALE = "STALE"
 status.DISABLED = "DISABLED"
+status.RESERVED = "RESERVED"
 status.UNKNOWN = "UNKNOWN"
 
 local byAction = {
@@ -32,6 +33,7 @@ local byAction = {
   ["STALE"] = status.STALE,
   ["STALE DATA"] = status.STALE,
   ["DISABLED"] = status.DISABLED,
+  ["RESERVED"] = status.RESERVED,
   ["UNKNOWN"] = status.UNKNOWN,
 }
 
@@ -47,6 +49,7 @@ local glyphs = {
   DRAINING = "v",
   STALE = "?",
   DISABLED = "-",
+  RESERVED = "=",
   UNKNOWN = "?",
 }
 
@@ -62,6 +65,7 @@ local labels = {
   DRAINING = "DRAINING",
   STALE = "STALE",
   DISABLED = "DISABLED",
+  RESERVED = "RESERVED",
   UNKNOWN = "UNKNOWN",
 }
 
@@ -77,6 +81,7 @@ local colorsByStatus = {
   DRAINING = colors.yellow,
   STALE = colors.orange,
   DISABLED = colors.gray,
+  RESERVED = colors.lightBlue,
   UNKNOWN = colors.lightGray,
 }
 
@@ -84,6 +89,7 @@ local severity = {
   UNKNOWN = 0,
   OK = 1,
   DISABLED = 1,
+  RESERVED = 2,
   COOLDOWN = 2,
   CRAFTING = 2,
   WOULD = 3,
@@ -149,6 +155,7 @@ function status.tally(rows)
     DRAINING = 0,
     STALE = 0,
     DISABLED = 0,
+    RESERVED = 0,
     UNKNOWN = 0,
   }
 

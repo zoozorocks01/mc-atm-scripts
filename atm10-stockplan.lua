@@ -151,20 +151,54 @@ function stockplan.plan(ctx)
             capped = true
           end
 
-          local row = copyMeta({
-            action = "WOULD CRAFT",
-            name = target.name,
-            category = categoryLabel,
-            label = label,
-            amount = amount,
-            target = trigger,
-            craftTo = craftTo,
-            priority = priority,
-            request = request,
-            capped = capped,
-          }, craftMeta)
-          plans[#plans + 1] = row
-          wouldIndexes[#wouldIndexes + 1] = #plans
+          -- Input reserve (craftFrom): never let a craft draw its SOURCE item below
+          -- a kept floor -- e.g. keep 1k metal dust for alloys and only smelt the
+          -- surplus into ingots. craftFrom = { name, reserve, ratio }. The source's
+          -- live amount comes from resolve(); each output unit consumes `ratio` of
+          -- it. If the whole request is held, the row is RESERVED (informational,
+          -- never fired) so the operator sees WHY it isn't crafting.
+          local reserveHeld = false
+          local cf = target.craftFrom
+          if type(cf) == "table" and cf.name then
+            local inputAmount = tonumber((resolve(cf.name))) or 0
+            local ratio = math.max(1, floorNumber(cf.ratio, 1))
+            local reserve = math.max(0, floorNumber(cf.reserve, 0))
+            local maxByInput = math.max(0, math.floor((inputAmount - reserve) / ratio))
+            if request > maxByInput then
+              request = maxByInput
+              reserveHeld = true
+            end
+          end
+
+          if reserveHeld and request <= 0 then
+            plans[#plans + 1] = copyMeta({
+              action = "RESERVED",
+              name = target.name,
+              category = categoryLabel,
+              label = label,
+              amount = amount,
+              target = trigger,
+              craftTo = craftTo,
+              priority = priority,
+              reason = "keeping " .. tostring(cf.name) .. " reserve",
+            }, craftMeta)
+          else
+            local row = copyMeta({
+              action = "WOULD CRAFT",
+              name = target.name,
+              category = categoryLabel,
+              label = label,
+              amount = amount,
+              target = trigger,
+              craftTo = craftTo,
+              priority = priority,
+              request = request,
+              capped = capped,
+              reserveCapped = reserveHeld,
+            }, craftMeta)
+            plans[#plans + 1] = row
+            wouldIndexes[#wouldIndexes + 1] = #plans
+          end
         end
       end
     end

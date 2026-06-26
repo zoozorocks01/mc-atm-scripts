@@ -1306,6 +1306,49 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+-- Input reserve (craftFrom): keep a dust buffer; only smelt the surplus into ingots.
+print("input reserve (craftFrom dust buffer)")
+do
+  local function planWith(dustAmt, ingotAmt, ratio)
+    return stockplan.plan({
+      stockKeeper = {
+        enabled = true, cooldownSeconds = 300, maxCraftsPerCycle = 99, maxRequest = 1000000,
+        categories = { { label = "Metals", items = {
+          { name = "iron_ingot", label = "Iron Ingot", target = 5000, craftTo = 5000,
+            craftFrom = { name = "iron_dust", reserve = 1000, ratio = ratio or 1 } },
+        } } },
+      },
+      now = 0,
+      ledger = { requests = {} },
+      resolve = function(name)
+        if name == "iron_ingot" then return ingotAmt, true, false end
+        if name == "iron_dust" then return dustAmt, false, false end
+        return 0, false, false
+      end,
+    })[1]
+  end
+  -- ample dust: full request (need 5000; headroom 10000-1000=9000 >= 5000) -- control row
+  local p = planWith(10000, 0)
+  t.check(p.action == "WOULD CRAFT" and p.request == 5000, "reserve: ample dust -> full craft request")
+  -- limited dust: request capped to (dust - reserve)
+  p = planWith(1500, 0)
+  t.check(p.action == "WOULD CRAFT" and p.request == 500 and p.reserveCapped == true,
+    "reserve: limited dust -> request capped to (dust - reserve)")
+  -- dust exactly at reserve: fully held -> RESERVED (not a craft)
+  p = planWith(1000, 0)
+  t.check(p.action == "RESERVED", "reserve: dust at the reserve floor -> RESERVED (no craft)")
+  -- dust below reserve: still RESERVED, never dips in
+  p = planWith(800, 0)
+  t.check(p.action == "RESERVED", "reserve: dust below reserve -> RESERVED")
+  -- ratio > 1: input headroom divided by ratio (5000-1000)/2 = 2000
+  p = planWith(5000, 0, 2)
+  t.check(p.action == "WOULD CRAFT" and p.request == 2000, "reserve: ratio>1 divides input headroom")
+  -- RESERVED maps to a real status (renderer won't choke)
+  t.check(status.normalize("RESERVED") == status.RESERVED and status.severity("RESERVED") == 2,
+    "reserve: RESERVED normalizes + has a severity")
+end
+
+-- ---------------------------------------------------------------------------
 print("overflow balancer (compress above ceiling)")
 local function ovItem(over) local i = { name = "dust", label = "Steel Dust",
   ceiling = 1000, into = { name = "ingot", label = "Steel Ingot" }, ratio = 1 }

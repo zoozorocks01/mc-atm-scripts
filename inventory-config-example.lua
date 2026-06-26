@@ -66,6 +66,13 @@ return {
     maxRequest = 65536,
     -- Refill uses your exact numbers: set craftTo == target to maintain that floor,
     -- or set craftTo higher than target for a min->max buffer. No auto-band.
+    --
+    -- Optional per-item INPUT RESERVE (craftFrom): keep a buffer of the SOURCE item
+    -- so on-demand crafting never drains it. e.g. an ingot smelted from dust:
+    --   { label = "Iron Ingot", name = "alltheores:iron_ingot", target = 2000, craftTo = 5000,
+    --     craftFrom = { name = "alltheores:iron_dust", reserve = 1000, ratio = 1 } },
+    -- The planner caps each craft at floor((dust - reserve) / ratio); if the whole
+    -- request is held, the row shows RESERVED (keeps your dust for alloys, etc.).
 
     categories = {
       {
