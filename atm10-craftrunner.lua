@@ -19,6 +19,88 @@ local cqueue = require("atm10-queue")
 
 local runner = {}
 
+-- Strict weak ordering shared by every fire lane; mirrors queue.list(...,{priority=true})
+-- (atm10-queue.lua: priority desc, approvedAt desc, name asc). If queue.lua's ordering
+-- changes, update this in lockstep or single-lane backward-compat equivalence drifts.
+local function cmp(a, b)
+  local ap, bp = tonumber(a.priority) or 0, tonumber(b.priority) or 0
+  if ap ~= bp then return ap > bp end                 -- urgent (higher priority) first
+  local aa, ba = tonumber(a.approvedAt) or 0, tonumber(b.approvedAt) or 0
+  if aa ~= ba then return aa > ba end                 -- newer approval first (queue.lua:153)
+  local an, bn = tostring(a.name), tostring(b.name)
+  if an ~= bn then return an < bn end                 -- name asc
+  return tostring(a.key or a.name) < tostring(b.key or b.name) -- key disambiguates two compress
+end                                                   -- rows into the SAME item (balance.lua:48); deterministic
+
+-- CRAFT-5: fair fire order under a per-cycle cap. Splits one global craft budget into a
+-- reserved compress/overflow floor + round-robin across refill categories, so a dust-refill
+-- flood can't starve a below-floor alloy and compress rows don't fight refills for the same
+-- slots. PURE: reorders only, never truncates -- the caller's global `fired >= maxPerCycle`
+-- guard stays the ONLY hard cap, so runtime skips (backoff / already-crafting / same-item
+-- dedup) free their slot to a later entry and no per-bucket counter can mis-account.
+-- budgets = { total = maxPerCycle (nil/<=0 = unlimited), overflow = overflowReserve }.
+--
+-- Order = [reserved compress] ++ [refills round-robin by category] ++ [surplus compress]:
+--   * reserved-first => a refill flood cannot occupy the leading min(overflow,#compress) slots
+--   * surplus-last   => extra compress only uses slots refills leave idle (refills protected).
+--     NB this means compress is NOT interleaved with refills by priority: with overflow=0 every
+--     compress trails every refill regardless of its priority. Fire order is byte-identical to the
+--     old pure-priority path ONLY when there are no compress rows.
+--   * a refill-only bucket with one category degrades to pure priority order (the tapped path)
+--   * never truncates => if one bucket has no demand the other fills the whole cap (no waste)
+-- Cross-CYCLE round-robin is NOT persisted (stateless): when total < #lanes the same lanes win
+-- each cycle, but a starved category's deficit (=> priority) climbs and rotates it in naturally.
+function runner.fireOrder(entries, budgets)
+  budgets = budgets or {}
+  local compress, refills = {}, {}
+  for _, e in ipairs(entries or {}) do
+    if e.kind == "compress" then compress[#compress + 1] = e else refills[#refills + 1] = e end
+  end
+  table.sort(compress, cmp)
+
+  -- group refills into per-category lanes; a nil category collapses into one "" lane so a
+  -- nil-category refill and a "Tapped" refill never split into rival round-robin lanes
+  local laneMap, laneOrder = {}, {}
+  for _, e in ipairs(refills) do
+    local c = e.category or ""
+    if not laneMap[c] then laneMap[c] = {}; laneOrder[#laneOrder + 1] = c end
+    local lane = laneMap[c]; lane[#lane + 1] = e
+  end
+  for _, c in ipairs(laneOrder) do table.sort(laneMap[c], cmp) end
+  -- order lanes by their HEAD entry, comparing fields directly (cmp-of-cmp is not a valid
+  -- strict weak order); category label is the final stable tiebreak
+  table.sort(laneOrder, function(x, y)
+    local hx, hy = laneMap[x][1], laneMap[y][1]
+    local px, py = tonumber(hx.priority) or 0, tonumber(hy.priority) or 0
+    if px ~= py then return px > py end
+    local ax, ay = tonumber(hx.approvedAt) or 0, tonumber(hy.approvedAt) or 0
+    if ax ~= ay then return ax > ay end
+    return tostring(x) < tostring(y)
+  end)
+
+  -- clamp the reserve to [0, cap]; unlimited total => cap = #compress so every compress can lead
+  local t = tonumber(budgets.total)
+  local totalCap = (t and t > 0) and t or math.huge
+  local cap = (totalCap == math.huge) and #compress or totalCap
+  local reserveN = math.max(0, math.min(math.floor(tonumber(budgets.overflow) or 0), cap))
+  local reserve = math.min(reserveN, #compress)
+
+  local order = {}
+  for i = 1, reserve do order[#order + 1] = compress[i] end           -- reserved compress first
+  local idx = {}
+  for _, c in ipairs(laneOrder) do idx[c] = 1 end
+  local placed = true
+  while placed do                                                      -- refills round-robin
+    placed = false
+    for _, c in ipairs(laneOrder) do
+      local lane, i = laneMap[c], idx[c]
+      if i <= #lane then order[#order + 1] = lane[i]; idx[c] = i + 1; placed = true end
+    end
+  end
+  for i = reserve + 1, #compress do order[#order + 1] = compress[i] end -- surplus compress last
+  return order
+end
+
 -- deps:
 --   policy        : control.policy (mode + capability flags)            [required]
 --   mode          : config mode string, passed onto each craftAction
@@ -30,6 +112,11 @@ local runner = {}
 --   maxPerCycle   : cap on NEW bridge requests issued this run (<=0/nil = unlimited);
 --                   over-cap entries stay APPROVED for a later cycle, so the operator
 --                   can approve many items without flooding a laggy server at once.
+--   overflowReserve : CRAFT-5 floor of slots (carved from maxPerCycle) reserved FIRST for
+--                   kind=="compress" rows, so a refill flood can't starve compression and
+--                   surplus compress can't starve refills. 0/nil = no reserved floor: compress
+--                   then yields to ALL refills (fires only on idle capacity), NOT interleaved
+--                   by priority. Borrowable: either side uses the other's idle slots. See runner.fireOrder.
 --
 -- Mutates q in place. Returns a summary and the queue:
 --   { requested = { {name, amount} }, failed = { {name, reason} }, changed = bool }
@@ -50,7 +137,12 @@ function runner.run(q, deps)
   local fired = 0
   local requestedThisRun = {} -- item names already requested this run (avoid double-fire)
 
-  for _, e in ipairs(cqueue.list(q, { priority = true })) do
+  -- CRAFT-5: reorder the priority-sorted APPROVED set into a fair fire order (reserved
+  -- compress floor + round-robin refill categories + surplus compress last). Reorder only:
+  -- the `fired >= maxPerCycle` guard below is still the sole hard cap.
+  local order = runner.fireOrder(cqueue.list(q, { priority = true }),
+    { total = maxPerCycle, overflow = tonumber(deps.overflowReserve) })
+  for _, e in ipairs(order) do
     local ekey = e.key or e.name -- queue identity (refill vs compress can share a name)
     if e.state == cqueue.APPROVED then
       if e.triedAt and cooldownMs > 0 and (now - e.triedAt) < cooldownMs then

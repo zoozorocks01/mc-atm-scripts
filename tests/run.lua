@@ -632,6 +632,124 @@ for _, e in pairs(dq.entries) do if e.state == cqueue.CRAFTING then craftingCoun
 t.eq(craftingCount, 2, "both same-item entries move to CRAFTING (one fired, one adopted)")
 
 -- ---------------------------------------------------------------------------
+print("CRAFT-5 fireOrder: reserved compress floor + round-robin refill categories")
+local fo = craftrunner.fireOrder
+local function names(order)
+  local out = {}
+  for _, e in ipairs(order) do out[#out + 1] = e.name end
+  return table.concat(out, ",")
+end
+
+-- single lane (no category) degrades to pure priority order (constraints 3 & 5)
+t.eq(names(fo({ { name = "low", priority = 0.1 }, { name = "urgent", priority = 0.9 }, { name = "mid", priority = 0.5 } }, { total = 2 })),
+  "urgent,mid,low", "fireOrder: single lane => pure priority order")
+
+-- overflow absent => refills first, surplus compress LAST (default is a pure reorder)
+t.eq(names(fo({ { name = "cmp", kind = "compress", priority = 0.99 }, { name = "r1", priority = 0.5 }, { name = "r2", priority = 0.4 } }, { total = 2 })),
+  "r1,r2,cmp", "fireOrder: overflow absent => refills first, surplus compress last")
+
+-- ANTI-STARVATION: surplus compress must NOT steal refill slots (the key regression)
+local af = fo({
+  { name = "cmpA", kind = "compress", category = "Overflow", priority = 0.9 },
+  { name = "cmpB", kind = "compress", category = "Overflow", priority = 0.8 },
+  { name = "cmpC", kind = "compress", category = "Overflow", priority = 0.7 },
+  { name = "R1", category = "Tapped", priority = 0.95 },
+  { name = "R2", category = "Tapped", priority = 0.6 },
+  { name = "R3", category = "Tapped", priority = 0.5 },
+}, { total = 4, overflow = 1 })
+t.eq(names(af), "cmpA,R1,R2,R3,cmpB,cmpC",
+  "fireOrder: order = reserved compress, refills RR, surplus compress last (refills not starved)")
+
+-- cross-category round-robin (preset path), reserved compress first
+t.eq(names(fo({
+  { name = "a1", category = "Alloys", priority = 0.9 }, { name = "a2", category = "Alloys", priority = 0.4 },
+  { name = "e1", category = "Essence", priority = 0.8 }, { name = "e2", category = "Essence", priority = 0.35 },
+  { name = "cmp1", kind = "compress", category = "Overflow", priority = 0.5 },
+}, { total = 5, overflow = 1 })), "cmp1,a1,e1,a2,e2", "fireOrder: round-robin across categories, reserved compress first")
+
+-- lane normalization: nil category collapses into one lane, never split from a rival lane
+t.eq(names(fo({ { name = "x1", priority = 0.95 }, { name = "x2", priority = 0.8 }, { name = "t1", category = "Tapped", priority = 0.85 } }, { total = 2 })),
+  "x1,t1,x2", "fireOrder: nil-category collapses to one lane (not split from Tapped)")
+
+-- clamp safety: overflow > total clamps the reserve to total
+t.eq(names(fo({ { name = "c1", kind = "compress", priority = 0.9 }, { name = "c2", kind = "compress", priority = 0.8 },
+  { name = "c3", kind = "compress", priority = 0.7 }, { name = "r1", priority = 0.95 }, { name = "r2", priority = 0.6 } }, { total = 2, overflow = 5 })),
+  "c1,c2,r1,r2,c3", "fireOrder: overflow>total clamps reserve to total")
+
+-- clamp safety: negative -> 0, non-integer floors
+t.eq(fo({ { name = "c", kind = "compress", priority = 0.9 }, { name = "r", priority = 0.1 } }, { total = 2, overflow = -1 })[1].name,
+  "r", "fireOrder: overflow -1 => reserve 0 (refills lead)")
+t.eq(fo({ { name = "c", kind = "compress", priority = 0.9 }, { name = "r", priority = 0.1 } }, { total = 2, overflow = 1.5 })[1].name,
+  "c", "fireOrder: overflow 1.5 floors to reserve 1 (compress leads)")
+
+-- unlimited total keeps every entry (matches the math.huge planning path)
+t.eq(#fo({ { name = "c1", kind = "compress", priority = 0.9 }, { name = "c2", kind = "compress", priority = 0.5 },
+  { name = "c3", kind = "compress", priority = 0.3 }, { name = "r1", priority = 0.8 }, { name = "r2", priority = 0.4 } }, { overflow = 2 }),
+  5, "fireOrder: unlimited total keeps every entry")
+
+-- determinism: identical output regardless of input array order; stable tiebreak by label/name
+local detA = { { name = "aaa", category = "L1", priority = 0.5, approvedAt = 1 }, { name = "bbb", category = "L2", priority = 0.5, approvedAt = 1 } }
+local detB = { { name = "bbb", category = "L2", priority = 0.5, approvedAt = 1 }, { name = "aaa", category = "L1", priority = 0.5, approvedAt = 1 } }
+t.eq(names(fo(detA, { total = 2 })), names(fo(detB, { total = 2 })), "fireOrder: deterministic regardless of input order")
+t.eq(names(fo(detA, { total = 2 })), "aaa,bbb", "fireOrder: equal-key lanes tiebreak by category label asc")
+
+-- two compress rows into the SAME into-item (balance.lua emits them keyed, priority unset) must
+-- order deterministically by `key`, not by table.sort's unstable handling of equivalent entries
+local sameA = { { name = "iron_ingot", key = "compress:b", kind = "compress" }, { name = "iron_ingot", key = "compress:a", kind = "compress" } }
+local sameB = { { name = "iron_ingot", key = "compress:a", kind = "compress" }, { name = "iron_ingot", key = "compress:b", kind = "compress" } }
+t.eq(fo(sameA, { total = 1 })[1].key, fo(sameB, { total = 1 })[1].key, "fireOrder: same-name compress rows pick the same leader regardless of input order")
+t.eq(fo(sameA, { total = 1 })[1].key, "compress:a", "fireOrder: same-name compress rows tiebreak by key asc")
+
+-- regression: `kind` must survive the approve -> queue path so a single-tapped compress row stays
+-- compress and the reserve floor protects it (the manager's approve() once dropped kind)
+local kq = cqueue.approve(cqueue.new(), { name = "minecraft:iron_ingot", key = "compress:iron_dust", kind = "compress", request = 9, priority = 0.2 }, 1)
+t.eq(kq.entries["compress:iron_dust"].kind, "compress", "approve preserves kind (compress survives to the queue)")
+t.eq(fo({ kq.entries["compress:iron_dust"], { name = "minecraft:gold_ingot", priority = 0.9 } }, { total = 1, overflow = 1 })[1].kind,
+  "compress", "fireOrder reserves the compress entry ahead of a higher-priority refill when overflow >= 1")
+
+print("CRAFT-5 runner.run: budgets enforced at fire time without wasting capacity")
+local function runFired(entries, opts)
+  local q = cqueue.new()
+  for _, e in ipairs(entries) do q = cqueue.approve(q, e, e.approvedAt or 1) end
+  local f = {}
+  local crafting = opts.crafting or {}
+  craftrunner.run(q, { policy = pManualCraft, mode = "manual", now = 1000,
+    maxPerCycle = opts.maxPerCycle, overflowReserve = opts.overflowReserve,
+    isCrafting = function(name) return crafting[name] == true end,
+    craft = function(name) f[#f + 1] = name; return true end })
+  return f, q
+end
+
+-- no idle waste: all-refill uses the whole cap, reserve never blocks a refillable slot
+t.eq(#runFired({ { name = "r1", priority = 0.9 }, { name = "r2", priority = 0.8 }, { name = "r3", priority = 0.7 }, { name = "r4", priority = 0.6 } },
+  { maxPerCycle = 8, overflowReserve = 2 }), 4, "runner: all-refill uses the cap; reserve never blocks a refillable slot")
+
+-- no idle waste: all-compress borrows the idle refill reserve
+t.eq(#runFired({ { name = "c1", kind = "compress", priority = 0.9 }, { name = "c2", kind = "compress", priority = 0.8 }, { name = "c3", kind = "compress", priority = 0.7 } },
+  { maxPerCycle = 8, overflowReserve = 1 }), 3, "runner: all-compress borrows idle refill capacity to use the whole cap")
+
+-- compress floor honored under a refill flood (low-priority reserved compress still leads)
+local f5 = runFired({ { name = "cmp", kind = "compress", priority = 0.01 }, { name = "r1", priority = 0.9 },
+  { name = "r2", priority = 0.8 }, { name = "r3", priority = 0.7 }, { name = "r4", priority = 0.6 }, { name = "r5", priority = 0.5 } },
+  { maxPerCycle = 3, overflowReserve = 1 })
+t.eq(#f5, 3, "runner: fires exactly maxPerCycle under a flood")
+t.check(f5[1] == "cmp", "runner: low-priority reserved compress still leads under a refill flood")
+
+-- reserved compress already-crafting frees its slot for refills (no waste, no mis-accounting)
+local f9, q9 = runFired({ { name = "c1", kind = "compress", priority = 0.9 }, { name = "c2", kind = "compress", priority = 0.8 },
+  { name = "r1", priority = 0.7 }, { name = "r2", priority = 0.6 }, { name = "r3", priority = 0.5 } },
+  { maxPerCycle = 2, overflowReserve = 1, crafting = { c1 = true } })
+t.eq(table.concat(f9, ","), "r1,r2", "runner: a reserved compress that RS already crafts frees its slot for refills")
+t.eq(q9.entries.c1.state, cqueue.CRAFTING, "runner: c1 adopted CRAFTING with no bridge call")
+t.eq(q9.entries.r3.state, cqueue.APPROVED, "runner: r3 stays APPROVED for next cycle")
+
+-- many categories, total < #categories: round-robin picks highest-priority heads first
+local f11, q11 = runFired({ { name = "a1", category = "Alpha", priority = 0.5 }, { name = "b1", category = "Beta", priority = 0.9 }, { name = "g1", category = "Gamma", priority = 0.7 } },
+  { maxPerCycle = 2 })
+t.eq(table.concat(f11, ","), "b1,g1", "runner: round-robin fires highest-priority lane heads first under a tight cap")
+t.eq(q11.entries.a1.state, cqueue.APPROVED, "runner: lowest-priority category waits a cycle (priority rotates as deficit grows)")
+
+-- ---------------------------------------------------------------------------
 print("managed quotas (tap-to-manage store)")
 local ms = managed.new()
 t.eq(managed.count(ms), 0, "new store is empty")

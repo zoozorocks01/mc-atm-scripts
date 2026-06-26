@@ -25,6 +25,7 @@ return {
     enabled = true,
     cooldownSeconds = 300,
     maxCraftsPerCycle = 8,
+    overflowReserve = 0,    -- compress slots reserved first within maxCraftsPerCycle (0 = pure priority)
     maxRequest = 65536,
 
     categories = {

@@ -54,6 +54,7 @@ return {
     enabled = true,
     cooldownSeconds = 300,
     maxCraftsPerCycle = 8,
+    overflowReserve = 0,    -- compress slots reserved first within maxCraftsPerCycle (0 = pure priority)
     maxRequest = 65536,
     -- Refill uses your exact numbers: set craftTo == target to maintain that floor,
     -- or set craftTo higher than target for a min->max buffer. No auto-band.

@@ -77,6 +77,7 @@ local DEFAULT_CONFIG = {
     enabled = false,
     cooldownSeconds = 300,
     maxCraftsPerCycle = 8,    -- new craft requests issued per cycle (late-game default)
+    overflowReserve = 0,      -- CRAFT-5: compress slots reserved first within the cap (0 = pure priority)
     maxRequest = 65536,       -- cap per single craft request (bigger batches)
     items = {},
     categories = {},
@@ -245,6 +246,9 @@ local function normalizeConfig(raw)
   local cd = tonumber(cfg.stockKeeper.cooldownSeconds)
   cfg.stockKeeper.cooldownSeconds = (cd and cd > 0) and cd or 300
   cfg.stockKeeper.maxCraftsPerCycle = tonumber(cfg.stockKeeper.maxCraftsPerCycle) or 8
+  -- CRAFT-5: clamp the compress reserve to a non-negative integer; fireOrder clamps it to
+  -- the cap at use time, so a mis-set value (e.g. 99) can never exceed maxCraftsPerCycle.
+  cfg.stockKeeper.overflowReserve = math.max(0, math.floor(tonumber(cfg.stockKeeper.overflowReserve) or 0))
   cfg.stockKeeper.maxRequest = tonumber(cfg.stockKeeper.maxRequest) or 65536
   if type(cfg.stockKeeper.items) ~= "table" then cfg.stockKeeper.items = {} end
   if type(cfg.stockKeeper.categories) ~= "table" then cfg.stockKeeper.categories = {} end
@@ -913,6 +917,8 @@ local function processCraftQueue(now)
     cooldownMs = (tonumber(stock.cooldownSeconds) or 300) * 1000,
     -- rate-limit ACTUAL bridge requests per cycle (the plan display is uncapped)
     maxPerCycle = tonumber(stock.maxCraftsPerCycle) or 2,
+    -- CRAFT-5: reserve part of that cap for compress/overflow rows (0 = pure priority)
+    overflowReserve = tonumber(stock.overflowReserve) or 0,
     isCrafting = function(name) return isItemCrafting(name) end,
     craft = function(name, amount) return requestCraft(name, amount) end,
     recordRequest = recordCraftRequest,
@@ -1819,7 +1825,11 @@ end
 local function approve(entry)
   if not entry or not entry.name then return end
   craftQueue = cqueue.approve(craftQueue or loadQueue(),
-    { name = entry.name, label = entry.label, request = entry.request, key = entry.key,
+    -- CRAFT-5: carry `kind` so a single-tapped compress row stays a compress entry. Without
+    -- it copyPlanFields queues kind=nil and the runner's overflow reserve never protects it
+    -- (manual single-tap is the primary approval flow; the auto/bulk paths pass the plan row
+    -- directly and already preserve kind).
+    { name = entry.name, label = entry.label, request = entry.request, key = entry.key, kind = entry.kind,
       priority = entry.priority, amount = entry.amount, target = entry.target, category = entry.category,
       craftTo = entry.craftTo, banded = entry.banded, adjusted = entry.adjusted, reason = entry.reason }, nowMs())
   saveQueue(craftQueue)
