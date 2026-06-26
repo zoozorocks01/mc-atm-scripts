@@ -1045,6 +1045,51 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+print("CONF-2 maxA tracking + spiky-vs-steady detection")
+do
+  -- record() now tracks the running maximum so analyze can see intra-window shape.
+  local mh = {}
+  suggest.record(mh, { { name = "k", label = "K", amount = 1000 } }, 0)
+  suggest.record(mh, { { name = "k", label = "K", amount = 1200 } }, 60000)
+  suggest.record(mh, { { name = "k", label = "K", amount = 200 } }, 120000)
+  t.eq(mh.k.maxA, 1200, "CONF-2: record tracks the running maximum (maxA)")
+  t.eq(mh.k.minA, 200, "CONF-2: record still tracks the minimum (minA)")
+  -- pre-maxA persisted entry: maxA absent -> ceilings/spiky fall back to aN (backward compat)
+  local legacyCap = { c = { label = "C", t0 = 0, a0 = 1000, tN = 120000, aN = 5000, minA = 1000 } }
+  local lc = suggest.analyze(legacyCap, { managed = {} })
+  t.eq(lc[1].kind, "cap", "CONF-2: a legacy entry (no maxA) still analyzes")
+  t.eq(lc[1].ceiling, 5000, "CONF-2: legacy cap ceiling falls back to aN when maxA absent")
+
+  -- CAP ceiling is seeded from the observed PEAK, not the (lower) last sample:
+  -- climbs to 6000 then settles to 5000 -> ceiling must sit >= 6000, not 5000.
+  local peak = { p = { label = "P", t0 = 0, a0 = 1000, tN = 120000, aN = 5000, minA = 1000, maxA = 6000 } }
+  local pc = suggest.analyze(peak, { managed = {} })
+  t.eq(pc[1].kind, "cap", "CONF-2: a net-growth item is a cap")
+  t.check(pc[1].ceiling >= 6000, "CONF-2: cap ceiling is seeded from the peak (maxA), not the last sample")
+
+  -- SPIKY: a self-replenishing item (refills then dips at the last sample) shows the same
+  -- endpoint decline as a steady drainer, but a large swing relative to net move -> spiky,
+  -- damped confidence. Steady monotone drainer of equal net decline is NOT spiky.
+  local spikyH = { s = { label = "S", t0 = 0, a0 = 1000, tN = 120000, aN = 800, minA = 100, maxA = 1200, n = 30 } }
+  local steadyH = { d = { label = "D", t0 = 0, a0 = 1000, tN = 120000, aN = 800, minA = 800, maxA = 1000, n = 30 } }
+  t.eq(suggest.analyze(spikyH, { managed = {}, minDrain = 64 })[1].spiky, true,
+    "CONF-2: a large-swing self-replenishing item is tagged spiky")
+  t.eq(suggest.analyze(steadyH, { managed = {}, minDrain = 64 })[1].spiky, false,
+    "CONF-2: a monotone drainer of equal net decline is NOT spiky")
+  -- BITE: spiky damping demotes the spiky item below the steady one despite EQUAL net
+  -- decline (200) and equal sample evidence (n=30). Without the spiky damp they'd tie on
+  -- _rank and fall to the name tiebreak (d < s, so steady wins anyway) -- so make the SPIKY
+  -- item win the name tiebreak (rename steady to 'z') and prove damping still ranks it below.
+  local both = {
+    aa = { label = "Spiky",  t0 = 0, a0 = 1000, tN = 120000, aN = 800, minA = 100, maxA = 1200, n = 30 },
+    zz = { label = "Steady", t0 = 0, a0 = 1000, tN = 120000, aN = 800, minA = 800, maxA = 1000, n = 30 },
+  }
+  local br = suggest.analyze(both, { managed = {}, minDrain = 64 })
+  t.eq(br[1].name, "zz",
+    "CONF-2 BITE: spiky damping ranks a self-replenishing item below a steady drainer of equal decline")
+end
+
+-- ---------------------------------------------------------------------------
 print("overflow balancer (compress above ceiling)")
 local function ovItem(over) local i = { name = "dust", label = "Steel Dust",
   ceiling = 1000, into = { name = "ingot", label = "Steel Ingot" }, ratio = 1 }

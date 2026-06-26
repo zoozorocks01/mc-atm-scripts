@@ -8,7 +8,7 @@
 -- quota editor, pre-seeded; nothing is auto-applied unless the operator confirms.
 local suggest = {}
 
--- history: { [name] = { label, t0, a0, tN, aN, minA, n } }
+-- history: { [name] = { label, t0, a0, tN, aN, minA, maxA, n } }
 -- record one snapshot. snapshot: array of { name, label, amount }.
 function suggest.record(history, snapshot, now)
   history = history or {}
@@ -19,12 +19,13 @@ function suggest.record(history, snapshot, now)
       local amt = tonumber(it.amount) or 0
       local h = history[name]
       if not h then
-        history[name] = { label = it.label or name, t0 = now, a0 = amt, tN = now, aN = amt, minA = amt, n = 1 }
+        history[name] = { label = it.label or name, t0 = now, a0 = amt, tN = now, aN = amt, minA = amt, maxA = amt, n = 1 }
       else
         h.tN = now
         h.aN = amt
         h.n = h.n + 1
         if amt < h.minA then h.minA = amt end
+        if amt > (h.maxA or h.a0 or amt) then h.maxA = amt end
         if it.label then h.label = it.label end
       end
     end
@@ -54,7 +55,7 @@ function suggest.prune(history, now, opts)
       removed = removed + 1
     elseif maxWindowMs > 0 and ((h.tN or 0) - (h.t0 or 0)) > maxWindowMs then
       -- restart the window at the latest sample so drain reflects recent time
-      h.t0, h.a0, h.minA, h.n = h.tN or now, h.aN or 0, h.aN or 0, 1
+      h.t0, h.a0, h.minA, h.maxA, h.n = h.tN or now, h.aN or 0, h.aN or 0, h.aN or 0, 1
     end
   end
 
@@ -193,6 +194,15 @@ function suggest.analyze(history, ctx)
       local nConf = math.min(1, ((h.n or 1) - 1) / (confK > 0 and confK or 1))
       local spanConf = idealWindow > 0 and math.min(1, span / idealWindow) or 1
       local conf = nConf * spanConf
+      -- spiky: the intra-window swing (maxA-minA) dwarfs the net move, so the item
+      -- refilled then dipped (self-replenishing) rather than steadily draining. Endpoint
+      -- decline is blind to this; damp confidence so a spiky item is demoted vs a monotone
+      -- drainer of equal net decline. maxA defaults to aN for pre-maxA persisted entries.
+      local maxA = h.maxA or h.aN or 0
+      local minA = h.minA or h.aN or 0
+      local swing = maxA - minA
+      local spiky = swing > 2 * math.abs(decline)
+      if spiky then conf = conf * 0.5 end
       local confW = 0.5 + 0.5 * conf  -- never below 0.5: thin evidence is demoted, not erased
       -- a dismissed item stays suppressed UNLESS drain has materially accelerated past the
       -- baseline recorded at dismissal; legacy/no-baseline entries never re-surface this way.
@@ -213,7 +223,7 @@ function suggest.analyze(history, ctx)
           local target = math.max(0, math.floor(h.minA or 0))
           out[#out + 1] = {
             kind = "quota", name = name, label = h.label or name, seeded = true,
-            target = target, craftTo = target + buffer, perMin = perMin, conf = conf,
+            target = target, craftTo = target + buffer, perMin = perMin, conf = conf, spiky = spiky,
             reason = "down " .. decline .. " in " .. mins(span) .. "m", _rank = decline * confW,
           }
         elseif not isManaged and -decline >= minDrain then
@@ -223,10 +233,12 @@ function suggest.analyze(history, ctx)
             -- managed.set keeps the ceiling inert and the row is just a low refill quota
             -- (target..craftTo), so the seed is never invalid/partial.
             local target = math.max(0, math.floor(h.minA or 0))
-            local ceiling = math.max(target + 1, math.floor(h.aN or 0)) -- band climb => aN>=target+minDrain
+            -- seed the ceiling above the observed PEAK (maxA), not just the last sample, so a
+            -- mid-window high doesn't get clipped below the true band top. maxA>=aN always.
+            local ceiling = math.max(target + 1, math.floor(math.max(h.aN or 0, maxA))) -- band climb => >=target+minDrain
             out[#out + 1] = {
               kind = "compress", name = name, label = h.label or name, seeded = true,
-              target = target, ceiling = ceiling, ratio = 1, perMin = perMin, conf = conf,
+              target = target, ceiling = ceiling, ratio = 1, perMin = perMin, conf = conf, spiky = spiky,
               -- the cooldown buffer is sized off the GROWTH rate (unrelated to the band height),
               -- so clamp the refill floor strictly below the cap: target < craftTo < ceiling.
               craftTo = math.max(target + 1, math.min(target + buffer, ceiling - 1)),
@@ -235,7 +247,7 @@ function suggest.analyze(history, ctx)
           else
             out[#out + 1] = {
               kind = "cap", name = name, label = h.label or name, seeded = true,
-              target = 0, craftTo = 0, ceiling = math.max(0, math.floor(h.aN or 0)), perMin = perMin, conf = conf,
+              target = 0, craftTo = 0, ceiling = math.max(0, math.floor(math.max(h.aN or 0, maxA))), perMin = perMin, conf = conf, spiky = spiky,
               reason = "up " .. (-decline) .. " in " .. mins(span) .. "m", _rank = (-decline) * confW,
             }
           end
@@ -245,7 +257,7 @@ function suggest.analyze(history, ctx)
           if proposed > (q.craftTo or 0) then
             out[#out + 1] = {
               kind = "raise", name = name, label = h.label or name, seeded = true,
-              target = q.target, craftTo = proposed, perMin = perMin, conf = conf,
+              target = q.target, craftTo = proposed, perMin = perMin, conf = conf, spiky = spiky,
               reason = "below target, still draining", _rank = decline * confW,
             }
           end
