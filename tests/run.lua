@@ -1206,16 +1206,53 @@ do
   local _, cFalse = health.bridgeDegraded(st4, false, 3)
   t.eq(cFalse, 2, "A3: false treated as failure")
 
-  -- gateCrafts: the pure fire/hold decision the manager wires in. allowFire is
-  -- the inverse of degraded, tracking the same consecutive-failure counter.
-  local g = {}
-  local fire1, deg1, gc1 = health.gateCrafts(g, false, 3)
-  t.check(fire1 == true and deg1 == false and gc1 == 1, "A3: gate allows fire below threshold")
-  health.gateCrafts(g, false, 3)
-  local fire3, deg3, gc3 = health.gateCrafts(g, false, 3)
-  t.check(fire3 == false and deg3 == true and gc3 == 3, "A3: gate HOLDS crafts at degraded threshold")
-  local fireR, degR, gcR = health.gateCrafts(g, true, 3)
-  t.check(fireR == true and degR == false and gcR == 0, "A3: gate RESUMES crafts on first clean scan (resets)")
+end
+
+-- ---------------------------------------------------------------------------
+-- gateCrafts: the pure fire/hold decision the manager wires in, with RECOVERY
+-- HYSTERESIS. threshold=3 consecutive failures to hold; recover=2 consecutive clean
+-- reads to resume. The critical property the earlier no-op got wrong: a degraded
+-- bridge's FIRST clean read must still HOLD -- firing resumes only after `recover`
+-- clean reads, covering the dangerous re-attach window. Own do-scope so the locals
+-- above are freed first (run.lua main chunk is near Lua's 200-local cap).
+print("A3 gateCrafts recovery hysteresis (pure)")
+do
+  local a, hold, f, c -- reused scratch (allowFire, holding, fails, cleanStreak)
+  -- a never-failed bridge fires immediately (steady state).
+  a = health.gateCrafts({}, true, 3, 2)
+  t.check(a == true, "A3: clean bridge fires from the start (no spurious hold)")
+  -- below the failure threshold, still firing.
+  a, hold, f = health.gateCrafts({}, false, 3, 2)
+  t.check(a == true and hold == false and f == 1, "A3: gate allows fire below failure threshold")
+  -- 3 consecutive failures -> held.
+  local h = {}
+  health.gateCrafts(h, false, 3, 2)
+  health.gateCrafts(h, false, 3, 2)
+  a, hold, f = health.gateCrafts(h, false, 3, 2)
+  t.check(a == false and hold == true and f == 3, "A3: gate HOLDS crafts at the failure threshold")
+  -- the FIRST clean read after a degraded window must STILL hold (the no-op bug
+  -- resumed here). cleanStreak=1 < recover=2.
+  a, hold, f, c = health.gateCrafts(h, true, 3, 2)
+  t.check(a == false and hold == true and c == 1,
+    "A3: gate STILL HOLDS on the first clean read after degraded (hysteresis)")
+  -- the SECOND consecutive clean read resumes firing (recover=2 reached).
+  a, hold, f, c = health.gateCrafts(h, true, 3, 2)
+  t.check(a == true and hold == false and c == 2,
+    "A3: gate RESUMES after recover consecutive clean reads")
+  -- a failure mid-recovery resets the clean streak (must re-earn the full recover).
+  local r = {}
+  for _ = 1, 3 do health.gateCrafts(r, false, 3, 2) end -- held
+  health.gateCrafts(r, true, 3, 2)                       -- cleanStreak 1 (held)
+  health.gateCrafts(r, false, 3, 2)                      -- failure resets streak
+  a, hold, f, c = health.gateCrafts(r, true, 3, 2)
+  t.check(a == false and hold == true and c == 1,
+    "A3: a failure mid-recovery resets the clean streak (re-earn recover)")
+  -- default recover is 2 when none supplied.
+  local d = {}
+  for _ = 1, 3 do health.gateCrafts(d, false) end -- held (default threshold 3)
+  a = health.gateCrafts(d, true)                  -- 1 clean (held, default recover 2)
+  hold = health.gateCrafts(d, true)               -- 2 clean (resume); reuse `hold` as scratch
+  t.check(a == false and hold == true, "A3: default recover (2) clean reads to resume")
 end
 
 -- ---------------------------------------------------------------------------

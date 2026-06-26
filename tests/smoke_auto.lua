@@ -259,5 +259,71 @@ local loopErr = false
 for _, line in ipairs(logged) do if line:find("loop error", 1, true) then loopErr = true end end
 check(not loopErr, "STAB-1: call() contained the craft throw at the craft site (no loop-level error)")
 
+-- ---- A3 recovery-hysteresis: hold crafts across the bridge re-attach window -----
+-- The headline reliability win, tested END-TO-END (the pure gateCrafts test alone
+-- did not catch the earlier no-op, because the no-op passed the unit test). A
+-- detaching bridge (reboot/chunk-reload) produces a BURST of failed reads then
+-- comes back; the mutating craftItem at that still-settling re-attach is the
+-- uncatchable AP crash trigger, so the gate must HOLD firing for the first clean
+-- read(s) after a degraded window, NOT resume on the first clean scan. We drive the
+-- manager through a degraded window by flipping the bridge offline per cycle from
+-- os.pullEvent (one schedule entry = one refresh cycle).
+local flakyOnline = true
+local function fakeBridgeFlaky()
+  local b = fakeBridge()
+  b.isConnected = function() return flakyOnline end
+  b.isOnline = function() return flakyOnline end
+  b.getItems = function()
+    if not flakyOnline then return {} end
+    return {
+      { name = "alltheores:zinc_ingot", amount = 1000, isCraftable = true },
+      { name = "minecraft:iron_ingot", amount = 800000, isCraftable = false },
+    }
+  end
+  return b
+end
+
+local function runFlaky(schedule, craftSpy)
+  files = { [MANAGED_FILE] = "MANAGED" } -- fresh world so no stale queue/ledger
+  clock = 0
+  flakyOnline = true
+  local BRF = fakeBridgeFlaky()
+  BRF.craftItem = function(arg) craftSpy[#craftSpy + 1] = arg; return true end
+  _G.peripheral.wrap = function(n)
+    if n == "monitor_0" then return MON end
+    if n == "rs_bridge_0" then return BRF end
+    return nil
+  end
+  local ej = 0
+  _G.os.pullEvent = function()
+    ej = ej + 1
+    if ej > #schedule then error(SENTINEL, 0) end
+    flakyOnline = schedule[ej] -- set this cycle's bridge state before the refresh
+    return "timer", 1
+  end
+  return pcall(function() dofile("inventory/manager.lua") end)
+end
+
+-- SUPPRESSION (the biting test): 3 offline reads degrade the bridge, then ONE clean
+-- read. With hysteresis (recover=2) that first clean read must STILL hold, so NO
+-- craft fires. Revert gateCrafts to reset-on-first-clean and cycle 4 fires -> bites.
+local craftedHold = {}
+print("smoke-auto: A3 hysteresis - 3 offline then 1 clean read must NOT fire (held)")
+local okH, errH = runFlaky({ false, false, false, true }, craftedHold)
+check(okH == false and tostring(errH):find(SENTINEL, 1, true) ~= nil,
+  "A3: manager survived a degraded-then-recovering bridge with no crash: " .. tostring(errH))
+check(#craftedHold == 0,
+  "A3: craftItem HELD on the first clean read after a degraded window (recovery hysteresis)")
+
+-- RESUME: a SECOND consecutive clean read (recover=2) must re-enable firing, so the
+-- deficit finally crafts. Proves the hold is not a permanent latch.
+local craftedResume = {}
+print("smoke-auto: A3 hysteresis - a second clean read resumes firing")
+local okR, errR = runFlaky({ false, false, false, true, true }, craftedResume)
+check(okR == false and tostring(errR):find(SENTINEL, 1, true) ~= nil,
+  "A3: manager survived the recovery cycles with no crash: " .. tostring(errR))
+check(#craftedResume >= 1,
+  "A3: craft-firing AUTO-RESUMES after recover consecutive clean reads")
+
 print((failures == 0) and "SMOKE-AUTO OK" or ("SMOKE-AUTO FAILED (" .. failures .. ")"))
 os.exit(failures == 0 and 0 or 1)

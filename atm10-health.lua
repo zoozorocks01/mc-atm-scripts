@@ -12,6 +12,7 @@
 local health = {}
 
 health.DEFAULT_THRESHOLD = 3
+health.DEFAULT_RECOVER = 2
 
 -- bridgeDegraded(state, ok, threshold)
 --   state     : a table the caller persists across calls; this fn maintains
@@ -37,22 +38,49 @@ function health.bridgeDegraded(state, ok, threshold)
   return state.bridgeFails >= n, state.bridgeFails
 end
 
--- gateCrafts(state, ok, threshold)
---   Folds this cycle's bridge outcome into the consecutive-failure count (via
---   bridgeDegraded) AND returns the fire/hold decision in one call, so the
---   manager holds no decision logic of its own. Returns
---   (allowFire, degraded, count): allowFire == not degraded. Pure -- the caller
---   owns `state`; this fn never touches a peripheral.
+-- gateCrafts(state, ok, threshold, recoverCycles)
+--   The fire/hold decision the manager wires in, with RECOVERY HYSTERESIS so it
+--   actually protects the dangerous bridge RE-ATTACH window. Folds this cycle's
+--   bridge read outcome into the persisted `state` and returns whether craftItem
+--   may fire this cycle. Pure -- the caller owns `state`; never touches a peripheral.
 --
 --   Wire ok=false on any bridge-read failure (scan's no-bridge / offline / stale
---   branch), ok=true on a clean scan. When degraded, the manager must SKIP firing
---   craftItem this cycle: a flaky bridge that is intermittently answering reads is
---   exactly the half-attached state in which the mutating craftItem is the
---   uncatchable-crash trigger. A single clean scan resets the count and re-allows
---   firing automatically (no latch, no manual clear).
-function health.gateCrafts(state, ok, threshold)
-  local degraded, count = health.bridgeDegraded(state, ok, threshold)
-  return (not degraded), degraded, count
+--   branch), ok=true on a clean scan. The mutating craftItem at a half-attached
+--   bridge is the uncatchable AdvancedPeripherals crash trigger, and the worst
+--   moment is right when the bridge comes BACK after a detach (reboot/chunk reload)
+--   but is still settling -- a single clean read there is not proof it is safe.
+--   So:
+--     * ok==false -> bridgeFails++, cleanStreak=0; once bridgeFails reaches
+--                    `threshold` consecutive failures the bridge is marked unsafe
+--                    (state.holding=true) and firing is held.
+--     * ok==true  -> bridgeFails=0, cleanStreak++; while unsafe, firing stays HELD
+--                    until `recoverCycles` consecutive clean reads, then resumes.
+--   A never-failed bridge starts safe (holding falsy) so steady-state fires
+--   normally. NOTE: the earlier version reset on the FIRST clean read, which made
+--   the gate a no-op -- the clean read that returns the data also re-allowed firing,
+--   so the manager's hold-guard was never reached on the data path. Hysteresis fixes
+--   that. Returns (allowFire, holding, fails, cleanStreak).
+function health.gateCrafts(state, ok, threshold, recoverCycles)
+  if type(state) ~= "table" then error("gateCrafts: state table required", 0) end
+  local th = tonumber(threshold) or health.DEFAULT_THRESHOLD
+  if th < 1 then th = 1 end
+  local rec = tonumber(recoverCycles) or health.DEFAULT_RECOVER
+  if rec < 1 then rec = 1 end
+
+  if ok == true then
+    state.bridgeFails = 0
+    state.cleanStreak = (tonumber(state.cleanStreak) or 0) + 1
+    if state.cleanStreak > rec then state.cleanStreak = rec end
+    if state.holding and state.cleanStreak >= rec then state.holding = false end
+  else
+    state.cleanStreak = 0
+    state.bridgeFails = (tonumber(state.bridgeFails) or 0) + 1
+    if state.bridgeFails > th then state.bridgeFails = th end
+    if state.bridgeFails >= th then state.holding = true end
+  end
+
+  return (not state.holding), (state.holding == true),
+         state.bridgeFails or 0, state.cleanStreak or 0
 end
 
 return health

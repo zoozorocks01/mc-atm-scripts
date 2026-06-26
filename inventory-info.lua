@@ -1075,7 +1075,9 @@ local function scan()
   end
   lastUnique = unique -- remember a good read so the next empty read is caught as stale
 
-  -- clean read: reset the failure count and re-allow craft-firing (auto-resume).
+  -- clean read: feed a success to the gate. With recovery hysteresis this does NOT
+  -- immediately re-allow firing after a degraded window -- it takes recoverCycles
+  -- consecutive clean reads to resume, so a just-reattached bridge isn't crafted at.
   craftingCache.__bridge.allowFire = craftingCache.__health.gateCrafts(craftingCache.__bridge, true)
 
   table.sort(sorted, function(a, b) return itemAmount(a) > itemAmount(b) end)
@@ -2249,9 +2251,11 @@ local function refreshAndDraw()
       -- crossed the threshold, SKIP the whole craft phase this cycle. A flaky
       -- bridge intermittently answering reads is the half-attached state in which
       -- the mutating craftItem is the uncatchable AP crash trigger; holding it
-      -- back is the core reliability win. We still hold the last-good display. The
-      -- first clean scan resets the counter (gateCrafts) and craft-firing resumes
-      -- automatically next cycle -- no latch, no manual clear.
+      -- back is the core reliability win. We still hold the last-good display.
+      -- gateCrafts uses RECOVERY HYSTERESIS: after a degraded window the gate stays
+      -- held until recoverCycles consecutive clean scans, so craft-firing does not
+      -- resume on the bridge's first (still-settling) clean read -- it auto-resumes
+      -- once the bridge has been stably clean (no manual clear).
       if craftingCache.__bridge and craftingCache.__bridge.allowFire == false then
         data.bridgeDegraded = true -- for the (pinned, in-game-visual) header chip
       else
