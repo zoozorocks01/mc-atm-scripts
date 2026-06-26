@@ -530,6 +530,15 @@ t.eq(rpN, 4, "pruneResults caps to max (10 -> 4)")
 t.eq(rpRemoved, 6, "pruneResults reports the dropped count")
 t.check(rp.i1 == nil and rp.i10 ~= nil, "pruneResults drops the OLDEST, keeps the newest")
 t.eq(select(2, cqueue.pruneResults({ a = { at = 1 } }, 0)), 0, "pruneResults with max<=0 disables the cap")
+-- prune-on-LOAD shape: loadCraftResults bounds the map by calling pruneResults and
+-- returning only the (mutated) map via `(cqueue.pruneResults(data, max))`. Pin that
+-- parenthesized single-return so a 300-entry oversized file is bounded on load.
+local rpLoad = {}
+for i = 1, 300 do rpLoad["x" .. i] = { ok = true, at = i } end
+local loaded = (cqueue.pruneResults(rpLoad, 150)) -- parens drop the count, as the loader does
+local loadedN = 0; for _ in pairs(loaded) do loadedN = loadedN + 1 end
+t.eq(loadedN, 150, "prune-on-load bounds an oversized craft-results map (300 -> 150)")
+t.check(loaded.x300 ~= nil and loaded.x1 == nil, "prune-on-load keeps newest, drops oldest")
 
 -- ---------------------------------------------------------------------------
 print("craft runner (gated execution)")

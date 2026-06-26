@@ -429,7 +429,11 @@ local function loadCraftResults()
   file.close()
   local ok, data = pcall(textutils.unserialize, text)
   if not ok or type(data) ~= "table" then return {} end
-  return data
+  -- Bound on load (matching the dismissed-set pattern): pruneResults otherwise
+  -- only runs when a craft fires, so a manager that loads an oversized file (left
+  -- by an older build, an external edit, or a long no-craft period) and never
+  -- fires would hold it un-bounded on the ~1MB disk. Newest-kept, drop-oldest.
+  return (cqueue.pruneResults(data, CRAFT_RESULTS.max))
 end
 
 local function saveCraftResults(map)
