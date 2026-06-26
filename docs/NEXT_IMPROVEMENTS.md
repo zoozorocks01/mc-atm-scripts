@@ -22,6 +22,31 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-26 (Code phase, touch/perf/reliability sweep)
+
+- **C2 notInGrid hoist — SHIPPED** (`d0cfc86`). Added `managed.countNotInGrid(store,
+  itemsByName)` (pure, unit-tested + bite-verified), compute the PLAN "not in grid"
+  count once in `scan()`, drawPlanPage reads `data.notInGrid`. No new top-level
+  locals; gate 525/0, smokes OK, mirrors identical.
+- **A1 STAB-2 + A2 STAB-1 — CONFIRMED ALREADY SHIPPED** (no new commit). The
+  `requestCraft` isConnected/isOnline recheck is live at `inventory-info.lua:813-825`
+  and the `smoke_auto.lua` test (STAB-2 detach-after-scan) **bites** — removing the
+  recheck flips "craftItem was NOT issued" to FAIL. Verified, then restored.
+- **Pinned, NOT committed this pass (deferred to discussion / in-game-visual):**
+  - **A3 bridge-degraded chip** — the useful payoff is a header chip whose value is
+    only verifiable on a live monitor, and it adds per-frame state under the 186-local
+    cap. Pin rather than ship a half-visible feature.
+  - **C1 tap-flash on Browse/Smart/Presets/editor** — render-only, but its whole
+    point (does a coarse tap acknowledge) is physical/in-game; pin.
+  - **D2 box/gauge wire-or-delete** — neither half is safe unattended: "wire" needs
+    visual verify; "delete" removes helpers Codex's UI-3/UI-5 roadmap intends to use.
+    Needs the wire-or-delete decision made with the operator first.
+  - **B1/B2/C3/D1/D3/D4/D5** — unchanged: double-buffer wirings + restyles are
+    in-game-visual and/or major/high-risk (B1 manager buffer is at the local cap).
+    Do B1 first; C3/D3 depend on it.
+
+---
+
 ## Tier A — Reliability (do first)
 
 ### A1. STAB-2: recheck bridge attachment before every mutating `craftItem`
@@ -179,13 +204,13 @@ viewer → polish).
 
 | ID | Item | Size | Value | Risk | Verify | Phase |
 |---|---|---|---|---|---|---|
-| A1 | STAB-2 craftItem isConnected recheck | S | high | med | gate | Code |
-| A2 | STAB-1 pin with smoke tests | S | high | low | gate | Code |
-| A3 | bridge-degraded chip | S | med | low | gate | Code |
+| A1 | STAB-2 craftItem isConnected recheck | S | high | med | gate | DONE (already shipped, test bites) |
+| A2 | STAB-1 pin with smoke tests | S | high | low | gate | DONE (smoke_auto bites) |
+| A3 | bridge-degraded chip | S | med | low | gate | pinned (payoff is visual + adds state at local cap) |
 | B1 | UI-2 manager double buffer | major | high | high | visual | discuss |
 | B2 | shrink touch-block window | M | high | med | gate | Code/discuss |
 | C1 | tap flash on Browse/Smart/Presets/editor | S | med | low | gate | Code |
-| C2 | notInGrid hoist | S | med | low | gate | Code |
+| C2 | notInGrid hoist | S | med | low | gate | DONE (d0cfc86) |
 | C3 | UI-4 enlarge tap targets | M | med | med | visual | discuss |
 | D1 | power-display double buffer | M | high | med | visual | discuss |
 | D2 | box/gauge wire-or-delete | S | med | low | gate | Code |
