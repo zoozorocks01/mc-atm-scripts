@@ -6,24 +6,28 @@ local REFRESH_SECONDS = 5
 -- Craftability/crafting are expensive RS Bridge calls; cache them across scans to
 -- stay responsive on a laggy server. A NOT-craftable result expires fast (so a
 -- newly-added pattern shows quickly); a craftable result is held longer.
-local CRAFTABLE_TRUE_TTL_MS = 60000
-local CRAFTABLE_FALSE_TTL_MS = 10000
-local CRAFTING_TTL_MS = 6000
+-- Bundled into one table to stay well under Lua's 200-local-per-function cap: CC's
+-- Lua (Cobalt) counts main-chunk locals stricter than Lua 5.4, so a packed table
+-- (one local) is the safe way to hold many constants.
+local TTL = { craftableTrue = 60000, craftableFalse = 10000, crafting = 6000 } -- ms
 -- Broadcast slice sizes: an 8-item header summary (topItems) + a larger BOUNDED
 -- list (viewItems) the read-only viewer paginates (VIEW-1). Capped, never thousands.
 local BROADCAST_ITEMS = { top = 8, view = 150 }
 local BROADCAST_ENABLED = true
 local BROADCAST_MODEM_SIDE = "auto"
 local BROADCAST_PROTOCOL = "atm10-inventory-v1"
-local CONFIG_FILE = "inventory-config"
-local LEDGER_FILE = ".atm10-stock-ledger"
-local QUEUE_FILE = ".atm10-craft-queue"
 local CRAFT_RESULTS = { file = ".atm10-craft-results", max = 150 } -- last-craft outcome (QUICK-5); bounded
-local MANAGED_FILE = ".atm10-managed" -- operator-set quotas (tap-to-manage store)
-local TRENDS_FILE = ".atm10-trends" -- smart-mode consumption history (survives reboot)
-local DISMISSED_FILE = ".atm10-dismissed" -- smart suggestions the operator cleared (survives reboot)
-local CRAFTSTATE_FILE = ".atm10-craftstate" -- drain snapshot read by `safereboot` to avoid the AP detach-crash
-local HEARTBEAT_FILE = ".atm10-heartbeat" -- liveness ping; the startup watchdog restarts a hung manager
+-- On-disk filenames bundled into one table (same locals-cap reason as TTL above).
+local FILES = {
+  config = "inventory-config",
+  ledger = ".atm10-stock-ledger",
+  queue = ".atm10-craft-queue",
+  managed = ".atm10-managed",       -- operator-set quotas (tap-to-manage store)
+  trends = ".atm10-trends",         -- smart-mode consumption history (survives reboot)
+  dismissed = ".atm10-dismissed",   -- smart suggestions the operator cleared
+  craftstate = ".atm10-craftstate", -- drain snapshot read by safereboot (avoids the AP detach-crash)
+  heartbeat = ".atm10-heartbeat",   -- liveness ping; startup watchdog restarts a hung manager
+}
 -- Cycleable +/- step sizes in the quota editor: by count AND by stacks (a stack
 -- is 64), so big late-game numbers are quick to dial in. {value, label}.
 local STACK = 64
@@ -265,12 +269,12 @@ end
 local function loadConfig()
   configError = nil
 
-  if not fs.exists(CONFIG_FILE) then
+  if not fs.exists(FILES.config) then
     config = normalizeConfig(DEFAULT_CONFIG)
     return
   end
 
-  local ok, loaded = pcall(dofile, CONFIG_FILE)
+  local ok, loaded = pcall(dofile, FILES.config)
   if not ok then
     config = normalizeConfig(DEFAULT_CONFIG)
     configError = "Config error: " .. tostring(loaded)
@@ -283,11 +287,11 @@ end
 local function readLedger()
   ledgerError = nil
 
-  if not fs.exists(LEDGER_FILE) then
+  if not fs.exists(FILES.ledger) then
     return { requests = {} }
   end
 
-  local file = fs.open(LEDGER_FILE, "r")
+  local file = fs.open(FILES.ledger, "r")
   if not file then
     ledgerError = "Ledger unreadable"
     return nil
@@ -326,13 +330,13 @@ local function atomicWrite(path, content)
 end
 
 local function writeLedger(data)
-  return atomicWrite(LEDGER_FILE, textutils.serialize(data))
+  return atomicWrite(FILES.ledger, textutils.serialize(data))
 end
 
 -- Load the approved-craft queue (fail-safe: any problem yields an empty queue).
 local function loadQueue()
-  if not fs.exists(QUEUE_FILE) then return cqueue.new() end
-  local file = fs.open(QUEUE_FILE, "r")
+  if not fs.exists(FILES.queue) then return cqueue.new() end
+  local file = fs.open(FILES.queue, "r")
   if not file then return cqueue.new() end
   local text = file.readAll()
   file.close()
@@ -343,8 +347,8 @@ end
 
 -- Load operator-set quotas (fail-safe: any problem yields an empty store).
 local function loadManaged()
-  if not fs.exists(MANAGED_FILE) then return managed.new() end
-  local file = fs.open(MANAGED_FILE, "r")
+  if not fs.exists(FILES.managed) then return managed.new() end
+  local file = fs.open(FILES.managed, "r")
   if not file then return managed.new() end
   local text = file.readAll()
   file.close()
@@ -354,24 +358,24 @@ local function loadManaged()
 end
 
 local function saveManaged(store)
-  return atomicWrite(MANAGED_FILE, textutils.serialize(store))
+  return atomicWrite(FILES.managed, textutils.serialize(store))
 end
 
 local function saveQueue(q)
-  return atomicWrite(QUEUE_FILE, textutils.serialize(q))
+  return atomicWrite(FILES.queue, textutils.serialize(q))
 end
 
 -- Liveness ping: the startup watchdog restarts the program if these stop landing
 -- (a hang the pcall-restart loop can't catch). Fixed-size; overwrites in place.
 local function writeHeartbeat(now)
-  pcall(atomicWrite, HEARTBEAT_FILE, tostring(now or 0))
+  pcall(atomicWrite, FILES.heartbeat, tostring(now or 0))
 end
 
 -- Persist a tiny drain snapshot so `safereboot` can decide whether detaching this
 -- computer is safe even after the manager is terminated (the file outlives the
 -- process). Fixed-size; overwrites in place (no growth). Fail-safe: best effort.
 local function writeCraftState(now, crafting, craftingNames)
-  pcall(atomicWrite, CRAFTSTATE_FILE, textutils.serialize({
+  pcall(atomicWrite, FILES.craftstate, textutils.serialize({
     at = now,
     lastCraftAt = lastCraftAt,
     crafting = tonumber(crafting) or 0,
@@ -383,8 +387,8 @@ end
 -- the drain window survive a reboot instead of restarting from zero each boot.
 -- Fail-safe: any problem yields an empty history (smart mode just relearns).
 local function loadTrends()
-  if not fs.exists(TRENDS_FILE) then return {} end
-  local file = fs.open(TRENDS_FILE, "r")
+  if not fs.exists(FILES.trends) then return {} end
+  local file = fs.open(FILES.trends, "r")
   if not file then return {} end
   local text = file.readAll()
   file.close()
@@ -394,14 +398,14 @@ local function loadTrends()
 end
 
 local function saveTrends(history)
-  return atomicWrite(TRENDS_FILE, textutils.serialize(history or {}))
+  return atomicWrite(FILES.trends, textutils.serialize(history or {}))
 end
 
 -- Dismissed smart suggestions persist too: now that the trend window survives a
 -- reboot, suggestions would otherwise reappear after every restart. Fail-safe.
 local function loadDismissed()
-  if not fs.exists(DISMISSED_FILE) then return {} end
-  local file = fs.open(DISMISSED_FILE, "r")
+  if not fs.exists(FILES.dismissed) then return {} end
+  local file = fs.open(FILES.dismissed, "r")
   if not file then return {} end
   local text = file.readAll()
   file.close()
@@ -411,7 +415,7 @@ local function loadDismissed()
 end
 
 local function saveDismissed(set)
-  return atomicWrite(DISMISSED_FILE, textutils.serialize(set or {}))
+  return atomicWrite(FILES.dismissed, textutils.serialize(set or {}))
 end
 
 -- Per-item last-craft results (QUICK-5): own file, own cap, atomicWrite -- so a
@@ -643,7 +647,7 @@ local function isCraftable(registryName, item)
 
   local cached = craftableCache[registryName]
   if cached then
-    local ttl = cached.v and CRAFTABLE_TRUE_TTL_MS or CRAFTABLE_FALSE_TTL_MS
+    local ttl = cached.v and TTL.craftableTrue or TTL.craftableFalse
     if (nowMs() - cached.at) < ttl then return cached.v end
   end
 
@@ -673,7 +677,7 @@ end
 
 local function isItemCrafting(registryName)
   local cached = craftingCache[registryName]
-  if cached and (nowMs() - cached.at) < CRAFTING_TTL_MS then return cached.v end
+  if cached and (nowMs() - cached.at) < TTL.crafting then return cached.v end
 
   local result = call(bridge, "isItemCrafting", { name = registryName })
   if result == nil then result = call(bridge, "isCrafting", { name = registryName }) end
