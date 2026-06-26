@@ -778,6 +778,18 @@ t.eq(managed.count(ms), 3, "set without a name is a no-op")
 managed.remove(ms, "x")
 t.check(managed.has(ms, "x") == false, "remove drops the quota")
 
+-- CRAFT-3: countNotInGrid -- hoisted PLAN counter. ms now holds mek:steel + y.
+local nigStore = managed.new()
+managed.set(nigStore, { name = "mek:steel", target = 1, craftTo = 1 }, 1)
+managed.set(nigStore, { name = "ghost:item", target = 1, craftTo = 1 }, 1)
+managed.set(nigStore, { name = "also:missing", target = 1, craftTo = 1 }, 1)
+t.eq(managed.countNotInGrid(nigStore, { ["mek:steel"] = {} }), 2,
+  "countNotInGrid counts quotas absent from the live grid")
+t.eq(managed.countNotInGrid(nigStore, { ["mek:steel"] = {}, ["ghost:item"] = {}, ["also:missing"] = {} }), 0,
+  "countNotInGrid is 0 when every quota is in the grid")
+t.eq(managed.countNotInGrid(nigStore, nil), 3, "nil grid -> every quota counts as missing")
+t.eq(managed.countNotInGrid(managed.new(), { ["x"] = {} }), 0, "empty store -> 0 missing")
+
 -- toCategory feeds the planner; empty store -> nil
 t.eq(managed.toCategory(managed.new()), nil, "empty store -> no category")
 local cat = managed.toCategory(ms)

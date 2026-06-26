@@ -127,6 +127,22 @@ function managed.count(store)
   return n
 end
 
+-- CRAFT-3 helper: how many managed quotas reference an item that is NOT in the
+-- live grid (itemsByName, keyed by registry name). Presence in getItems is the
+-- only trustworthy "exists" signal (the CC export reports craftable_rows=0 even
+-- for items that craft fine), so a quota missing here is a typo / version-drift
+-- ID or an item never stocked. Pure: itemsByName is { [name] = item }. Hoisted
+-- out of the per-render PLAN draw -- its inputs only change on scan.
+function managed.countNotInGrid(store, itemsByName)
+  store = managed.normalize(store)
+  itemsByName = itemsByName or {}
+  local n = 0
+  for _, e in pairs(store.items) do
+    if e.name and not itemsByName[e.name] then n = n + 1 end
+  end
+  return n
+end
+
 -- Items as an array, sorted by label then name (stable display order).
 function managed.list(store)
   store = managed.normalize(store)

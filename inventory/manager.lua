@@ -1179,6 +1179,9 @@ local function scan()
     craftQueue = cqueue.list(craftQueue),
     smartMode = smartOn,
     suggestions = suggestions,
+    -- CRAFT-3: count quotas missing from the live grid ONCE here (inputs only
+    -- change on scan); drawPlanPage reads this instead of re-looping every render.
+    notInGrid = managed.countNotInGrid(managedStore, itemsByName),
   }
 end
 
@@ -1280,14 +1283,10 @@ local function drawPlanPage(data)
   local pg = console.paginate(#plans, perPage, planPage)
   planPage = pg.page
 
-  -- CRAFT-3: flag quotas whose item isn't in the live grid. isCraftable is NOT a
-  -- trustworthy signal here (the CC export reports craftable_rows=0 even for items
-  -- that craft fine), so presence in getItems is the only reliable check: a quota
-  -- not in the grid is a typo / version-drift ID, or an item never stocked.
-  local notInGrid = 0
-  for _, e in ipairs(managed.list(managedStore or managed.new())) do
-    if e.name and not itemsByName[e.name] then notInGrid = notInGrid + 1 end
-  end
+  -- CRAFT-3: quotas whose item isn't in the live grid -- computed once in scan()
+  -- (its inputs only change on scan) and read here so it doesn't re-loop every
+  -- render/touch. See managed.countNotInGrid for why presence-in-grid is the signal.
+  local notInGrid = data.notInGrid or 0
   line(planLabelY, "Stock Keeper Plan [" .. tostring(effectiveMode()) ..
     "]   page " .. pg.page .. "/" .. pg.pages ..
     (notInGrid > 0 and ("   " .. notInGrid .. " not in grid") or ""), colors.cyan)
