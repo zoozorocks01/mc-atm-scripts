@@ -1,11 +1,19 @@
 return {
-  -- Control mode (gates whether a planned craft can ever fire):
+  -- OPERATING TIER (recommended) -- one switch that picks a whole behavior set:
+  --   "viewer"  read-only dashboard; NEVER crafts (mode=monitor, autocraft off, planner off)
+  --   "manual"  plans refills + you approve each craft on the console
+  --   "auto"    crafts approved deficits unattended
+  -- Set this and you can ignore mode/allowAutocraft/stockKeeper.enabled below -- the
+  -- tier sets all three. Leave it commented out to control those individually instead
+  -- (advanced; e.g. "dry-run"). The tier, if set, WINS over the individual fields.
+  -- operatingTier = "manual",
+
+  -- Control mode (used only when operatingTier is NOT set). Gates whether a planned
+  -- craft can ever fire:
   --   "monitor"  read-only; never crafts
   --   "dry-run"  plans only; never crafts
   --   "manual"   plans + requires you to approve each craft on the console
   --   "auto"     crafts approved deficits unattended (advanced)
-  -- NOTE: the craft executor is not live yet (Stage A). Nothing crafts in any
-  -- mode until Stage B ships and is verified in-game.
   mode = "manual",
 
   -- Autocraft capability flag. Must be true for any craft to fire (still gated

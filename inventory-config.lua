@@ -1,4 +1,9 @@
 return {
+  -- OPERATING TIER (recommended): "viewer" (read-only, never crafts) / "manual"
+  -- (approve each craft) / "auto" (crafts unattended). Set this to pick a whole
+  -- behavior set; it overrides mode/allowAutocraft/stockKeeper.enabled. Leave it
+  -- commented out to use the individual fields below. See inventory-config-example.lua.
+  -- operatingTier = "manual",
   mode = "manual",
 
   -- Bridge poll interval (seconds). Tuning knob, not a TPS fix -- live profiling

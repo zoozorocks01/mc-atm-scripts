@@ -210,6 +210,11 @@ end
 local function normalizeConfig(raw)
   local cfg = type(raw) == "table" and raw or {}
 
+  -- Resolve the high-level operating tier (viewer/manual/auto), if set, into
+  -- mode/allowAutocraft/stockKeeper.enabled BEFORE they are individually normalized
+  -- below. Unset tier -> no-op (raw mode/flags used, backward compatible).
+  control.applyTier(cfg)
+
   -- Control mode gates execution: monitor/dry-run never craft; manual requires
   -- operator approval; auto crafts approved deficits unattended. Unknown values
   -- fall back to manual (the shipped default).

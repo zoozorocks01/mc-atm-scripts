@@ -1256,6 +1256,34 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+-- operatingTier: the one high-level switch that resolves to mode + capability flags.
+-- Own do-scope + one reused scratch local (run.lua main chunk is near Lua's cap).
+print("operating tiers (control.applyTier)")
+do
+  local c -- reused scratch
+  c = control.applyTier({ operatingTier = "viewer" })
+  t.check(c.mode == control.MODE_MONITOR and c.allowAutocraft == false and c.stockKeeper.enabled == false,
+    "tier viewer -> monitor mode, no autocraft, planner off")
+  c = control.applyTier({ operatingTier = "manual" })
+  t.check(c.mode == control.MODE_MANUAL and c.allowAutocraft == true and c.stockKeeper.enabled == true,
+    "tier manual -> manual mode, autocraft on, planner on")
+  c = control.applyTier({ operatingTier = "auto" })
+  t.check(c.mode == control.MODE_AUTO and c.allowAutocraft == true and c.stockKeeper.enabled == true,
+    "tier auto -> auto mode, autocraft on, planner on")
+  -- unset tier: raw mode/flags preserved, no stockKeeper invented (backward compatible).
+  c = control.applyTier({ mode = "dry-run", allowAutocraft = false })
+  t.check(c.mode == "dry-run" and c.allowAutocraft == false and c.stockKeeper == nil,
+    "no operatingTier -> config untouched (backward compatible)")
+  -- unknown tier ignored (keeps raw mode).
+  c = control.applyTier({ operatingTier = "turbo", mode = "manual" })
+  t.check(c.mode == "manual", "unknown tier ignored (keeps raw mode)")
+  -- tier sets stockKeeper.enabled but PRESERVES other stockKeeper fields.
+  c = control.applyTier({ operatingTier = "auto", stockKeeper = { cooldownSeconds = 99 } })
+  t.check(c.stockKeeper.cooldownSeconds == 99 and c.stockKeeper.enabled == true,
+    "tier preserves other stockKeeper fields, only sets .enabled")
+end
+
+-- ---------------------------------------------------------------------------
 print("overflow balancer (compress above ceiling)")
 local function ovItem(over) local i = { name = "dust", label = "Steel Dust",
   ceiling = 1000, into = { name = "ingot", label = "Steel Ingot" }, ratio = 1 }

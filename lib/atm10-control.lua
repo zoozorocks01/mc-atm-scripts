@@ -9,6 +9,35 @@ control.MODE_DRY_RUN = "dry-run"
 control.MODE_MANUAL = "manual"
 control.MODE_AUTO = "auto"
 
+-- Operating tiers: one high-level switch (config.operatingTier) that resolves to the
+-- underlying mode + capability flags, so an operator can pick a whole behavior set --
+-- 'viewer' (read-only, never crafts), 'manual' (plans, you approve each craft), or
+-- 'auto' (crafts approved deficits unattended) -- without wiring mode / allowAutocraft
+-- / stockKeeper.enabled individually. Leaving operatingTier unset preserves the raw
+-- mode/flags (fully backward compatible). Each tier maps to a hard, code-enforced
+-- guarantee: executionState() gates all crafting on mode, stockKeeper.enabled gates
+-- the planner, allowAutocraft is the capability master-switch.
+control.TIERS = {
+  viewer = { mode = control.MODE_MONITOR, allowAutocraft = false, stockKeeperEnabled = false },
+  manual = { mode = control.MODE_MANUAL,  allowAutocraft = true,  stockKeeperEnabled = true  },
+  auto   = { mode = control.MODE_AUTO,    allowAutocraft = true,  stockKeeperEnabled = true  },
+}
+
+-- applyTier(cfg): if cfg.operatingTier names a known tier, set the three derived
+-- fields on cfg in place (the tier wins -- it is the explicit high-level choice).
+-- Unknown/absent tier -> cfg untouched (caller keeps its raw mode/flags). Preserves
+-- all other stockKeeper fields (only sets .enabled). Returns cfg.
+function control.applyTier(cfg)
+  if type(cfg) ~= "table" then return cfg end
+  local t = control.TIERS[cfg.operatingTier]
+  if not t then return cfg end
+  cfg.mode = t.mode
+  cfg.allowAutocraft = t.allowAutocraft
+  if type(cfg.stockKeeper) ~= "table" then cfg.stockKeeper = {} end
+  cfg.stockKeeper.enabled = t.stockKeeperEnabled
+  return cfg
+end
+
 control.CAPABILITY_AUTOCRAFT = "autocraft"
 control.CAPABILITY_EXPORT = "export"
 control.CAPABILITY_REDSTONE = "redstone"
