@@ -176,12 +176,24 @@ function suggest.analyze(history, ctx)
   local compressChains = ctx.compressChains == true        -- opt-in: promote a band-climb to "compress"
   local resurfaceFactor = tonumber(ctx.resurfaceFactor) or 2
 
+  -- confidence weight: an item observed over many samples across a long span carries a
+  -- more trustworthy drain signal than one seen twice 60s apart that happened to dip. We
+  -- weight _rank by conf so thin/short evidence is DEMOTED but never zeroed (a high-drain
+  -- item still ranks, just below an equally-declining well-observed one). conf in [0,1].
+  local confK = tonumber(ctx.confSamples) or 5            -- samples for full sample-confidence
+  local idealWindow = tonumber(ctx.confIdealWindowMs) or (minWindow * 4)
+
   local out = {}
   for name, h in pairs(history or {}) do
     local span = (h.tN or 0) - (h.t0 or 0)
     if span >= minWindow then
       local decline = (h.a0 or 0) - (h.aN or 0)
       local perMin = math.abs(decline) / (span / 60000)
+      -- conf = (sample-count confidence) * (window-span confidence), each capped at 1.
+      local nConf = math.min(1, ((h.n or 1) - 1) / (confK > 0 and confK or 1))
+      local spanConf = idealWindow > 0 and math.min(1, span / idealWindow) or 1
+      local conf = nConf * spanConf
+      local confW = 0.5 + 0.5 * conf  -- never below 0.5: thin evidence is demoted, not erased
       -- a dismissed item stays suppressed UNLESS drain has materially accelerated past the
       -- baseline recorded at dismissal; legacy/no-baseline entries never re-surface this way.
       local dv = dismissed[name]
@@ -201,8 +213,8 @@ function suggest.analyze(history, ctx)
           local target = math.max(0, math.floor(h.minA or 0))
           out[#out + 1] = {
             kind = "quota", name = name, label = h.label or name, seeded = true,
-            target = target, craftTo = target + buffer, perMin = perMin,
-            reason = "down " .. decline .. " in " .. mins(span) .. "m", _rank = decline,
+            target = target, craftTo = target + buffer, perMin = perMin, conf = conf,
+            reason = "down " .. decline .. " in " .. mins(span) .. "m", _rank = decline * confW,
           }
         elseif not isManaged and -decline >= minDrain then
           if compressChains and ((h.aN or 0) - (h.minA or 0)) >= minDrain then
@@ -214,17 +226,17 @@ function suggest.analyze(history, ctx)
             local ceiling = math.max(target + 1, math.floor(h.aN or 0)) -- band climb => aN>=target+minDrain
             out[#out + 1] = {
               kind = "compress", name = name, label = h.label or name, seeded = true,
-              target = target, ceiling = ceiling, ratio = 1, perMin = perMin,
+              target = target, ceiling = ceiling, ratio = 1, perMin = perMin, conf = conf,
               -- the cooldown buffer is sized off the GROWTH rate (unrelated to the band height),
               -- so clamp the refill floor strictly below the cap: target < craftTo < ceiling.
               craftTo = math.max(target + 1, math.min(target + buffer, ceiling - 1)),
-              reason = "up " .. (-decline) .. " in " .. mins(span) .. "m, past band", _rank = -decline,
+              reason = "up " .. (-decline) .. " in " .. mins(span) .. "m, past band", _rank = (-decline) * confW,
             }
           else
             out[#out + 1] = {
               kind = "cap", name = name, label = h.label or name, seeded = true,
-              target = 0, craftTo = 0, ceiling = math.max(0, math.floor(h.aN or 0)), perMin = perMin,
-              reason = "up " .. (-decline) .. " in " .. mins(span) .. "m", _rank = -decline,
+              target = 0, craftTo = 0, ceiling = math.max(0, math.floor(h.aN or 0)), perMin = perMin, conf = conf,
+              reason = "up " .. (-decline) .. " in " .. mins(span) .. "m", _rank = (-decline) * confW,
             }
           end
         elseif q and decline >= minDrain
@@ -233,8 +245,8 @@ function suggest.analyze(history, ctx)
           if proposed > (q.craftTo or 0) then
             out[#out + 1] = {
               kind = "raise", name = name, label = h.label or name, seeded = true,
-              target = q.target, craftTo = proposed, perMin = perMin,
-              reason = "below target, still draining", _rank = decline,
+              target = q.target, craftTo = proposed, perMin = perMin, conf = conf,
+              reason = "below target, still draining", _rank = decline * confW,
             }
           end
         end

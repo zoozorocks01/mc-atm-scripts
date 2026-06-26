@@ -1013,6 +1013,38 @@ t.check(suggest.pruneDismissed({ a = { ts = 100, baseline = 250 } }, 10000, { ma
 end
 
 -- ---------------------------------------------------------------------------
+print("CONF-1 confidence-weighted ranking (evidence quality, not raw decline)")
+do
+  -- Two unmanaged drainers with EQUAL net decline (800), but very different evidence:
+  --  thin: seen twice 90s apart (n=2, span just over minWindow)
+  --  solid: seen 50 times over a long span (n=50, span = 4*minWindow = idealWindow)
+  -- Confidence weighting must rank the well-observed one ABOVE the thin one despite the
+  -- identical decline, while neither is zeroed (thin still appears as a suggestion).
+  local cw = {
+    thin  = { label = "Thin",  t0 = 0, a0 = 1000, tN = 90000,  aN = 200, minA = 200, n = 2 },
+    solid = { label = "Solid", t0 = 0, a0 = 1000, tN = 240000, aN = 200, minA = 200, n = 50 },
+  }
+  local r = suggest.analyze(cw, { managed = {}, minDrain = 64, minWindowMs = 60000 })
+  t.eq(#r, 2, "CONF-1: both equal-decline drainers are suggested (thin is demoted, not erased)")
+  t.eq(r[1].name, "solid", "CONF-1: the well-observed drainer outranks the thin one at equal decline")
+  t.eq(r[2].name, "thin", "CONF-1: the thin-evidence drainer is still present, just ranked lower")
+  t.check(r[1].conf and r[2].conf and r[1].conf > r[2].conf, "CONF-1: conf is exposed and higher for solid evidence")
+  -- BITE: without confidence weighting the tiebreak is name order (solid < thin already),
+  -- so prove the weighting is doing work by making the THIN item win on raw decline. Give
+  -- thin a LARGER raw decline (900) that confidence weighting pulls below solid's 800.
+  local cw2 = {
+    thin  = { label = "Thin",  t0 = 0, a0 = 1000, tN = 90000,  aN = 100, minA = 100, n = 2 },  -- decline 900
+    solid = { label = "Solid", t0 = 0, a0 = 1000, tN = 240000, aN = 200, minA = 200, n = 50 }, -- decline 800
+  }
+  local r2 = suggest.analyze(cw2, { managed = {}, minDrain = 64, minWindowMs = 60000 })
+  t.eq(r2[1].name, "solid",
+    "CONF-1 BITE: a thin item with LARGER raw decline still ranks below a solid one (weighting bites)")
+  -- determinism: same input -> same order
+  local r3 = suggest.analyze(cw2, { managed = {}, minDrain = 64, minWindowMs = 60000 })
+  t.eq(r3[1].name, r2[1].name, "CONF-1: ranking is deterministic across runs")
+end
+
+-- ---------------------------------------------------------------------------
 print("overflow balancer (compress above ceiling)")
 local function ovItem(over) local i = { name = "dust", label = "Steel Dust",
   ceiling = 1000, into = { name = "ingot", label = "Steel Ingot" }, ratio = 1 }
