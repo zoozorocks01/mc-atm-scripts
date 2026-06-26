@@ -8,6 +8,12 @@ local TEXT_SCALE = "auto"
 local HISTORY_LIMIT = 180
 local SHOW_NET_GRAPH = true
 local SHOW_STORED_GRAPH = true
+-- POWER-GRAPH: net-flow graph y-scaling. "auto" tracks the visible peak (fills the height but
+-- the graph can jump as the peak changes); "fixed" pins the y-max to NET_SCALE_FIXED (FE/t) so
+-- a transient spike does not rescale everything -- set both to pin the scale. Scale math is the
+-- unit-tested power.computeScale.
+local NET_SCALE_MODE = "auto"
+local NET_SCALE_FIXED = nil
 local CRITICAL_PERCENT = 15
 local LOW_PERCENT = 35
 local STALE_SECONDS = 10
@@ -125,18 +131,33 @@ local function drawGraph(top, height, pctHistory)
   local left = 2
   local width = w - 2
 
+  -- POWER-GRAPH: aggregate the WHOLE history into `width` buckets (pure, tested) so the full
+  -- window shows even when there are more samples than columns. Each column fills to the
+  -- bucket's MAX (so peaks stay visible); the average row sits a shade brighter so the column
+  -- reads as a min..max range, not a flat bar. Stored % is implicitly 0-100.
+  local buckets = power.downsample(pctHistory, width)
+
   for x = 1, width do
-    local sample = pctHistory[#pctHistory - width + x]
-    local pct = sample or 0
-    local filled = 0
-    if sample and pct > 0 then
-      filled = math.max(1, math.ceil((pct / 100) * height))
+    local bk = buckets[x]
+    local hasData = bk and bk.n > 0
+    local maxRows = 0
+    local avgRows = 0
+    if hasData and bk.max > 0 then
+      maxRows = math.max(1, math.ceil((bk.max / 100) * height))
+    end
+    if hasData and bk.avg > 0 then
+      avgRows = math.max(1, math.ceil((bk.avg / 100) * height))
     end
 
     for y = 0, height - 1 do
       mon.setCursorPos(left + x - 1, top + height - y - 1)
-      if sample and y < filled then
-        mon.setBackgroundColor(colorForPercent(pct))
+      if hasData and y < maxRows then
+        -- the range cap (between avg and max) is dimmed; the solid body (<= avg) is full color
+        if y < avgRows then
+          mon.setBackgroundColor(colorForPercent(bk.avg))
+        else
+          mon.setBackgroundColor(colors.gray)
+        end
       else
         mon.setBackgroundColor(colors.black)
       end
@@ -166,15 +187,6 @@ local function drawCompactGraph(y, pctHistory)
   mon.setBackgroundColor(colors.black)
 end
 
-local function maxAbsVisible(values, width)
-  local maxAbs = 1
-  for x = 1, width do
-    local sample = values[#values - width + x]
-    if sample then maxAbs = math.max(maxAbs, math.abs(sample)) end
-  end
-  return maxAbs
-end
-
 local function drawNetGraph(top, height, values)
   if height < 3 then return end
 
@@ -182,28 +194,49 @@ local function drawNetGraph(top, height, values)
   local left = 2
   local width = w - 2
   local mid = top + math.floor(height / 2)
-  local maxAbs = maxAbsVisible(values, width)
+
+  -- POWER-GRAPH: aggregate the WHOLE history into `width` buckets (pure, tested) so the full
+  -- net-flow window shows; draw each column as a min..max RANGE around the zero line (a real
+  -- sparkline showing volatility, not a 1px line). Y-scale is the unit-tested power.computeScale:
+  -- "auto" tracks the visible peak, "fixed" pins it so the graph stops jumping per frame.
+  local buckets = power.downsample(values, width)
+  local scaleVals = {}
+  for i = 1, #buckets do
+    local bk = buckets[i]
+    if bk.n > 0 then
+      scaleVals[#scaleVals + 1] = bk.max
+      scaleVals[#scaleVals + 1] = bk.min
+    end
+  end
+  local maxAbs = power.computeScale(scaleVals, NET_SCALE_MODE, NET_SCALE_FIXED)
+
+  local positiveRows = math.max(1, mid - top)
+  local negativeRows = math.max(1, top + height - 1 - mid)
 
   for x = 1, width do
-    local sample = values[#values - width + x]
-    local v = sample or 0
-    local positiveRows = math.max(1, mid - top)
-    local negativeRows = math.max(1, top + height - 1 - mid)
-    local rows = 0
-
-    if sample then
-      if v > 0 then rows = math.max(1, math.ceil((v / maxAbs) * positiveRows))
-      elseif v < 0 then rows = math.max(1, math.ceil((math.abs(v) / maxAbs) * negativeRows)) end
+    local bk = buckets[x]
+    local hasData = bk and bk.n > 0
+    -- positive extent reaches the bucket MAX; negative extent reaches the bucket MIN, so the
+    -- filled span between them is the column's range (a bucket straddling zero fills both sides).
+    local posRows, negRows = 0, 0
+    local avgPosRows, avgNegRows = 0, 0
+    if hasData then
+      if bk.max > 0 then posRows = math.max(1, math.ceil((bk.max / maxAbs) * positiveRows)) end
+      if bk.min < 0 then negRows = math.max(1, math.ceil((math.abs(bk.min) / maxAbs) * negativeRows)) end
+      if bk.avg > 0 then avgPosRows = math.max(1, math.ceil((bk.avg / maxAbs) * positiveRows)) end
+      if bk.avg < 0 then avgNegRows = math.max(1, math.ceil((math.abs(bk.avg) / maxAbs) * negativeRows)) end
     end
 
     for y = top, top + height - 1 do
       mon.setCursorPos(left + x - 1, y)
       if y == mid then
         mon.setBackgroundColor(colors.gray)
-      elseif sample and v > 0 and y >= mid - rows and y < mid then
-        mon.setBackgroundColor(colors.lime)
-      elseif sample and v < 0 and y <= mid + rows and y > mid then
-        mon.setBackgroundColor(colors.red)
+      elseif hasData and y < mid and y >= mid - posRows then
+        -- above zero: solid lime up to avg, dimmed (range to max) above it
+        mon.setBackgroundColor(y >= mid - avgPosRows and colors.lime or colors.green)
+      elseif hasData and y > mid and y <= mid + negRows then
+        -- below zero: solid red down to avg, dimmed (range to min) below it
+        mon.setBackgroundColor(y <= mid + avgNegRows and colors.red or colors.brown)
       else
         mon.setBackgroundColor(colors.black)
       end
