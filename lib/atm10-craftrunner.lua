@@ -50,12 +50,23 @@ end                                                   -- rows into the SAME item
 --   * never truncates => if one bucket has no demand the other fills the whole cap (no waste)
 -- Cross-CYCLE round-robin is NOT persisted (stateless): when total < #lanes the same lanes win
 -- each cycle, but a starved category's deficit (=> priority) climbs and rotates it in naturally.
+-- A1 adds a leading MANUAL lane so operator one-shots win the cap before quota refills:
+--   Order = [reserved manual] ++ [reserved compress] ++ [surplus manual] ++ [refills RR]
+--           ++ [surplus compress]
+--   * reserved-manual (budgets.manual slots) guarantees at least that many jobs fire each
+--     cycle even when a refill flood fills the cap (jobs can't be starved by quotas).
+--   * surplus-manual sits BEFORE refills so a job wins the rest of the cap when capacity
+--     allows, while the reserved-COMPRESS floor is still honored ahead of surplus manual.
+--   * with budgets.manual=0 manual still LEADS refills (only the guaranteed floor differs).
 function runner.fireOrder(entries, budgets)
   budgets = budgets or {}
-  local compress, refills = {}, {}
+  local manual, compress, refills = {}, {}, {}
   for _, e in ipairs(entries or {}) do
-    if e.kind == "compress" then compress[#compress + 1] = e else refills[#refills + 1] = e end
+    if cqueue.isManual(e) then manual[#manual + 1] = e
+    elseif e.kind == "compress" then compress[#compress + 1] = e
+    else refills[#refills + 1] = e end
   end
+  table.sort(manual, cmp)
   table.sort(compress, cmp)
 
   -- group refills into per-category lanes; a nil category collapses into one "" lane so a
@@ -84,9 +95,14 @@ function runner.fireOrder(entries, budgets)
   local cap = (totalCap == math.huge) and #compress or totalCap
   local reserveN = math.max(0, math.min(math.floor(tonumber(budgets.overflow) or 0), cap))
   local reserve = math.min(reserveN, #compress)
+  -- A1: reserved-manual floor, clamped to [0, cap] then to #manual
+  local reserveMN = math.max(0, math.min(math.floor(tonumber(budgets.manual) or 0), cap))
+  local reserveM = math.min(reserveMN, #manual)
 
   local order = {}
-  for i = 1, reserve do order[#order + 1] = compress[i] end           -- reserved compress first
+  for i = 1, reserveM do order[#order + 1] = manual[i] end             -- reserved manual first
+  for i = 1, reserve do order[#order + 1] = compress[i] end           -- reserved compress next
+  for i = reserveM + 1, #manual do order[#order + 1] = manual[i] end  -- surplus manual before refills
   local idx = {}
   for _, c in ipairs(laneOrder) do idx[c] = 1 end
   local placed = true
@@ -133,19 +149,48 @@ function runner.run(q, deps)
   local maxPerCycle = tonumber(deps.maxPerCycle)
   if maxPerCycle and maxPerCycle <= 0 then maxPerCycle = nil end
 
-  local summary = { requested = {}, failed = {}, changed = false }
+  local summary = { requested = {}, failed = {}, completed = {}, held = {}, changed = false }
   local fired = 0
   local requestedThisRun = {} -- item names already requested this run (avoid double-fire)
 
+  -- A1: how many units of a manual job may fire THIS time, honoring the craftFrom
+  -- input reserve exactly as stockplan.plan does (the planner never runs for a job).
+  -- force=true or no craftFrom => the full e.request. Returns (amount, heldReason):
+  -- a heldReason with amount<=0 is a SOFT skip (leave APPROVED, surface why; not a
+  -- failure). resolve absent (older manager / a unit test) => no reserve enforcement.
+  local resolve = deps.resolve
+  local function manualFireAmount(e)
+    local want = math.max(0, math.floor(tonumber(e.request) or 0))
+    if e.force == true then return want, nil end
+    local cf = e.craftFrom
+    if type(cf) ~= "table" or not cf.name or type(resolve) ~= "function" then
+      return want, nil
+    end
+    local inputAmount = tonumber((resolve(cf.name))) or 0
+    local ratio = math.max(1, math.floor(tonumber(cf.ratio) or 1))
+    local reserve = math.max(0, math.floor(tonumber(cf.reserve) or 0))
+    local maxByInput = math.max(0, math.floor((inputAmount - reserve) / ratio))
+    if maxByInput <= 0 then
+      return 0, "holding " .. tostring(cf.name) .. " reserve"
+    end
+    if want > maxByInput then return maxByInput, nil end
+    return want, nil
+  end
+
   -- CRAFT-5: reorder the priority-sorted APPROVED set into a fair fire order (reserved
-  -- compress floor + round-robin refill categories + surplus compress last). Reorder only:
-  -- the `fired >= maxPerCycle` guard below is still the sole hard cap.
+  -- manual floor + reserved compress floor + round-robin refill categories + surplus
+  -- compress last). Reorder only: the `fired >= maxPerCycle` guard below is still the
+  -- sole hard cap.
   local order = runner.fireOrder(cqueue.list(q, { priority = true }),
-    { total = maxPerCycle, overflow = tonumber(deps.overflowReserve) })
+    { total = maxPerCycle, overflow = tonumber(deps.overflowReserve),
+      manual = tonumber(deps.manualReserve) })
   for _, e in ipairs(order) do
     local ekey = e.key or e.name -- queue identity (refill vs compress can share a name)
+    local manualJob = cqueue.isManual(e)
     if e.state == cqueue.APPROVED then
-      if e.triedAt and cooldownMs > 0 and (now - e.triedAt) < cooldownMs then
+      -- A1: a manual job bypasses the runner's failed-craft backoff (the operator asked
+      -- for it NOW), so only NON-manual entries respect the cooldown skip.
+      if (not manualJob) and e.triedAt and cooldownMs > 0 and (now - e.triedAt) < cooldownMs then
         -- backing off after a recent failed craft; skip this cycle
       elseif isCrafting(e.name) then
         -- RS is already crafting it: adopt CRAFTING, never double-request
@@ -160,9 +205,21 @@ function runner.run(q, deps)
       elseif maxPerCycle and fired >= maxPerCycle then
         -- hit the per-cycle request cap; leave APPROVED for the next cycle
       else
-        local action = control.craftAction(e, {
+        -- A1: a manual job fires only the craftFrom-reserve-clamped remainder; a fully
+        -- held job (input below its reserve) is a soft skip, not a failure or a fire.
+        local fireAmount, heldReason = e.request, nil
+        if manualJob then
+          fireAmount, heldReason = manualFireAmount(e)
+          if heldReason then
+            summary.held[#summary.held + 1] = { name = e.name, reason = heldReason }
+          end
+        end
+        if manualJob and (heldReason or (fireAmount or 0) <= 0) then
+          -- soft skip: leave APPROVED so it retries when the input recovers
+        else
+        local action = control.craftAction({ name = e.name, label = e.label, request = fireAmount }, {
           mode = deps.mode,
-          execute = function() return craftFn(e.name, e.request) end,
+          execute = function() return craftFn(e.name, fireAmount) end,
         })
 
         -- canExecute checks the gate WITHOUT running the executor, so we can tell
@@ -170,12 +227,24 @@ function runner.run(q, deps)
         if control.canExecute(action, policy) then
           local ok, reason = control.execute(action, policy) -- only here does the bridge run
           if ok then
-            cqueue.markCrafting(q, ekey, now)
-            if recordRequest then recordRequest(e.name, e.request, now) end
+            if recordRequest then recordRequest(e.name, fireAmount, now) end
             requestedThisRun[e.name] = true
-            summary.requested[#summary.requested + 1] = { name = e.name, amount = e.request }
+            summary.requested[#summary.requested + 1] = { name = e.name, amount = fireAmount }
             summary.changed = true
             fired = fired + 1
+            if manualJob then
+              -- A1: track progress; complete (signal the manager to drop) when made>=N.
+              -- A job split across cycles by the craftFrom clamp accumulates here and
+              -- stays APPROVED until done; the manager recomputes request=remaining.
+              cqueue.recordMade(q, ekey, fireAmount, now)
+              if cqueue.jobComplete(q, ekey) then
+                summary.completed[#summary.completed + 1] = { key = ekey, name = e.name, made = e.made }
+              else
+                e.error = nil -- a partial fire is not an error; keep it APPROVED for next cycle
+              end
+            else
+              cqueue.markCrafting(q, ekey, now)
+            end
           else
             cqueue.markError(q, ekey, now, reason)
             summary.failed[#summary.failed + 1] = { name = e.name, reason = reason }
@@ -183,6 +252,7 @@ function runner.run(q, deps)
           end
         end
         -- gate closed (dry-run/monitor/awaiting approval/capability off): no-op
+        end
       end
     end
   end

@@ -9,6 +9,12 @@ local queue = {}
 queue.APPROVED = "APPROVED" -- operator approved; awaiting the craft request
 queue.CRAFTING = "CRAFTING" -- craft request accepted by RS; awaiting completion
 
+-- A1: a transient "make N then done" job the operator requested explicitly. Tagged
+-- kind=MANUAL; flows through the SAME approve -> list -> runner path as a quota refill
+-- but carries job bookkeeping (requested = immutable target N, made = units fired so
+-- far). craftFrom is still honored unless force is set. The runner leads with these.
+queue.MANUAL = "manual" -- kind tag for a manual/oneshot craft job
+
 local function copyPlanFields(dest, entry)
   dest.label = entry.label or dest.label or entry.name or dest.name
   dest.request = tonumber(entry.request) or dest.request or 0
@@ -21,6 +27,15 @@ local function copyPlanFields(dest, entry)
   dest.adjusted = entry.adjusted == true
   dest.reason = entry.reason
   dest.kind = entry.kind or dest.kind -- preserve compress/void row identity (e.g. "compress")
+  -- A1 manual-job fields: requested is the immutable target N; made accumulates units
+  -- actually fired; force opts out of the craftFrom reserve; craftFrom is the source
+  -- reserve rule the runner enforces (the planner never runs for a manual job). These
+  -- carry through approve/autoApprove/copyPlanFields so a re-approve never resets made.
+  dest.requested = tonumber(entry.requested) or dest.requested
+  dest.made = tonumber(entry.made) or dest.made or 0
+  dest.force = (entry.force == true) or dest.force == true or nil
+  dest.manual = entry.manual == true or dest.manual == true or nil
+  dest.craftFrom = entry.craftFrom or dest.craftFrom
   return dest
 end
 
@@ -46,12 +61,21 @@ function queue.approve(q, entry, now)
   if not name then return q end
   local key = entry.key or name
 
-  q.entries[key] = copyPlanFields({
+  -- A1: carry forward a manual job's accumulated `made` (and target `requested`) from
+  -- the existing entry under this key when the incoming refresh doesn't override them,
+  -- so the manager re-approving a partial job each cycle never resets its progress.
+  local prev = q.entries[key]
+  local dest = {
     key = key,
     name = name,
     state = queue.APPROVED,
     approvedAt = tonumber(now) or 0,
-  }, entry)
+  }
+  if prev then
+    dest.made = prev.made
+    dest.requested = prev.requested
+  end
+  q.entries[key] = copyPlanFields(dest, entry)
   return q
 end
 
@@ -59,6 +83,70 @@ function queue.cancel(q, name)
   q = queue.normalize(q)
   q.entries[name] = nil
   return q
+end
+
+-- A1: is this entry a manual/oneshot job? One place to change the tag test so the
+-- runner + fireOrder + manager all agree on what a manual lane entry is.
+function queue.isManual(e)
+  return type(e) == "table" and e.kind == queue.MANUAL
+end
+
+-- A1: enqueue a manual job. The key defaults to "manual:<name>" so a job NEVER aliases
+-- a quota of the same item (key=<name>): the two stay separate entries and the job
+-- makes N EXTRA on top of the quota floor. requested is the target N; request (the
+-- per-fire batch the runner sends) starts at the full remaining (requested - made).
+-- Reuses queue.approve so all storage stays in one place. Returns q, key.
+function queue.enqueueJob(q, entry, now)
+  q = queue.normalize(q)
+  entry = entry or {}
+  local name = entry.name
+  if not name then return q, nil end
+  local requested = math.max(0, math.floor(tonumber(entry.requested) or tonumber(entry.request) or 0))
+  local made = math.max(0, math.floor(tonumber(entry.made) or 0))
+  local key = entry.key or ("manual:" .. tostring(name))
+  queue.approve(q, {
+    key = key,
+    name = name,
+    label = entry.label,
+    kind = queue.MANUAL,
+    manual = true,
+    requested = requested,
+    made = made,
+    request = math.max(0, requested - made),
+    force = (entry.force == true) or nil,
+    craftFrom = entry.craftFrom,
+  }, now)
+  return q, key
+end
+
+-- A1: record that `n` units of a manual job actually fired (the runner calls this
+-- after a successful bridge request). Accumulates made; no-op on a non-manual/absent
+-- entry. Returns q.
+function queue.recordMade(q, key, n, now)
+  q = queue.normalize(q)
+  local e = q.entries[key]
+  if not queue.isManual(e) then return q end
+  e.made = (tonumber(e.made) or 0) + (tonumber(n) or 0)
+  e.lastMadeAt = tonumber(now) or 0
+  return q
+end
+
+-- A1: has a manual job fired its full target? Pure predicate the runner/manager use
+-- to drop the entry. True only for a manual entry whose made >= requested.
+function queue.jobComplete(q, key)
+  q = queue.normalize(q)
+  local e = q.entries[key]
+  if not queue.isManual(e) then return false end
+  return (tonumber(e.made) or 0) >= (tonumber(e.requested) or 0)
+end
+
+-- A1: drop a job entry (alias of cancel, named for intent). Returns q and the dropped
+-- entry so the manager can flash a completion line.
+function queue.dropJob(q, key)
+  q = queue.normalize(q)
+  local e = q.entries[key]
+  q.entries[key] = nil
+  return q, e
 end
 
 -- Mark an entry as in-flight (craft request accepted). Clears any prior error.

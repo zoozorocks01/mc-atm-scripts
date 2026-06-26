@@ -329,6 +329,11 @@ end
 control.COMMANDS = {
   redstone_set    = { capability = control.CAPABILITY_REDSTONE, label = "Set a redstone output" },
   redstone_toggle = { capability = control.CAPABILITY_REDSTONE, label = "Toggle a redstone output" },
+  -- A1: enqueue a one-time craft job (manual/oneshot). target = item registry name;
+  -- args = { count = N, force = bool }. Gated on the autocraft capability + token,
+  -- identical to the redstone commands. The host injects a craft_request actuator that
+  -- enqueues the job into the manual craft queue (dispatch never crafts itself).
+  craft_request   = { capability = control.CAPABILITY_AUTOCRAFT, label = "Request a one-time craft job" },
 }
 
 -- Build a control command (plain data; the host/sender fills these in).

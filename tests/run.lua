@@ -173,6 +173,35 @@ t.check(rsCalls[2].on == false, "second toggle on the same side turns it OFF")
 -- redstone_set on a different side
 control.dispatch(control.command({ action = "redstone_set", target = "back", args = { on = true } }), control.policy({ allowRedstone = true }), rsActuator)
 t.check(rsCalls[3].side == "back" and rsCalls[3].on == true, "redstone_set on drives the configured side ON")
+
+-- A1: craft_request command -- gated on the autocraft capability + token, dispatched
+-- to a host actuator. Same chokepoint as redstone (default-deny otherwise).
+local cqPolicy = control.policy({ allowAutocraft = true, token = "ck" })
+-- allowAutocraft=false -> denied "autocraft not allowed" (proves the capability gate)
+local cq1 = mkActuator()
+local cqr1 = control.dispatch(control.command({ action = "craft_request", target = "mek:steel", args = { count = 5 }, token = "ck" }),
+  control.policy({ allowAutocraft = false, token = "ck" }), cq1)
+t.check(cqr1.ok == false and cqr1.reason == "autocraft not allowed", "craft_request denied when autocraft is off")
+t.eq(#actuatorCalls, 0, "denied craft_request never reaches the actuator")
+-- bad token -> denied
+local cq2 = mkActuator()
+local cqr2 = control.dispatch(control.command({ action = "craft_request", target = "mek:steel", args = { count = 5 }, token = "WRONG" }), cqPolicy, cq2)
+t.check(cqr2.ok == false and cqr2.reason == "bad token", "craft_request denied on a bad token")
+t.eq(#actuatorCalls, 0, "bad-token craft_request never reaches the actuator")
+-- allowed + good token + actuator spy -> ok, action craft_request, actuator once with target+count
+local cqCount
+local cq3 = (function() actuatorCalls = {}; cqCount = nil; return function(cmd) actuatorCalls[#actuatorCalls + 1] = cmd; cqCount = cmd.args and cmd.args.count end end)()
+local cqr3 = control.dispatch(control.command({ action = "craft_request", target = "mek:steel", args = { count = 64, force = true }, token = "ck" }), cqPolicy, cq3)
+t.check(cqr3.ok == true and cqr3.action == "craft_request", "craft_request accepted with capability + token")
+t.eq(#actuatorCalls, 1, "accepted craft_request actuates exactly once")
+t.eq(actuatorCalls[1].target, "mek:steel", "craft_request actuator gets the item target")
+t.eq(cqCount, 64, "craft_request actuator gets args.count")
+-- handleMessage drops a non-allowlisted sender before dispatch (actuator never called)
+local cq4Pol = control.policy({ allowAutocraft = true, token = "ck", allowedSenders = { 7 } })
+local cq4 = mkActuator()
+local cqr4 = control.handleMessage(99, { action = "craft_request", target = "mek:steel", args = { count = 5 }, token = "ck" }, cq4Pol, cq4)
+t.check(cqr4.ok == false and cqr4.reason == "sender not allowed", "craft_request from a non-allowlisted sender is dropped")
+t.eq(#actuatorCalls, 0, "dropped craft_request sender never reaches the actuator")
 end -- end control-command test scope
 
 -- ---------------------------------------------------------------------------
@@ -541,6 +570,62 @@ t.eq(loadedN, 150, "prune-on-load bounds an oversized craft-results map (300 -> 
 t.check(loaded.x300 ~= nil and loaded.x1 == nil, "prune-on-load keeps newest, drops oldest")
 
 -- ---------------------------------------------------------------------------
+print("manual jobs (queue): enqueue/recordMade/jobComplete/field-roundtrip")
+do
+-- enqueueJob makes a kind=MANUAL entry keyed "manual:<name>" that does NOT alias a
+-- same-name quota. BITE: default the key to name and count drops to 1 / the quota is
+-- overwritten.
+local mq = cqueue.approve(cqueue.new(), { name = "mek:steel", request = 10, priority = 0.5 }, 1) -- a quota
+local _, mkey = cqueue.enqueueJob(mq, { name = "mek:steel", label = "Steel", requested = 64 }, 5)
+t.eq(mkey, "manual:mek:steel", "enqueueJob keys a job manual:<name>")
+t.eq(cqueue.count(mq), 2, "a job does not alias a same-name quota (both entries present)")
+t.check(mq.entries["mek:steel"] ~= nil and mq.entries["mek:steel"].kind ~= cqueue.MANUAL, "the quota entry is untouched")
+local mjob = mq.entries["manual:mek:steel"]
+t.eq(mjob.kind, cqueue.MANUAL, "job entry is kind=MANUAL")
+t.eq(mjob.requested, 64, "job carries the immutable target N")
+t.eq(mjob.made, 0, "job starts with made=0")
+t.eq(mjob.request, 64, "job's first-fire batch is the full remaining (requested-made)")
+t.eq(mjob.state, cqueue.APPROVED, "job is APPROVED on enqueue")
+t.check(cqueue.isManual(mjob) == true, "isManual recognizes the job")
+t.check(cqueue.isManual(mq.entries["mek:steel"]) == false, "isManual rejects a quota entry")
+
+-- recordMade accumulates; jobComplete flips exactly at made>=requested (not >). BITE:
+-- jobComplete using > would leave made=N as incomplete.
+cqueue.recordMade(mq, "manual:mek:steel", 30, 10)
+t.eq(mq.entries["manual:mek:steel"].made, 30, "recordMade accumulates made")
+t.check(cqueue.jobComplete(mq, "manual:mek:steel") == false, "jobComplete false while made < requested")
+cqueue.recordMade(mq, "manual:mek:steel", 33, 11)
+t.eq(mq.entries["manual:mek:steel"].made, 63, "recordMade keeps accumulating")
+t.check(cqueue.jobComplete(mq, "manual:mek:steel") == false, "jobComplete still false at made=63 < 64")
+cqueue.recordMade(mq, "manual:mek:steel", 1, 12)
+t.check(cqueue.jobComplete(mq, "manual:mek:steel") == true, "jobComplete flips true exactly at made==requested")
+cqueue.recordMade(mq, "mek:steel", 99, 13) -- no-op on a non-manual entry
+t.check(mq.entries["mek:steel"].made == nil or mq.entries["mek:steel"].made == 0, "recordMade is a no-op on a quota entry")
+
+-- copyPlanFields preserves made/requested across a re-approve (the manager refreshes
+-- request each cycle via approve). BITE: drop `dest.made = ... or dest.made` and made
+-- resets to 0 on re-approve.
+local rj = cqueue.new()
+cqueue.enqueueJob(rj, { name = "x", requested = 50 }, 1)
+cqueue.recordMade(rj, "manual:x", 20, 2)
+cqueue.approve(rj, { key = "manual:x", name = "x", kind = cqueue.MANUAL, requested = 50, request = 30, priority = 0.2 }, 3)
+t.eq(rj.entries["manual:x"].made, 20, "re-approve preserves made (not reset to 0)")
+t.eq(rj.entries["manual:x"].requested, 50, "re-approve preserves requested")
+
+-- dropJob removes the entry and returns it for the completion flash
+local dj = cqueue.new()
+cqueue.enqueueJob(dj, { name = "d", label = "Dee", requested = 4 }, 1)
+local _, dropped = cqueue.dropJob(dj, "manual:d")
+t.check(cqueue.has(dj, "manual:d") == false, "dropJob removes the entry")
+t.eq(dropped.name, "d", "dropJob returns the dropped entry")
+
+-- force flag round-trips
+local fj = cqueue.new()
+cqueue.enqueueJob(fj, { name = "f", requested = 5, force = true }, 1)
+t.check(fj.entries["manual:f"].force == true, "enqueueJob carries the force flag")
+end
+
+-- ---------------------------------------------------------------------------
 print("craft runner (gated execution)")
 local function mkQ(items)
   local q = cqueue.new()
@@ -759,6 +844,115 @@ local f11, q11 = runFired({ { name = "a1", category = "Alpha", priority = 0.5 },
   { maxPerCycle = 2 })
 t.eq(table.concat(f11, ","), "b1,g1", "runner: round-robin fires highest-priority lane heads first under a tight cap")
 t.eq(q11.entries.a1.state, cqueue.APPROVED, "runner: lowest-priority category waits a cycle (priority rotates as deficit grows)")
+end
+
+-- ---------------------------------------------------------------------------
+print("manual jobs (runner): lead lane, reserved floor, cooldown bypass, reserve, completion")
+do
+local fo = craftrunner.fireOrder
+local function names(order)
+  local out = {}
+  for _, e in ipairs(order) do out[#out + 1] = e.name end
+  return table.concat(out, ",")
+end
+
+-- fireOrder LEADS with a manual entry even at lower priority than a refill. BITE:
+-- remove the manual lane (manual falls into refills) and order[1] becomes the refill.
+local mjob = { name = "M", kind = cqueue.MANUAL, priority = 0, requested = 5, made = 0 }
+t.eq(fo({ { name = "R", priority = 9 }, mjob }, { total = 5, manual = 1 })[1].name, "M",
+  "fireOrder: manual leads despite lower priority than a refill")
+
+-- reserved manual floor: under a cap of 1 with a 3-refill flood, the reserved manual
+-- slot still leads. BITE: drop the reserved-manual block / reserveM=0 and a refill leads.
+local floodOrder = fo({
+  { name = "r1", priority = 0.9 }, { name = "r2", priority = 0.8 }, { name = "r3", priority = 0.7 },
+  { name = "MJ", kind = cqueue.MANUAL, priority = 0.01, requested = 1, made = 0 },
+}, { total = 1, manual = 1 })
+t.eq(floodOrder[1].name, "MJ", "fireOrder: reserved-manual floor beats a refill flood under cap=1")
+
+-- with manual=0 the job still LEADS refills (only the guaranteed floor differs)
+t.eq(fo({ { name = "rr", priority = 0.9 }, { name = "mm", kind = cqueue.MANUAL, priority = 0.1, requested = 2 } },
+  { total = 5, manual = 0 })[1].name, "mm", "fireOrder: manual leads refills even with manual budget 0")
+
+-- helper: run runner.run over a queue built from entries (manual jobs preserved)
+local function runJobs(entries, opts)
+  opts = opts or {}
+  local q = cqueue.new()
+  for _, e in ipairs(entries) do
+    if e.kind == cqueue.MANUAL then
+      local _, jk = cqueue.enqueueJob(q, e, e.approvedAt or 1)
+      -- triedAt isn't a job field enqueueJob carries; set it directly so a cooldown
+      -- bypass test can model a job that "failed last cycle" and must retry now.
+      if e.triedAt and jk then q.entries[jk].triedAt = e.triedAt end
+    else
+      cqueue.approve(q, e, e.approvedAt or 1)
+      if e.triedAt then q.entries[e.key or e.name].triedAt = e.triedAt end
+    end
+  end
+  local fired = {}
+  local summary = craftrunner.run(q, {
+    policy = pManualCraft, mode = "manual", now = opts.now or 1000,
+    cooldownMs = opts.cooldownMs or 0,
+    maxPerCycle = opts.maxPerCycle, manualReserve = opts.manualReserve,
+    isCrafting = function(n) return (opts.crafting or {})[n] == true end,
+    resolve = opts.resolve,
+    craft = function(n, amt) fired[#fired + 1] = { name = n, amount = amt }; return true end,
+  })
+  return fired, summary, q
+end
+
+-- COOLDOWN BYPASS: a manual entry with a fresh triedAt STILL fires while an identical
+-- quota entry (same fresh triedAt) is skipped. BITE: remove the `not manualJob` guard
+-- and the manual entry is skipped -> no manual in summary.requested.
+local cbFired, cbSummary = runJobs({
+  { name = "qc", request = 7, priority = 0.9, triedAt = 1000, approvedAt = 1 }, -- quota, on cooldown
+  { name = "mj", kind = cqueue.MANUAL, requested = 3, triedAt = 1000, approvedAt = 1 },
+}, { now = 1000, cooldownMs = 300000, manualReserve = 1, maxPerCycle = 8 })
+local cbNames = {}
+for _, f in ipairs(cbFired) do cbNames[f.name] = f.amount end
+-- the manual entry's triedAt is set by enqueueJob? no -- enqueueJob doesn't set triedAt;
+-- inject it directly to model a job that failed last cycle but must retry now.
+t.check(cbNames["mj"] ~= nil, "runner: manual job fires despite a fresh cooldown (bypass)")
+local cbQuotaFired = false
+for _, r in ipairs(cbSummary.requested) do if r.name == "qc" then cbQuotaFired = true end end
+t.check(cbQuotaFired == false, "runner: an identical quota entry on cooldown is skipped")
+
+-- craftFrom RESERVE respected (default): request=100, reserve leaves 40 -> fires 40,
+-- made=40, NOT complete. BITE: drop the runner-side clamp and it fires 100.
+local crFired, crSummary, crQ = runJobs({
+  { name = "alloy", kind = cqueue.MANUAL, requested = 100, craftFrom = { name = "dust", reserve = 10, ratio = 1 } },
+}, { resolve = function(nm) return nm == "dust" and 50 or 0 end, manualReserve = 1, maxPerCycle = 8 })
+t.eq(crFired[1].amount, 40, "runner: manual fire clamped to craftFrom reserve (50-10=40)")
+t.eq(crQ.entries["manual:alloy"].made, 40, "runner: made tracks the clamped fire amount")
+t.check(cqueue.jobComplete(crQ, "manual:alloy") == false, "runner: partially-fired job is not complete")
+t.eq(#crSummary.completed, 0, "runner: a clamped partial fire does not complete")
+
+-- force=true bypasses the clamp entirely -> fires the full 100
+local fFired = runJobs({
+  { name = "alloy", kind = cqueue.MANUAL, requested = 100, force = true, craftFrom = { name = "dust", reserve = 10, ratio = 1 } },
+}, { resolve = function() return 50 end, manualReserve = 1, maxPerCycle = 8 })
+t.eq(fFired[1].amount, 100, "runner: force=true bypasses the craftFrom reserve clamp")
+
+-- input below the reserve -> SOFT skip into summary.held, entry stays APPROVED, nothing
+-- fired. BITE: drop the soft-skip/reserve gate and it would fire.
+local hFired, hSummary, hQ = runJobs({
+  { name = "alloy", kind = cqueue.MANUAL, requested = 100, craftFrom = { name = "dust", reserve = 10, ratio = 1 } },
+}, { resolve = function() return 5 end, manualReserve = 1, maxPerCycle = 8 })
+t.eq(#hFired, 0, "runner: a below-reserve job fires nothing")
+t.eq(#hSummary.requested, 0, "runner: a held job is not in summary.requested")
+t.eq(#hSummary.held, 1, "runner: a held job is surfaced in summary.held")
+t.check(hSummary.held[1].reason:find("reserve", 1, true) ~= nil, "runner: held reason names the reserve")
+t.eq(hQ.entries["manual:alloy"].state, cqueue.APPROVED, "runner: a held job stays APPROVED")
+
+-- COMPLETION: full N in one run -> summary.completed populated + jobComplete true. BITE:
+-- jobComplete using > leaves completed empty.
+local doneFired, doneSummary, doneQ = runJobs({
+  { name = "widget", kind = cqueue.MANUAL, requested = 10 },
+}, { resolve = function() return 1e9 end, manualReserve = 1, maxPerCycle = 8 })
+t.eq(doneFired[1].amount, 10, "runner: an unconstrained job fires its full N in one shot")
+t.eq(#doneSummary.completed, 1, "runner: a fully-fired job is in summary.completed")
+t.eq(doneSummary.completed[1].name, "widget", "runner: completed carries the item name")
+t.check(cqueue.jobComplete(doneQ, "manual:widget") == true, "runner: jobComplete true after a full fire")
 end
 
 -- ---------------------------------------------------------------------------

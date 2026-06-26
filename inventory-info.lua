@@ -82,6 +82,7 @@ local DEFAULT_CONFIG = {
     cooldownSeconds = 300,
     maxCraftsPerCycle = 8,    -- new craft requests issued per cycle (late-game default)
     overflowReserve = 0,      -- CRAFT-5: compress slots reserved first within the cap (0 = pure priority)
+    manualReserve = 1,        -- A1: slots reserved first for manual/oneshot jobs (quotas can't starve them)
     maxRequest = 65536,       -- cap per single craft request (bigger batches)
     items = {},
     categories = {},
@@ -260,6 +261,9 @@ local function normalizeConfig(raw)
   -- CRAFT-5: clamp the compress reserve to a non-negative integer; fireOrder clamps it to
   -- the cap at use time, so a mis-set value (e.g. 99) can never exceed maxCraftsPerCycle.
   cfg.stockKeeper.overflowReserve = math.max(0, math.floor(tonumber(cfg.stockKeeper.overflowReserve) or 0))
+  -- A1: the per-cycle slice reserved for manual jobs (non-negative integer; fireOrder
+  -- clamps it to the cap at use time, so a mis-set value can never exceed maxCraftsPerCycle).
+  cfg.stockKeeper.manualReserve = math.max(0, math.floor(tonumber(cfg.stockKeeper.manualReserve) or 1))
   cfg.stockKeeper.maxRequest = tonumber(cfg.stockKeeper.maxRequest) or 65536
   if type(cfg.stockKeeper.items) ~= "table" then cfg.stockKeeper.items = {} end
   if type(cfg.stockKeeper.categories) ~= "table" then cfg.stockKeeper.categories = {} end
@@ -910,16 +914,47 @@ end
 local redstoneState = {}
 local function handleControlMessage(senderId, message)
   if config.controlEnabled ~= true then return end -- master off-switch (default off)
+  -- A1: also carry the autocraft capability so a craft_request is gated by BOTH
+  -- controlEnabled AND allowAutocraft (matching the existing security posture).
   local policy = control.policy({
     allowRedstone = config.allowRedstone == true,
     allowExport = config.allowExport == true,
+    allowAutocraft = config.allowAutocraft == true,
     token = config.controlToken,
     allowedSenders = config.controlAllowedSenders,
   })
-  local result = control.handleMessage(senderId, message, policy,
-    control.redstoneActuator(rs, redstoneState))
+  -- A1: enqueue a one-time craft job. Resolves label + craftFrom from the managed
+  -- quota if one exists (so the job inherits the same source-reserve rule), else
+  -- bare name. Errors here are pcall-contained by control.dispatch, so a bad request
+  -- can't crash the loop. Closures live inside this existing function -> no net new
+  -- top-level local (LOCALS CAP is a hard rule).
+  local rsActuator = control.redstoneActuator(rs, redstoneState)
+  local function craftRequestActuator(cmd)
+    local name = cmd.target
+    local args = (type(cmd.args) == "table") and cmd.args or {}
+    local count = math.floor(tonumber(args.count) or 0)
+    if not name or count <= 0 then error("bad craft request", 0) end
+    craftQueue = craftQueue or loadQueue()
+    managedStore = managedStore or loadManaged()
+    local label, craftFrom = name, nil
+    local quota = managed.get(managedStore, name)
+    if quota then label = quota.label or name; craftFrom = quota.craftFrom end
+    cqueue.enqueueJob(craftQueue, {
+      name = name, label = label, requested = count,
+      force = (args.force == true), craftFrom = craftFrom,
+    }, nowMs())
+    saveQueue(craftQueue)
+    ui.flashMsg = "job: " .. tostring(label) .. " x" .. count
+    ui.flashAt = nowMs()
+  end
+  -- dispatch takes ONE actuator; branch by action so each command reaches its handler.
+  local function actuator(cmd, spec)
+    if cmd.action == "craft_request" then return craftRequestActuator(cmd) end
+    return rsActuator(cmd, spec)
+  end
+  local result = control.handleMessage(senderId, message, policy, actuator)
   if result and result.ok then
-    ui.flashMsg = "control: " .. tostring(result.action)
+    ui.flashMsg = ui.flashMsg or ("control: " .. tostring(result.action))
   else
     ui.flashMsg = "control denied: " .. tostring(result and result.reason or "?")
   end
@@ -932,6 +967,13 @@ end
 local function processCraftQueue(now)
   if not craftQueue then return end
   local stock = config.stockKeeper or {}
+  -- A1: recompute each manual job's per-fire batch = remaining (requested - made) so a
+  -- job split across cycles by a craftFrom clamp sends only the remainder next pass.
+  for _, e in ipairs(cqueue.list(craftQueue)) do
+    if cqueue.isManual(e) then
+      e.request = math.max(0, (tonumber(e.requested) or tonumber(e.request) or 0) - (tonumber(e.made) or 0))
+    end
+  end
   local summary = craftrunner.run(craftQueue, {
     policy = buildPolicy(),
     mode = effectiveMode(),
@@ -941,10 +983,22 @@ local function processCraftQueue(now)
     maxPerCycle = tonumber(stock.maxCraftsPerCycle) or 2,
     -- CRAFT-5: reserve part of that cap for compress/overflow rows (0 = pure priority)
     overflowReserve = tonumber(stock.overflowReserve) or 0,
+    -- A1: reserve >=1 slot per cycle for manual jobs so a quota flood can't starve them
+    manualReserve = tonumber(stock.manualReserve) or 1,
+    -- A1: live source amount for a job's craftFrom reserve (getItems is TTL-cached, cheap)
+    resolve = function(name) local it = findStoredItem(getItems(), name); return it and itemAmount(it) or 0 end,
     isCrafting = function(name) return isItemCrafting(name) end,
     craft = function(name, amount) return requestCraft(name, amount) end,
     recordRequest = recordCraftRequest,
   })
+  -- A1: a manual job that fired its full N completes; drop it (the manager owns
+  -- persistence + the completion flash) and persist the change.
+  for _, c in ipairs(summary.completed or {}) do
+    cqueue.dropJob(craftQueue, c.key)
+    ui.flashMsg = "done: " .. tostring(c.name)
+    ui.flashAt = now
+  end
+  if #(summary.completed or {}) > 0 then saveQueue(craftQueue) end
   if summary.changed then saveQueue(craftQueue) end
 
   -- Keep the cooldown ALIVE for in-flight crafts: while RS still reports an item
@@ -1430,15 +1484,22 @@ local function drawQueuePage(data)
       local action = control.craftAction(e, { mode = effectiveMode(), execute = requestCraft })
       gateState = control.executionState(action, policy)
     end
+    -- A1: a manual job shows made/requested progress instead of the +batch refill amount
+    local reqCol
+    if cqueue.isManual(e) then
+      reqCol = fmt(tonumber(e.made) or 0) .. "/" .. fmt(tonumber(e.requested) or 0)
+    else
+      reqCol = "+" .. fmt(e.request)
+    end
     local text
     if wide then
       text = uiDraw.fit(tostring(e.label or e.name), math.max(16, w - 40)) ..
-        "  " .. rjust("+" .. fmt(e.request), 7) ..
+        "  " .. rjust(reqCol, 7) ..
         "  " .. uiDraw.fit(uiStatus.label(gateState), 8) ..
         "  " .. rjust(ageS .. "s", 4) ..
         "  " .. uiDraw.fit(craftResultShort(e.name, now), 9)
     else
-      text = uiDraw.fit(tostring(e.label or e.name) .. " +" .. fmt(e.request) ..
+      text = uiDraw.fit(tostring(e.label or e.name) .. " " .. reqCol ..
         " " .. uiStatus.label(gateState), w)
     end
     local y = start + i - 1

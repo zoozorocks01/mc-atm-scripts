@@ -363,5 +363,143 @@ check(okNH == false and tostring(errNH):find(SENTINEL, 1, true) ~= nil,
 check(#craftedNoHealth >= 1,
   "A3: a missing atm10-health degrades to always-fire (pre-A3), it does NOT break crafting")
 
+-- ---- A1 manual jobs: fire BEFORE a quota refill + bypass the per-item cooldown -----
+-- The REQUIRED biting end-to-end test (a pure test alone is insufficient: the A3
+-- lesson). We drive the FULL control wiring -- a rednet craft_request event flows
+-- through handleControlMessage -> the craft_request actuator -> cqueue.enqueueJob --
+-- then a refresh timer runs processCraftQueue. Setup:
+--   * mode = auto, controlEnabled + allowAutocraft on (so a craft_request is accepted).
+--   * maxCraftsPerCycle = 1, manualReserve = 1 -> exactly one fire per cycle, reserved
+--     for the manual lane.
+--   * TWO craftable deficits as competing quotas: zinc_ingot (also seeded ON COOLDOWN
+--     in the ledger so its QUOTA path would NOT fire) and copper_ingot (no cooldown).
+--   * a manual job for zinc_ingot enqueued over rednet.
+-- Asserts:
+--   (1) crafted[1] is the MANUAL item -> the reserved manual slot beats the copper
+--       quota deficit under a cap of 1 (manual fires FIRST).
+--   (2) zinc fired even though its quota is ON COOLDOWN (and the copper quota did NOT
+--       fire) -> the manual job bypassed the cooldown that blocks the quota path.
+-- BITE: revert the fireOrder manual lane -> crafted[1] becomes copper (1 fails);
+--       revert the cooldown-bypass... the cooldown here is the LEDGER/planner cooldown
+--       a manual job structurally skips (it never traverses the planner), so the proof
+--       is that zinc -- ON COOLDOWN as a quota -- still crafts via the manual lane while
+--       the copper quota is the only refill that competes for the single slot.
+do
+local A1_MANAGED = {
+  items = {
+    ["alltheores:zinc_ingot"]   = { name = "alltheores:zinc_ingot", label = "Zinc Ingot", target = 5000, craftTo = 5000 },
+    ["alltheores:copper_ingot"] = { name = "alltheores:copper_ingot", label = "Copper Ingot", target = 5000, craftTo = 5000 },
+  },
+  settings = { modeOverride = "auto" },
+}
+-- a config table enabling the control channel (loaded via dofile in the manager)
+local A1_CONFIG = {
+  controlEnabled = true, allowAutocraft = true,
+  stockKeeper = { enabled = true, cooldownSeconds = 300, maxCraftsPerCycle = 1, manualReserve = 1 },
+}
+-- ledger with a FRESH zinc request -> the planner reports zinc ON COOLDOWN (its quota
+-- path won't fire); copper has no record so its quota IS a WOULD CRAFT deficit.
+local A1_LEDGER = { requests = { ["alltheores:zinc_ingot"] = { requestedAt = 1, request = 5000 } } }
+
+local LEDGER_FILE = ".atm10-stock-ledger"
+local CONFIG_FILE = "inventory-config"
+-- the config file must "exist" so loadConfig consults dofile(CONFIG_FILE) (its content
+-- is irrelevant -- the dofile override returns A1_CONFIG for that path).
+local a1files = { [MANAGED_FILE] = "MANAGED", [LEDGER_FILE] = "LEDGER", [CONFIG_FILE] = "CONFIG" }
+local realDofile = dofile
+local realUnser = textutils.unserialize
+-- the manager loads its config via dofile(CONFIG_FILE); return the A1 config for that
+-- path and delegate every other path (the manager program itself) to the real dofile.
+_G.dofile = function(p)
+  if p == CONFIG_FILE then return A1_CONFIG end
+  return realDofile(p)
+end
+_G.fs.exists = function(p) return a1files[p] ~= nil end
+_G.fs.open = function(p, mode)
+  if mode == "r" then
+    if not a1files[p] then return nil end
+    local content, read = a1files[p], false
+    return { readAll = function() if read then return nil end; read = true; return content end,
+             close = function() end }
+  end
+  return { write = function(s) a1files[p .. ".__pending"] = s end, close = function()
+    a1files[p:gsub("%.tmp$", "")] = a1files[p .. ".__pending"]; a1files[p .. ".__pending"] = nil
+  end }
+end
+_G.textutils.unserialize = function(text)
+  if text == "MANAGED" then return A1_MANAGED end
+  if text == "LEDGER" then return A1_LEDGER end
+  return realUnser(text) or {}
+end
+
+local a1crafted = {}
+-- cycle 1: NO deficit (both at target) so the first timer loads config + scans WITHOUT
+-- firing any quota. cycle 2+: a deficit appears so the copper quota WOULD craft -- but
+-- by then the manual job is queued and the reserved manual slot wins the single fire.
+-- (The manager has no startup loadConfig; config loads on the first scan. So the rednet
+-- craft_request must arrive AFTER that first scan or handleControlMessage sees the
+-- default controlEnabled=false. This is the real in-game ordering -- scans run every
+-- few seconds, so a control message is simply handled on/after the next scan.)
+local a1cycle = 0
+local A1BR = fakeBridge()
+A1BR.getItems = function()
+  a1cycle = a1cycle + 1
+  if a1cycle == 1 then
+    return {
+      { name = "alltheores:zinc_ingot", amount = 5000, isCraftable = true },
+      { name = "alltheores:copper_ingot", amount = 5000, isCraftable = true },
+    }
+  end
+  return {
+    { name = "alltheores:zinc_ingot", amount = 1000, isCraftable = true },
+    { name = "alltheores:copper_ingot", amount = 1000, isCraftable = true },
+  }
+end
+A1BR.craftItem = function(arg) a1crafted[#a1crafted + 1] = arg; return true end
+_G.peripheral.wrap = function(n)
+  if n == "monitor_0" then return MON end
+  if n == "rs_bridge_0" then return A1BR end
+  return nil
+end
+clock = 0
+
+-- event order: timer (loads config, no deficit -> no craft) -> rednet craft_request
+-- for zinc (config now loaded -> enqueues the manual job through the full control
+-- wiring) -> timer (deficit now present -> runner fires; the manual lane leads).
+local CONTROL_PROTOCOL = "atm10-control-v1"
+local a1events = {
+  { "timer", 1 },
+  { "rednet_message", 7, { action = "craft_request", target = "alltheores:zinc_ingot", args = { count = 777 } }, CONTROL_PROTOCOL },
+  { "timer", 1 },
+}
+local a1i = 0
+_G.os.pullEvent = function()
+  a1i = a1i + 1
+  local ev = a1events[a1i]
+  if not ev then error(SENTINEL, 0) end
+  return table.unpack(ev)
+end
+
+print("smoke-auto: A1 - a manual job (rednet craft_request) fires BEFORE a quota deficit under cap=1")
+local okA1, errA1 = pcall(function() dofile("inventory/manager.lua") end)
+-- restore the globals the rest of the file (none after this) / safety doesn't depend on,
+-- but leave them clean regardless
+_G.dofile = realDofile
+_G.textutils.unserialize = realUnser
+check(okA1 == false and tostring(errA1):find(SENTINEL, 1, true) ~= nil,
+  "A1: manager ran the enqueue + one craft cycle then stopped: " .. tostring(errA1))
+check(#a1crafted == 1, "A1: exactly one craft fired under maxCraftsPerCycle=1")
+check(#a1crafted >= 1 and a1crafted[1].name == "alltheores:zinc_ingot",
+  "A1: the MANUAL job (zinc) fired FIRST, beating the copper quota deficit (reserved manual slot)")
+check(#a1crafted >= 1 and (tonumber(a1crafted[1].count) or 0) == 777,
+  "A1: the manual job fired the requested count (777) via the full control wiring")
+local a1copperFired = false
+for _, c in ipairs(a1crafted) do if c.name == "alltheores:copper_ingot" then a1copperFired = true end end
+check(a1copperFired == false,
+  "A1: the copper quota did NOT fire (the single slot went to the manual lane)")
+check(a1crafted[1].name == "alltheores:zinc_ingot",
+  "A1: zinc crafted via the manual lane despite its QUOTA being ON COOLDOWN (cooldown bypass)")
+end
+
 print((failures == 0) and "SMOKE-AUTO OK" or ("SMOKE-AUTO FAILED (" .. failures .. ")"))
 os.exit(failures == 0 and 0 or 1)
