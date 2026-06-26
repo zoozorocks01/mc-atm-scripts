@@ -111,6 +111,25 @@ function suggest.pruneDismissed(set, now, opts)
   return out, total - count
 end
 
+-- VIEW-5: compact per-item trend from the recorded history. Returns
+-- { dir = "up"|"down"|"flat", perMin = number } or nil when there's no usable
+-- history, so callers HIDE it rather than error (smart mode off / item unseen).
+-- up = filling, down = draining. Reuses the same data analyze() already collects --
+-- no new bridge calls.
+function suggest.trend(history, name, opts)
+  local h = history and history[name]
+  if type(h) ~= "table" then return nil end
+  local span = (tonumber(h.tN) or 0) - (tonumber(h.t0) or 0)
+  if span <= 0 then return nil end
+  opts = opts or {}
+  local flat = tonumber(opts.flatPerMin) or 1
+  local delta = (tonumber(h.aN) or 0) - (tonumber(h.a0) or 0)
+  local perMin = delta / (span / 60000)
+  local dir = "flat"
+  if perMin >= flat then dir = "up" elseif perMin <= -flat then dir = "down" end
+  return { dir = dir, perMin = perMin }
+end
+
 local function mins(span) return math.max(1, math.floor(span / 60000)) end
 
 -- analyze(history, ctx) -> array of suggestions (each seeded for the editor):

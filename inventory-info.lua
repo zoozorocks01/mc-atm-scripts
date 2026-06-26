@@ -1167,16 +1167,16 @@ local function scan()
   }
 end
 
-local function compactItems(items, limit)
+local function compactItems(items, limit, withTrend)
   local compact = {}
   -- route the cap through the tested console.boundedSlice (VIEW-1): payload stays
   -- <= limit no matter how large the grid is.
   for _, item in ipairs(console.boundedSlice(items, limit)) do
-    compact[#compact + 1] = {
-      name = itemName(item),
-      amount = itemAmount(item),
-      id = item.name,
-    }
+    local entry = { name = itemName(item), amount = itemAmount(item), id = item.name }
+    -- VIEW-5: attach a compact trend (nil when smart mode is off / no history,
+    -- so the viewer just hides it -- no new bridge calls, data already collected).
+    if withTrend then entry.trend = suggest.trend(trendHistory, item.name) end
+    compact[#compact + 1] = entry
   end
   return compact
 end
@@ -1200,7 +1200,7 @@ local function broadcast(data)
     listedItems = data.listedItems,
     warnings = data.warnings,
     topItems = compactItems(data.items, BROADCAST_ITEMS.top),
-    viewItems = compactItems(data.items, BROADCAST_ITEMS.view),
+    viewItems = compactItems(data.items, BROADCAST_ITEMS.view, true),
     usedItemStorage = data.usedItemStorage,
     totalItemStorage = data.totalItemStorage,
     availableItemStorage = data.availableItemStorage,

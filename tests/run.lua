@@ -967,6 +967,22 @@ do
   t.eq(console.sortLabel("az"), "A-Z", "sortLabel maps az")
 end
 
+-- trend (VIEW-5): direction + per-min rate, graceful on missing history
+do
+  local h = {
+    drain  = { t0 = 0, a0 = 1000, tN = 120000, aN = 400 }, -- -600 / 2min = -300/m
+    grow   = { t0 = 0, a0 = 100,  tN = 60000,  aN = 700 }, -- +600 / 1min = +600/m
+    stable = { t0 = 0, a0 = 500,  tN = 120000, aN = 500 }, -- 0/m
+  }
+  local d = suggest.trend(h, "drain")
+  t.eq(d.dir, "down", "trend: declining item -> down")
+  t.eq(math.floor(d.perMin), -300, "trend: per-min drain rate")
+  t.eq(suggest.trend(h, "grow").dir, "up", "trend: growing item -> up")
+  t.eq(suggest.trend(h, "stable").dir, "flat", "trend: stable item -> flat")
+  t.eq(suggest.trend(h, "missing"), nil, "trend: unseen item -> nil (hidden, never errors)")
+  t.eq(suggest.trend(nil, "x"), nil, "trend: nil history -> nil")
+end
+
 -- ---------------------------------------------------------------------------
 print("all scripts compile")
 -- loadfile parses without executing, so the display while-loops and peripheral

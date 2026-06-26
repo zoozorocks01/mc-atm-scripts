@@ -253,8 +253,14 @@ local function drawView(data)
     local item = items[i]
     if item then
       local y = listStart + (i - pg.from)
-      line(y, rjust(i, 4) .. ". " .. uiDraw.fit(tostring(item.name), math.max(8, w - 18)) ..
-        "  " .. rjust(fmt(item.amount), 10), colors.white)
+      -- VIEW-5: per-item trend arrow + per-min rate (hidden when no trend data)
+      local trend = ""
+      if type(item.trend) == "table" then
+        local arrow = (item.trend.dir == "up" and "^") or (item.trend.dir == "down" and "v") or "-"
+        trend = " " .. rjust(arrow .. fmt(math.abs(item.trend.perMin or 0)) .. "/m", 8)
+      end
+      line(y, rjust(i, 4) .. ". " .. uiDraw.fit(tostring(item.name), math.max(8, w - 27)) ..
+        "  " .. rjust(fmt(item.amount), 10) .. trend, colors.white)
     end
   end
   -- nav row (reuses the tested console.buttonRow / buttonHit)
