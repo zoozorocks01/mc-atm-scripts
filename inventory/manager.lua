@@ -1635,13 +1635,17 @@ local function drawPresetsPage(data)
   if presetStatus then
     line(start + rows + 1, uiDraw.fit(presetStatus, w), colors.lime)
   end
-  line(h, "Applied quotas appear on Plan; approve them there (or use auto mode).", colors.gray)
+  local flashing = flashMsg and (nowMs() - flashAt < FLASH_MS)
+  line(h, flashing and flashMsg or "Applied quotas appear on Plan; approve them there (or use auto mode).",
+    flashing and colors.white or colors.gray)
 end
 
 -- Smart mode (opt-in): suggests recurring quotas from observed drain.
 local function drawSmartPage(data)
   local w, h = monitor.getSize()
   local on = data.smartMode == true
+  -- a recent tap (enable/disable/clear) flashes its confirmation on the footer hint
+  local flashing = flashMsg and (nowMs() - flashAt < FLASH_MS)
 
   line(6, "Smart Mode: " .. (on and "ON" or "OFF") .. "   (suggests quotas from drain)",
     on and colors.lime or colors.gray)
@@ -1656,6 +1660,7 @@ local function drawSmartPage(data)
   if not on then
     line(9, "Off by default. Enable here, or apply the zoozo-late-game profile.", colors.gray)
     line(10, "When on, items that keep draining are suggested as recurring quotas.", colors.gray)
+    if flashing then line(h, flashMsg, colors.white) end
     return
   end
 
@@ -1663,6 +1668,7 @@ local function drawSmartPage(data)
   if #sugg == 0 then
     line(9, "No suggestions yet - watching consumption...", colors.gray)
     line(10, "Items that decline over time will appear here to review + accept.", colors.gray)
+    if flashing then line(h, flashMsg, colors.white) end
     return
   end
 
@@ -1688,7 +1694,8 @@ local function drawSmartPage(data)
       "  (" .. reason .. ")", w), colors.white)
     smartRowRegions[#smartRowRegions + 1] = { y = y, entry = s }
   end
-  line(h, "Tapping opens the editor pre-filled; SAVE to apply.", colors.gray)
+  line(h, flashing and flashMsg or "Tapping opens the editor pre-filled; SAVE to apply.",
+    flashing and colors.white or colors.gray)
 end
 
 -- Global reboot-safety chip: tells the operator, on every page, whether detaching
@@ -1939,13 +1946,16 @@ local function saveEditing()
   saveManaged(managedStore)
   print("Quota saved: " .. tostring(editing.label) .. "  target " .. editing.target ..
     (hasOverflow and ("  compress>" .. editing.ceiling .. " -> " .. tostring(editing.into.label)) or ""))
+  flashMsg = "+ Saved " .. tostring(editing.label); flashAt = nowMs()
   editing = nil
 end
 
 local function removeEditing()
+  local removedLabel = editing.label
   managedStore = managed.remove(managedStore or loadManaged(), editing.name)
   saveManaged(managedStore)
-  print("Quota removed: " .. tostring(editing.label))
+  print("Quota removed: " .. tostring(removedLabel))
+  flashMsg = "x Removed " .. tostring(removedLabel); flashAt = nowMs()
   editing = nil
 end
 
@@ -1967,6 +1977,7 @@ local function applyPreset(p)
   end
   saveManaged(managedStore)
   presetStatus = "Applied " .. tostring(p.label) .. ": " .. n .. " quotas." .. extra
+  flashMsg = "+ Applied " .. tostring(p.label); flashAt = nowMs()
   pageShownAt = nowMs()
   print("Applied preset " .. tostring(p.label) .. " (" .. n .. " quotas)" .. extra)
 end
@@ -1977,6 +1988,7 @@ local function toggleSmart()
   local on = not (managed.getSetting(managedStore, "smartMode") == true)
   managed.setSetting(managedStore, "smartMode", on)
   saveManaged(managedStore)
+  flashMsg = on and "+ Smart mode ON" or "x Smart mode off"; flashAt = nowMs()
   pageShownAt = nowMs()
   print("Smart mode " .. (on and "ENABLED" or "disabled"))
 end
