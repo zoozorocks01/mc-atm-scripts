@@ -155,4 +155,25 @@ function managed.toCategory(store, label)
   return { label = label or "Tapped", items = categoryItems }
 end
 
+-- CRAFT-4: from a combined quota list (config categories + the tapped store), which
+-- items RS cannot craft yet -- i.e. patterns you still need to build. Pure:
+--   items       = { { name, label, category } ... }
+--   isCraftable = function(name) -> bool
+-- Returns the non-craftable subset, sorted by category then label -- a shrinking
+-- checklist of patterns to encode.
+function managed.patternsNeeded(items, isCraftable)
+  isCraftable = isCraftable or function() return false end
+  local out = {}
+  for _, it in ipairs(items or {}) do
+    if it and it.name and not isCraftable(it.name) then
+      out[#out + 1] = { name = it.name, label = it.label or it.name, category = it.category or "Uncategorized" }
+    end
+  end
+  table.sort(out, function(a, b)
+    if a.category ~= b.category then return tostring(a.category) < tostring(b.category) end
+    return tostring(a.label):lower() < tostring(b.label):lower()
+  end)
+  return out
+end
+
 return managed

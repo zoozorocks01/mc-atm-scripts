@@ -789,6 +789,23 @@ local merged = stockplan.plan({ stockKeeper = { enabled = true, categories = { c
 t.check(#merged >= 1, "managed quotas produce plan rows")
 t.eq(merged[1].action, "WOULD CRAFT", "a below-target managed quota plans a craft")
 
+-- patternsNeeded (CRAFT-4): non-craftable quotas, grouped/sorted into a worklist
+do
+  local pItems = {
+    { name = "mekanism:alloy_infused", label = "Infused Alloy", category = "Mekanism" },
+    { name = "minecraft:glass", label = "Glass", category = "Base" },
+    { name = "alltheores:steel_ingot", label = "Steel", category = "Base" },
+  }
+  local craftable = { ["minecraft:glass"] = true } -- only glass has a pattern
+  local need = managed.patternsNeeded(pItems, function(n) return craftable[n] == true end)
+  t.eq(#need, 2, "patternsNeeded lists only the non-craftable quotas")
+  t.eq(need[1].category, "Base", "sorted by category first (Base before Mekanism)")
+  t.eq(need[1].label, "Steel", "Base/Steel listed (glass is craftable, excluded)")
+  t.eq(need[2].name, "mekanism:alloy_infused", "Mekanism item sorts last")
+  t.eq(#managed.patternsNeeded(pItems, function() return true end), 0, "all craftable -> empty worklist")
+  t.eq(#managed.patternsNeeded(nil, nil), 0, "nil-safe")
+end
+
 -- overflow config merges with (does not wipe) the floor quota
 local os2 = managed.new()
 managed.set(os2, { name = "iron", label = "Iron", target = 100, craftTo = 200,
@@ -1229,7 +1246,7 @@ local luaFiles = {
   "inventory/manager.lua", "inventory/remote.lua",
   "inventory/config.lua", "inventory/config-example.lua",
   "power/display.lua", "power/probe.lua",
-  "atm10-update.lua", "safereboot.lua", "atm10-bridge-probe.lua",
+  "atm10-update.lua", "safereboot.lua", "atm10-bridge-probe.lua", "atm10-patterns.lua",
   "inventory/manager-startup.lua", "inventory-startup.lua",
   "inventory/remote-startup.lua", "inventory-remote-startup.lua",
   "power/display-startup.lua", "display-startup.lua",
