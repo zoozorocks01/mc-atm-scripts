@@ -22,6 +22,26 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-26 (round 3: two safe wins — C1 flash + A3 health helper)
+
+- **C1 tap-flash ack on Smart / Presets / editor — SHIPPED** (`166a75c`). Reuses the
+  existing `flashMsg`/`flashAt`/`FLASH_MS` mechanism proven on PLAN/QUEUE; sets the flash
+  in `toggleSmart` / `applyPreset` / `saveEditing` / `removeEditing` and renders it on the
+  Smart-page + Presets-page hint lines (editor save/remove flash shows on the PLAN/QUEUE
+  page it returns to). Render-only, no hit-region change, no new locals (still 186).
+  `in-game-verify: pending` (visual is in-world; mechanism is identical to PLAN/QUEUE).
+- **A3 bridge-degraded counter — pure helper SHIPPED, chip STILL PINNED** (round-3 commit below).
+  New `lib/atm10-health.lua` (+ root mirror) `health.bridgeDegraded(state, ok, threshold)`:
+  increments a consecutive-failure count, resets on success, returns degraded once
+  count>=threshold (default 3). 20 biting tests in run.lua (N-1 not degraded, Nth degraded,
+  success resets, monotonic until reset, nil/false = failure, default threshold). **NOT
+  wired into the manager render this round** — the header chip needs manager state at the
+  186-local cap and is in-game-visual, so it stays pinned to land with B1.
+- **Gate after round 3:** 573 passed / 0 failed (+20), both smokes OK, mirrors identical,
+  manager locals unchanged at 186.
+
+---
+
 ## Session log — 2026-06-26 (round 2: smart-mode accuracy sweep + recon)
 
 - **SMART-1 confidence-weighted ranking — SHIPPED** (`8b35ac3`). `analyze()` weights
@@ -321,10 +341,10 @@ viewer → polish).
 |---|---|---|---|---|---|---|
 | A1 | STAB-2 craftItem isConnected recheck | S | high | med | gate | DONE (already shipped, test bites) |
 | A2 | STAB-1 pin with smoke tests | S | high | low | gate | DONE (smoke_auto bites) |
-| A3 | bridge-degraded chip | S | med | low | gate | pinned (payoff is visual + adds state at local cap) |
+| A3 | bridge-degraded helper / chip | S | med | low | gate | pure helper DONE (`atm10-health`, 20 biting tests); chip still pinned (visual + state at local cap, wire with B1) |
 | B1 | UI-2 manager double buffer | major | high | high | visual | discuss |
 | B2 | shrink touch-block window | M | high | med | gate | Code/discuss |
-| C1 | tap flash on Browse/Smart/Presets/editor | S | med | low | gate | Code |
+| C1 | tap flash on Browse/Smart/Presets/editor | S | med | low | gate | DONE (`166a75c`, in-game-verify pending) |
 | C2 | notInGrid hoist | S | med | low | gate | DONE (d0cfc86) |
 | C3 | UI-4 enlarge tap targets | M | med | med | visual | discuss |
 | D1 | power-display double buffer | M | high | med | visual | discuss |

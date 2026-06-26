@@ -20,6 +20,7 @@ local suggest = require("atm10-suggest")
 local presets = require("atm10-presets")
 local console = require("atm10-console")
 local power = require("atm10-power")
+local health = require("atm10-health")
 
 -- ---------------------------------------------------------------------------
 print("status vocabulary")
@@ -1141,6 +1142,52 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+print("A3 bridge-degraded counter (pure health helper)")
+do
+  -- N-1 consecutive failures stay healthy; the Nth crosses the threshold.
+  local st = {}
+  local d2, c2
+  local d1, c1 = health.bridgeDegraded(st, false, 3)
+  t.check(d1 == false, "A3: 1 failure of 3 not degraded")
+  t.eq(c1, 1, "A3: count 1 after first failure")
+  d2, c2 = health.bridgeDegraded(st, false, 3)
+  t.check(d2 == false, "A3: 2 failures of 3 not degraded (N-1)")
+  t.eq(c2, 2, "A3: count 2 after second failure")
+  local d3, c3 = health.bridgeDegraded(st, false, 3)
+  t.check(d3 == true, "A3: Nth (3rd) failure is degraded")
+  t.eq(c3, 3, "A3: count 3 at threshold")
+
+  -- a success resets the count and clears degraded.
+  local d4, c4 = health.bridgeDegraded(st, true, 3)
+  t.check(d4 == false, "A3: success clears degraded")
+  t.eq(c4, 0, "A3: success resets count to 0")
+
+  -- counts are monotonic across failures until a reset.
+  local st2 = {}
+  for i = 1, 5 do
+    local _, c = health.bridgeDegraded(st2, false, 3)
+    t.eq(c, i, "A3: monotonic failure count = " .. i)
+  end
+  local stayDeg, stayC = health.bridgeDegraded(st2, false, 3)
+  t.check(stayDeg == true, "A3: stays degraded past threshold")
+  t.eq(stayC, 6, "A3: count keeps climbing while failing")
+
+  -- default threshold is 3 when none supplied.
+  local st3 = {}
+  health.bridgeDegraded(st3, false)
+  health.bridgeDegraded(st3, false)
+  local dDef = health.bridgeDegraded(st3, false)
+  t.check(dDef == true, "A3: default threshold (3) degrades on 3rd failure")
+
+  -- only ok==true counts as success; falsy values are failures.
+  local st4 = {}
+  local _, cNil = health.bridgeDegraded(st4, nil, 3)
+  t.eq(cNil, 1, "A3: nil treated as failure")
+  local _, cFalse = health.bridgeDegraded(st4, false, 3)
+  t.eq(cFalse, 2, "A3: false treated as failure")
+end
+
+-- ---------------------------------------------------------------------------
 print("overflow balancer (compress above ceiling)")
 local function ovItem(over) local i = { name = "dust", label = "Steel Dust",
   ceiling = 1000, into = { name = "ingot", label = "Steel Ingot" }, ratio = 1 }
@@ -1408,6 +1455,7 @@ local luaFiles = {
   "lib/atm10-control.lua", "lib/atm10-stockplan.lua", "lib/atm10-queue.lua",
   "lib/atm10-craftrunner.lua", "lib/atm10-managed.lua", "lib/atm10-balance.lua",
   "lib/atm10-suggest.lua", "lib/atm10-presets.lua", "lib/atm10-power.lua", "atm10-power.lua",
+  "lib/atm10-health.lua", "atm10-health.lua",
   "power-probe.lua",
   "lib/atm10-console.lua", "atm10-console.lua",
   "inventory/manager.lua", "inventory/remote.lua",
