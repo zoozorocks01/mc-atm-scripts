@@ -98,7 +98,6 @@ local configError = nil
 local ledgerError = nil
 local paletteApplied = false
 local pageIndex = 1
-local pageShownAt = nil
 local firedTimes = {}      -- ms timestamps of crafts fired in the last 60s (throughput readout)
 local lastCraftAt = nil    -- ms of the most recent craftItem (unpruned; drives reboot-safety)
 local craftQueue = nil
@@ -118,16 +117,19 @@ local planNavRegions = {}
 local planActionRegion = nil -- [APPROVE ALL] bulk button on the Plan nav row
 local planPage = 1
 local modeChip = nil       -- hit region for the header mode-cycle chip
-local modeConfirm = nil    -- mode awaiting a confirm tap (auto only)
 local queueRowRegions = {}
 local queueActionRegion = nil -- [CLEAR QUEUE] bulk button on the Queue page
 local browseRowRegions = {}
 local browseNavRegions = {}
 local presetRowRegions = {}
-local presetStatus = nil   -- short confirmation line after applying a preset
-local flashMsg = nil       -- transient confirmation shown on the active page's hint line
-local flashAt = 0          -- when flashMsg was set (ms)
-local FLASH_MS = 4000      -- how long an approve/cancel confirmation stays up
+local ui = {            -- bundled flash/page transient scalars (B1-prep)
+  pageShownAt = nil,    -- auto-rotate timer anchor
+  modeConfirm = nil,    -- mode awaiting a confirm tap (auto only)
+  presetStatus = nil,   -- short confirmation line after applying a preset
+  flashMsg = nil,       -- transient confirmation on the active page hint line
+  flashAt = 0,          -- when flashMsg was set (ms)
+  FLASH_MS = 4000,      -- how long an approve/cancel confirmation stays up
+}
 local smartRowRegions = {} -- tappable suggestion rows on the Smart page
 local smartButtons = nil   -- enable/disable + clear toggle row on the Smart page
 local trendHistory = {}    -- consumption history for smart mode (persisted to disk)
@@ -880,14 +882,14 @@ local function cycleMode(autoArmed)
   for i, m in ipairs(MODE_CYCLE) do if m == cur then idx = i end end
   local nextMode = MODE_CYCLE[idx % #MODE_CYCLE + 1]
   if nextMode == control.MODE_AUTO and not autoArmed then
-    modeConfirm = control.MODE_AUTO -- arm: require a consecutive second chip tap
+    ui.modeConfirm = control.MODE_AUTO -- arm: require a consecutive second chip tap
     return
   end
-  modeConfirm = nil
+  ui.modeConfirm = nil
   managedStore = managedStore or loadManaged()
   managed.setSetting(managedStore, "modeOverride", nextMode)
   saveManaged(managedStore)
-  pageShownAt = nowMs()
+  ui.pageShownAt = nowMs()
   print("Mode -> " .. nextMode)
 end
 
@@ -917,11 +919,11 @@ local function handleControlMessage(senderId, message)
   local result = control.handleMessage(senderId, message, policy,
     control.redstoneActuator(rs, redstoneState))
   if result and result.ok then
-    flashMsg = "control: " .. tostring(result.action)
+    ui.flashMsg = "control: " .. tostring(result.action)
   else
-    flashMsg = "control denied: " .. tostring(result and result.reason or "?")
+    ui.flashMsg = "control denied: " .. tostring(result and result.reason or "?")
   end
-  flashAt = nowMs()
+  ui.flashAt = nowMs()
 end
 
 -- Run the approved craft queue through the gated runner. The runner performs at
@@ -1371,9 +1373,9 @@ local function drawPlanPage(data)
   end
 
   -- footer hint: a recent action flashes a confirmation here, else the tap hint
-  local flashing = flashMsg and (nowMs() - flashAt < FLASH_MS)
+  local flashing = ui.flashMsg and (nowMs() - ui.flashAt < ui.FLASH_MS)
   if (tally.WOULD or 0) > 0 then
-    line(h, flashing and flashMsg or "Tap a > WOULD row to approve.", flashing and colors.white or colors.lime)
+    line(h, flashing and ui.flashMsg or "Tap a > WOULD row to approve.", flashing and colors.white or colors.lime)
     -- bulk: one tap approves EVERY WOULD CRAFT row (all pages), right-aligned so
     -- it never collides with the hint text
     local label = "[APPROVE ALL]"
@@ -1449,8 +1451,8 @@ local function drawQueuePage(data)
 
   local hintY = start + rows
   if hintY <= h then
-    local flashing = flashMsg and (nowMs() - flashAt < FLASH_MS)
-    line(hintY, flashing and flashMsg or "Tap a row to cancel its approval.", flashing and colors.white or colors.gray)
+    local flashing = ui.flashMsg and (nowMs() - ui.flashAt < ui.FLASH_MS)
+    line(hintY, flashing and ui.flashMsg or "Tap a row to cancel its approval.", flashing and colors.white or colors.gray)
     -- bulk: one tap cancels every approval, right-aligned past the hint text
     local label = "[CLEAR QUEUE]"
     local bx = w - #label + 1
@@ -1684,11 +1686,11 @@ local function drawPresetsPage(data)
     presetRowRegions[#presetRowRegions + 1] = { y = y, entry = p }
   end
 
-  if presetStatus then
-    line(start + rows + 1, uiDraw.fit(presetStatus, w), colors.lime)
+  if ui.presetStatus then
+    line(start + rows + 1, uiDraw.fit(ui.presetStatus, w), colors.lime)
   end
-  local flashing = flashMsg and (nowMs() - flashAt < FLASH_MS)
-  line(h, flashing and flashMsg or "Applied quotas appear on Plan; approve them there (or use auto mode).",
+  local flashing = ui.flashMsg and (nowMs() - ui.flashAt < ui.FLASH_MS)
+  line(h, flashing and ui.flashMsg or "Applied quotas appear on Plan; approve them there (or use auto mode).",
     flashing and colors.white or colors.gray)
 end
 
@@ -1697,7 +1699,7 @@ local function drawSmartPage(data)
   local w, h = monitor.getSize()
   local on = data.smartMode == true
   -- a recent tap (enable/disable/clear) flashes its confirmation on the footer hint
-  local flashing = flashMsg and (nowMs() - flashAt < FLASH_MS)
+  local flashing = ui.flashMsg and (nowMs() - ui.flashAt < ui.FLASH_MS)
 
   line(6, "Smart Mode: " .. (on and "ON" or "OFF") .. "   (suggests quotas from drain)",
     on and colors.lime or colors.gray)
@@ -1712,7 +1714,7 @@ local function drawSmartPage(data)
   if not on then
     line(9, "Off by default. Enable here, or apply the zoozo-late-game profile.", colors.gray)
     line(10, "When on, items that keep draining are suggested as recurring quotas.", colors.gray)
-    if flashing then line(h, flashMsg, colors.white) end
+    if flashing then line(h, ui.flashMsg, colors.white) end
     return
   end
 
@@ -1720,7 +1722,7 @@ local function drawSmartPage(data)
   if #sugg == 0 then
     line(9, "No suggestions yet - watching consumption...", colors.gray)
     line(10, "Items that decline over time will appear here to review + accept.", colors.gray)
-    if flashing then line(h, flashMsg, colors.white) end
+    if flashing then line(h, ui.flashMsg, colors.white) end
     return
   end
 
@@ -1746,7 +1748,7 @@ local function drawSmartPage(data)
       "  (" .. reason .. ")", w), colors.white)
     smartRowRegions[#smartRowRegions + 1] = { y = y, entry = s }
   end
-  line(h, flashing and flashMsg or "Tapping opens the editor pre-filled; SAVE to apply.",
+  line(h, flashing and ui.flashMsg or "Tapping opens the editor pre-filled; SAVE to apply.",
     flashing and colors.white or colors.gray)
 end
 
@@ -1829,9 +1831,9 @@ local function draw(data)
     monitor.setCursorPos(1, 4)
     monitor.setBackgroundColor(colors.black)
     monitor.clearLine()
-    local chip = "[" .. mode .. (modeConfirm == control.MODE_AUTO and " AUTO?" or "") .. "]"
+    local chip = "[" .. mode .. (ui.modeConfirm == control.MODE_AUTO and " AUTO?" or "") .. "]"
     uiDraw.write(monitor, 1, 4, chip, colors.black,
-      modeConfirm == control.MODE_AUTO and colors.orange or colors.cyan)
+      ui.modeConfirm == control.MODE_AUTO and colors.orange or colors.cyan)
     modeChip = { x1 = 1, x2 = #chip, y = 4 }
     uiDraw.write(monitor, #chip + 2, 4, "autocraft: " .. (craftLive and "ON" or "off") ..
       "   Queue: " .. cqueue.count(craftQueue), craftLive and colors.lime or colors.gray)
@@ -1864,8 +1866,8 @@ end
 local function setPage(i)
   pageIndex = ((i - 1) % #PAGES) + 1
   editing = nil -- any page change exits the quota editor
-  modeConfirm = nil -- and cancels a pending auto-mode confirm
-  pageShownAt = nowMs() -- a manual page change resets the auto-rotate timer
+  ui.modeConfirm = nil -- and cancels a pending auto-mode confirm
+  ui.pageShownAt = nowMs() -- a manual page change resets the auto-rotate timer
 end
 
 -- Only the dashboard pages auto-rotate; Browse/Presets are interactive and held.
@@ -1874,19 +1876,19 @@ local AUTO_PAGES = { PLAN = true, QUEUE = true }
 local function advancePageIfDue()
   if PAGE_SECONDS <= 0 then return end -- auto-rotation disabled
   local nowT = nowMs()
-  if not pageShownAt then pageShownAt = nowT end
+  if not ui.pageShownAt then ui.pageShownAt = nowT end
   if not AUTO_PAGES[PAGES[pageIndex]] then
-    pageShownAt = nowT -- manual page: don't auto-rotate away
+    ui.pageShownAt = nowT -- manual page: don't auto-rotate away
     return
   end
-  if nowT - pageShownAt >= PAGE_SECONDS * 1000 then
+  if nowT - ui.pageShownAt >= PAGE_SECONDS * 1000 then
     local nextIndex = pageIndex
     for _ = 1, #PAGES do
       nextIndex = nextIndex % #PAGES + 1
       if AUTO_PAGES[PAGES[nextIndex]] then break end
     end
     pageIndex = nextIndex
-    pageShownAt = nowT
+    ui.pageShownAt = nowT
   end
 end
 
@@ -1908,8 +1910,8 @@ local function approve(entry)
       priority = entry.priority, amount = entry.amount, target = entry.target, category = entry.category,
       craftTo = entry.craftTo, banded = entry.banded, adjusted = entry.adjusted, reason = entry.reason }, nowMs())
   saveQueue(craftQueue)
-  pageShownAt = nowMs()
-  flashMsg = "+ Approved " .. tostring(entry.label or entry.name); flashAt = nowMs()
+  ui.pageShownAt = nowMs()
+  ui.flashMsg = "+ Approved " .. tostring(entry.label or entry.name); ui.flashAt = nowMs()
   print("Approved: " .. tostring(entry.label or entry.name) .. " x" .. tostring(entry.request))
 end
 
@@ -1919,8 +1921,8 @@ local function cancelEntry(entry)
   if not entry or not entry.name then return end
   craftQueue = cqueue.cancel(craftQueue or loadQueue(), entry.key or entry.name)
   saveQueue(craftQueue)
-  pageShownAt = nowMs()
-  flashMsg = "x Canceled " .. tostring(entry.label or entry.name); flashAt = nowMs()
+  ui.pageShownAt = nowMs()
+  ui.flashMsg = "x Canceled " .. tostring(entry.label or entry.name); ui.flashAt = nowMs()
   print("Canceled approval: " .. tostring(entry.label or entry.name))
 end
 
@@ -1938,8 +1940,8 @@ local function approveAllPlans()
   end
   craftQueue = q
   saveQueue(craftQueue)
-  pageShownAt = nowMs()
-  flashMsg = "+ Approved all (" .. n .. ")"; flashAt = nowMs()
+  ui.pageShownAt = nowMs()
+  ui.flashMsg = "+ Approved all (" .. n .. ")"; ui.flashAt = nowMs()
   print("Approved all WOULD CRAFT: " .. n)
 end
 
@@ -1948,8 +1950,8 @@ end
 local function clearQueue()
   craftQueue = cqueue.new()
   saveQueue(craftQueue)
-  pageShownAt = nowMs()
-  flashMsg = "x Queue cleared"; flashAt = nowMs()
+  ui.pageShownAt = nowMs()
+  ui.flashMsg = "x Queue cleared"; ui.flashAt = nowMs()
   print("Cleared craft queue")
 end
 
@@ -1980,7 +1982,7 @@ local function openEditor(entry)
     target = target, craftTo = craftTo, ceiling = ceiling, into = into, ratio = ratio,
     step = 100, pickingInto = false,
   }
-  pageShownAt = nowMs()
+  ui.pageShownAt = nowMs()
 end
 
 local function saveEditing()
@@ -1998,7 +2000,7 @@ local function saveEditing()
   saveManaged(managedStore)
   print("Quota saved: " .. tostring(editing.label) .. "  target " .. editing.target ..
     (hasOverflow and ("  compress>" .. editing.ceiling .. " -> " .. tostring(editing.into.label)) or ""))
-  flashMsg = "+ Saved " .. tostring(editing.label); flashAt = nowMs()
+  ui.flashMsg = "+ Saved " .. tostring(editing.label); ui.flashAt = nowMs()
   editing = nil
 end
 
@@ -2007,7 +2009,7 @@ local function removeEditing()
   managedStore = managed.remove(managedStore or loadManaged(), editing.name)
   saveManaged(managedStore)
   print("Quota removed: " .. tostring(removedLabel))
-  flashMsg = "x Removed " .. tostring(removedLabel); flashAt = nowMs()
+  ui.flashMsg = "x Removed " .. tostring(removedLabel); ui.flashAt = nowMs()
   editing = nil
 end
 
@@ -2028,9 +2030,9 @@ local function applyPreset(p)
     extra = extra .. " + compress chains ON"
   end
   saveManaged(managedStore)
-  presetStatus = "Applied " .. tostring(p.label) .. ": " .. n .. " quotas." .. extra
-  flashMsg = "+ Applied " .. tostring(p.label); flashAt = nowMs()
-  pageShownAt = nowMs()
+  ui.presetStatus = "Applied " .. tostring(p.label) .. ": " .. n .. " quotas." .. extra
+  ui.flashMsg = "+ Applied " .. tostring(p.label); ui.flashAt = nowMs()
+  ui.pageShownAt = nowMs()
   print("Applied preset " .. tostring(p.label) .. " (" .. n .. " quotas)" .. extra)
 end
 
@@ -2040,8 +2042,8 @@ local function toggleSmart()
   local on = not (managed.getSetting(managedStore, "smartMode") == true)
   managed.setSetting(managedStore, "smartMode", on)
   saveManaged(managedStore)
-  flashMsg = on and "+ Smart mode ON" or "x Smart mode off"; flashAt = nowMs()
-  pageShownAt = nowMs()
+  ui.flashMsg = on and "+ Smart mode ON" or "x Smart mode off"; ui.flashAt = nowMs()
+  ui.pageShownAt = nowMs()
   print("Smart mode " .. (on and "ENABLED" or "disabled"))
 end
 
@@ -2078,7 +2080,7 @@ local function handleEditorTouch(x, y)
           editing[field] = math.max(0, (editing[field] or 0) + d)
         end
       end
-      pageShownAt = nowMs()
+      ui.pageShownAt = nowMs()
       renderCurrent()
       return
     end
@@ -2093,7 +2095,7 @@ local function handlePickIntoTouch(x, y)
   for _, nav in ipairs(browseNavRegions) do
     if y == nav.y and x >= nav.x1 and x <= nav.x2 then
       browsePage = math.max(1, browsePage + nav.delta)
-      pageShownAt = nowMs(); renderCurrent(); return
+      ui.pageShownAt = nowMs(); renderCurrent(); return
     end
   end
 
@@ -2102,7 +2104,7 @@ local function handlePickIntoTouch(x, y)
     editing.into = { name = pick.name, label = pick.label }
     editing.pickingInto = false
     if editing.ceiling <= 0 then editing.ceiling = math.max(0, math.floor(editing.amount or 0)) end
-    pageShownAt = nowMs()
+    ui.pageShownAt = nowMs()
     renderCurrent()
   end
 end
@@ -2118,8 +2120,8 @@ local function handleTouch(x, y)
   end
 
   -- any tap clears the auto-mode arm; only a consecutive chip tap re-confirms it
-  local autoArmed = (modeConfirm == control.MODE_AUTO)
-  modeConfirm = nil
+  local autoArmed = (ui.modeConfirm == control.MODE_AUTO)
+  ui.modeConfirm = nil
 
   -- header mode chip: cycle the control mode (available on every page)
   if modeChip and y == modeChip.y and x >= modeChip.x1 and x <= modeChip.x2 then
@@ -2139,7 +2141,7 @@ local function handleTouch(x, y)
   for _, nav in ipairs(planNavRegions) do
     if y == nav.y and x >= nav.x1 and x <= nav.x2 then
       planPage = math.max(1, planPage + nav.delta)
-      pageShownAt = nowMs()
+      ui.pageShownAt = nowMs()
       renderCurrent()
       return
     end
@@ -2195,7 +2197,7 @@ local function handleTouch(x, y)
     end
     dismissedSuggestions = suggest.pruneDismissed(dismissedSuggestions, clearedAt, DISMISSED_OPTS)
     saveDismissed(dismissedSuggestions)
-    pageShownAt = nowMs()
+    ui.pageShownAt = nowMs()
     renderCurrent()
     return
   end
@@ -2211,14 +2213,14 @@ local function handleTouch(x, y)
   if browseFilterBtn and y == browseFilterBtn.y and x >= browseFilterBtn.x1 and x <= browseFilterBtn.x2 then
     browseFilter = not browseFilter
     browsePage = 1
-    pageShownAt = nowMs()
+    ui.pageShownAt = nowMs()
     renderCurrent()
     return
   end
   for _, nav in ipairs(browseNavRegions) do
     if y == nav.y and x >= nav.x1 and x <= nav.x2 then
       browsePage = math.max(1, browsePage + nav.delta)
-      pageShownAt = nowMs()
+      ui.pageShownAt = nowMs()
       renderCurrent()
       return
     end
