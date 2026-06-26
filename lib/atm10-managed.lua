@@ -163,9 +163,12 @@ end
 -- checklist of patterns to encode.
 function managed.patternsNeeded(items, isCraftable)
   isCraftable = isCraftable or function() return false end
-  local out = {}
+  local out, seen = {}, {}
   for _, it in ipairs(items or {}) do
-    if it and it.name and not isCraftable(it.name) then
+    -- dedup by registry name; FIRST occurrence wins, so callers that list config
+    -- categories before the tapped store keep the categorized (overflow-aware) entry.
+    if it and it.name and not seen[it.name] and not isCraftable(it.name) then
+      seen[it.name] = true
       out[#out + 1] = { name = it.name, label = it.label or it.name, category = it.category or "Uncategorized" }
     end
   end

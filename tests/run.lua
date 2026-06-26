@@ -804,6 +804,14 @@ do
   t.eq(need[2].name, "mekanism:alloy_infused", "Mekanism item sorts last")
   t.eq(#managed.patternsNeeded(pItems, function() return true end), 0, "all craftable -> empty worklist")
   t.eq(#managed.patternsNeeded(nil, nil), 0, "nil-safe")
+  -- dedup: same item from config + tapped appears once, keeping the FIRST (config) entry
+  local dup = {
+    { name = "alltheores:steel_ingot", label = "Steel", category = "Base" },   -- config: first
+    { name = "alltheores:steel_ingot", label = "Steel Ingot", category = "Tapped" }, -- tapped: dropped
+  }
+  local dn = managed.patternsNeeded(dup, function() return false end)
+  t.eq(#dn, 1, "patternsNeeded dedups the same item across categories")
+  t.eq(dn[1].category, "Base", "dedup keeps the first (config) occurrence, not Tapped")
 end
 
 -- overflow config merges with (does not wipe) the floor quota

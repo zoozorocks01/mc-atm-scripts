@@ -30,18 +30,23 @@ local function findBridge()
   return nil
 end
 
--- The set of names RS reports as craftable (the reliable post-probe signal).
-local function craftableSet(bridge)
-  local set, n = {}, 0
+-- What RS reports as craftable: a name->true set (for filtering) AND a sorted list
+-- (name + display label) so we can show the patterns you already HAVE.
+local function craftableInfo(bridge)
+  local set, list = {}, {}
   if bridge and type(bridge.getCraftableItems) == "function" then
-    local ok, list = pcall(bridge.getCraftableItems)
-    if ok and type(list) == "table" then
-      for _, it in ipairs(list) do
-        if type(it) == "table" and it.name then set[it.name] = true; n = n + 1 end
+    local ok, items = pcall(bridge.getCraftableItems)
+    if ok and type(items) == "table" then
+      for _, it in ipairs(items) do
+        if type(it) == "table" and it.name then
+          set[it.name] = true
+          list[#list + 1] = { name = it.name, label = it.displayName or it.name }
+        end
       end
     end
   end
-  return set, n
+  table.sort(list, function(a, b) return tostring(a.label):lower() < tostring(b.label):lower() end)
+  return set, list
 end
 
 -- Combined quota list: config categories (categorized) + tapped store (category "Tapped").
@@ -85,13 +90,18 @@ if not bridge then
   return
 end
 
-local set, nCraft = craftableSet(bridge)
-out("RS reports " .. nCraft .. " craftable items (patterns RS can currently see).")
-
+local set, have = craftableInfo(bridge)
 local items = gatherItems()
 local need = managed.patternsNeeded(items, function(name) return set[name] == true end)
-out("Quotas needing a pattern: " .. #need .. " of " .. #items)
+out("RS HAS " .. #have .. " patterns. Quotas still needing one: " .. #need .. ".")
 out("")
+
+out("-- PATTERNS RS HAS (" .. #have .. ") --")
+for _, it in ipairs(have) do
+  out("  " .. it.label .. "   (" .. it.name .. ")")
+end
+out("")
+out("== PATTERNS TO BUILD (" .. #need .. ", deduped) ==")
 
 local cat = nil
 for _, it in ipairs(need) do
