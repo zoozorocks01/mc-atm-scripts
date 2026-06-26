@@ -1185,6 +1185,17 @@ do
   t.eq(cNil, 1, "A3: nil treated as failure")
   local _, cFalse = health.bridgeDegraded(st4, false, 3)
   t.eq(cFalse, 2, "A3: false treated as failure")
+
+  -- gateCrafts: the pure fire/hold decision the manager wires in. allowFire is
+  -- the inverse of degraded, tracking the same consecutive-failure counter.
+  local g = {}
+  local fire1, deg1, gc1 = health.gateCrafts(g, false, 3)
+  t.check(fire1 == true and deg1 == false and gc1 == 1, "A3: gate allows fire below threshold")
+  health.gateCrafts(g, false, 3)
+  local fire3, deg3, gc3 = health.gateCrafts(g, false, 3)
+  t.check(fire3 == false and deg3 == true and gc3 == 3, "A3: gate HOLDS crafts at degraded threshold")
+  local fireR, degR, gcR = health.gateCrafts(g, true, 3)
+  t.check(fireR == true and degR == false and gcR == 0, "A3: gate RESUMES crafts on first clean scan (resets)")
 end
 
 -- ---------------------------------------------------------------------------

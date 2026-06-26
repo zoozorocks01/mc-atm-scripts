@@ -1006,6 +1006,14 @@ end
 local function scan()
   loadConfig()
 
+  -- A3 bridge-degraded gating: stash the health module + its consecutive-failure
+  -- state on craftingCache (a table only ever keyed by exact mod:item registry
+  -- names and never pairs()-iterated, so a reserved __-key can't collide; locals
+  -- are at the 186 cap so this avoids a new bare top-level local). The single
+  -- per-cycle bridge outcome is fed below; gateCrafts decides fire-vs-hold.
+  craftingCache.__health = craftingCache.__health or require("atm10-health")
+  craftingCache.__bridge = craftingCache.__bridge or {}
+
   if not monitor then
     monitor = findPeripheral({ "monitor" }, MONITOR_SIDE)
     if monitor then pickTextScale() end
@@ -1017,6 +1025,8 @@ local function scan()
 
   if not bridge then
     status = "No RS Bridge found"
+    -- no bridge to fire at: count it as a degraded cycle.
+    craftingCache.__bridge.allowFire = craftingCache.__health.gateCrafts(craftingCache.__bridge, false)
     return nil
   end
 
@@ -1033,6 +1043,8 @@ local function scan()
     status = (online == false or connected == false)
       and "Grid OFFLINE - holding last plan"
       or "Grid read failed - holding last plan"
+    -- degraded cycle: a stale/offline read must hold back craft-firing.
+    craftingCache.__bridge.allowFire = craftingCache.__health.gateCrafts(craftingCache.__bridge, false)
     return nil, "stale"
   end
 
@@ -1051,6 +1063,9 @@ local function scan()
     sorted[#sorted + 1] = item
   end
   lastUnique = unique -- remember a good read so the next empty read is caught as stale
+
+  -- clean read: reset the failure count and re-allow craft-firing (auto-resume).
+  craftingCache.__bridge.allowFire = craftingCache.__health.gateCrafts(craftingCache.__bridge, true)
 
   table.sort(sorted, function(a, b) return itemAmount(a) > itemAmount(b) end)
 
@@ -2209,12 +2224,23 @@ local function refreshAndDraw()
   if ok then
     if data then
       lastData = data
-      -- in auto mode, enqueue craftable deficits so the runner can maintain quotas
-      -- unattended; a no-op in monitor/dry-run/manual (those need a manual tap)
-      autoApprovePlans(data.stockPlans)
-      -- drive the gated craft runner, then refresh the queue snapshot so the page
-      -- reflects this cycle's state transitions (APPROVED -> CRAFTING) immediately
-      processCraftQueue(nowMs())
+      -- A3 bridge-degraded back-off: when consecutive bridge-read failures have
+      -- crossed the threshold, SKIP the whole craft phase this cycle. A flaky
+      -- bridge intermittently answering reads is the half-attached state in which
+      -- the mutating craftItem is the uncatchable AP crash trigger; holding it
+      -- back is the core reliability win. We still hold the last-good display. The
+      -- first clean scan resets the counter (gateCrafts) and craft-firing resumes
+      -- automatically next cycle -- no latch, no manual clear.
+      if craftingCache.__bridge and craftingCache.__bridge.allowFire == false then
+        data.bridgeDegraded = true -- for the (pinned, in-game-visual) header chip
+      else
+        -- in auto mode, enqueue craftable deficits so the runner can maintain quotas
+        -- unattended; a no-op in monitor/dry-run/manual (those need a manual tap)
+        autoApprovePlans(data.stockPlans)
+        -- drive the gated craft runner, then refresh the queue snapshot so the page
+        -- reflects this cycle's state transitions (APPROVED -> CRAFTING) immediately
+        processCraftQueue(nowMs())
+      end
       data.craftQueue = cqueue.list(craftQueue)
       broadcast(data)
     elseif reason == "stale" then

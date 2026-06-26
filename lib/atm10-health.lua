@@ -37,4 +37,22 @@ function health.bridgeDegraded(state, ok, threshold)
   return state.bridgeFails >= n, state.bridgeFails
 end
 
+-- gateCrafts(state, ok, threshold)
+--   Folds this cycle's bridge outcome into the consecutive-failure count (via
+--   bridgeDegraded) AND returns the fire/hold decision in one call, so the
+--   manager holds no decision logic of its own. Returns
+--   (allowFire, degraded, count): allowFire == not degraded. Pure -- the caller
+--   owns `state`; this fn never touches a peripheral.
+--
+--   Wire ok=false on any bridge-read failure (scan's no-bridge / offline / stale
+--   branch), ok=true on a clean scan. When degraded, the manager must SKIP firing
+--   craftItem this cycle: a flaky bridge that is intermittently answering reads is
+--   exactly the half-attached state in which the mutating craftItem is the
+--   uncatchable-crash trigger. A single clean scan resets the count and re-allows
+--   firing automatically (no latch, no manual clear).
+function health.gateCrafts(state, ok, threshold)
+  local degraded, count = health.bridgeDegraded(state, ok, threshold)
+  return (not degraded), degraded, count
+end
+
 return health
