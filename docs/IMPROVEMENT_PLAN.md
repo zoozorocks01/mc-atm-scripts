@@ -24,6 +24,7 @@ crash the server — top priority)**, and UI/display polish.
   - `lua tests/run.lua` → expect `361+ passed, 0 failed`
   - `lua tests/smoke.lua` → `SMOKE OK`
   - `lua tests/smoke_auto.lua` → `SMOKE-AUTO OK`
+  - `lua tests/smoke_probe.lua` → `SMOKE-PROBE OK` *(runtime-executes the power probe loop; run.lua only parses it)*
 - **Mirror discipline is a HARD gate** (see §2). After any edit, diff every touched
   pair and confirm identical *before* committing. A green suite on one copy still
   ships the unfixed copy to the in-game computer.
@@ -366,6 +367,7 @@ every control action.
    lua tests/run.lua          # 361+ passed, 0 failed
    lua tests/smoke.lua        # SMOKE OK
    lua tests/smoke_auto.lua   # SMOKE-AUTO OK
+   lua tests/smoke_probe.lua  # SMOKE-PROBE OK (runtime-executes the power probe loop)
 4. Mirror check (must be identical):
    diff -q lib/atm10-X.lua atm10-X.lua        (for each lib touched)
    diff -q inventory/manager.lua inventory-info.lua

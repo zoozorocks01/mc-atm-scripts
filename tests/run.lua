@@ -1206,6 +1206,13 @@ do
   t.eq(et, "Empty in 1m", "estimateTime: drains 1200 at 1/t (/20) -> 60s = 1m")
   local _, sf = power.estimateTime(1000, 5000, 1)
   t.eq(sf, "full", "estimateTime: net>0 -> full")
+  -- QUICK-1: transfer-cap headroom (% of cap used); nil when cap unknown
+  t.eq(power.headroom(50, 100), 50, "headroom: 50 of 100 -> 50%")
+  t.eq(power.headroom(0, 100), 0, "headroom: 0 used -> 0%")
+  t.eq(power.headroom(100, 100), 100, "headroom: at cap -> 100%")
+  t.eq(power.headroom(5, 0), nil, "headroom: cap 0 -> nil (display hides it)")
+  t.eq(power.headroom(nil, 100), 0, "headroom: nil used -> 0%")
+  t.check(power.headroom(150, 100) > 100, "headroom: over-cap is not clamped (anomaly shows)")
 end
 
 -- ---------------------------------------------------------------------------

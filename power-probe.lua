@@ -17,12 +17,15 @@ local previousTime = nil
 local lastNonzeroInput = 0
 local lastNonzeroOutput = 0
 
+-- QUICK-4: return (value, reachable). reachable is false when the method is missing or the
+-- read errored, so a wrong/detached induction port can be told apart from a genuine 0 instead
+-- of fabricating a plausible empty matrix.
 local function call(name)
   if port[name] then
     local ok, value = pcall(port[name])
-    if ok then return tonumber(value) or value end
+    if ok then return tonumber(value) or value, true end
   end
-  return 0
+  return 0, false
 end
 
 local function getPercent(energy, maxEnergy)
@@ -66,12 +69,19 @@ while true do
     findDisplay()
   end
 
-  local energy = tonumber(call("getEnergy")) or 0
-  local maxEnergy = tonumber(call("getMaxEnergy")) or 0
-  local input = tonumber(call("getLastInput")) or 0
-  local output = tonumber(call("getLastOutput")) or 0
-  local transferCap = tonumber(call("getTransferCap")) or 0
+  local rawEnergy, okEnergy = call("getEnergy")
+  local rawMax, okMax = call("getMaxEnergy")
+  local energy = tonumber(rawEnergy) or 0
+  local maxEnergy = tonumber(rawMax) or 0
+  -- NOTE: call() returns (value, reachable); the extra parens truncate it to ONE value so the
+  -- boolean does not leak into tonumber's `base` arg (which would raise and kill the loop).
+  local input = tonumber((call("getLastInput"))) or 0
+  local output = tonumber((call("getLastOutput"))) or 0
+  local transferCap = tonumber((call("getTransferCap"))) or 0
   local estimatedNet = estimateNet(energy)
+  -- QUICK-4: the core matrix reads define reachability; if they fail the display shows a
+  -- SENSOR state instead of a fabricated 0/0/0%.
+  local sensorOk = okEnergy and okMax
 
   if input and input > 0 then lastNonzeroInput = input end
   if output and output > 0 then lastNonzeroOutput = output end
@@ -88,6 +98,7 @@ while true do
     lastNonzeroInput = lastNonzeroInput,
     lastNonzeroOutput = lastNonzeroOutput,
     transferCap = transferCap,
+    sensorOk = sensorOk,
     computer = os.getComputerID(),
   }
 

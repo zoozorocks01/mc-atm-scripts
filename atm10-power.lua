@@ -68,4 +68,16 @@ function power.percent(rawPct, energy, maxEnergy)
   return 0
 end
 
+-- QUICK-1: percentage of the induction matrix's per-tick transfer cap a given input/output
+-- rate is using (a throughput-headroom readout -- how close the matrix is to its transfer
+-- limit). Returns nil when the cap is unknown / <= 0 so the display HIDES the readout rather
+-- than dividing by zero or showing a meaningless 0%. May exceed 100 (a real over-cap anomaly
+-- shows rather than being clamped away).
+function power.headroom(used, cap)
+  used = tonumber(used) or 0
+  cap = tonumber(cap) or 0
+  if cap <= 0 then return nil end
+  return math.max(0, (used / cap) * 100)
+end
+
 return power

@@ -238,6 +238,17 @@ local function draw()
     return
   end
 
+  -- QUICK-4: the probe reached us but its induction port is not responding -- show a SENSOR
+  -- state rather than the fabricated 0/0/0% an unreachable port would otherwise read as.
+  if last.sensorOk == false then
+    line(3, "SENSOR UNREACHABLE", colors.orange)
+    line(5, "The induction port is not responding to reads.", colors.gray)
+    line(6, "Showing no data instead of a fabricated 0%.", colors.gray)
+    line(8, "Check the matrix / port placement on the probe.", colors.gray)
+    line(10, "Last contact age " .. math.floor(now() - (lastSeen or now())) .. "s", colors.gray)
+    return
+  end
+
   local pct = last.percent or 0
   local net, netSource = effectiveNet(last)
   local age = now() - (lastSeen or now())
@@ -247,8 +258,13 @@ local function draw()
   drawBar(4, "Matrix", pct)
 
   line(6, "Full:   " .. string.format("%.2f%%", pct), colorForPercent(pct))
-  line(7, "Input:  " .. fmt(last.input) .. "/t", colors.lime)
-  line(8, "Output: " .. fmt(last.output) .. "/t", colors.red)
+  -- QUICK-1: surface input/output as a fraction of the matrix's per-tick transfer cap
+  -- (transferCap is already on the wire from the probe). headroom() hides it when cap is 0.
+  local cap = last.transferCap or 0
+  local inHead = power.headroom(last.input, cap)
+  local outHead = power.headroom(last.output, cap)
+  line(7, "Input:  " .. fmt(last.input) .. "/t" .. (inHead and string.format("  %3.0f%% cap", inHead) or ""), colors.lime)
+  line(8, "Output: " .. fmt(last.output) .. "/t" .. (outHead and string.format("  %3.0f%% cap", outHead) or ""), colors.red)
 
   local netColor = colors.white
   if net > 0 then netColor = colors.lime elseif net < 0 then netColor = colors.red end
@@ -305,12 +321,15 @@ while true do
     if msg.lastNonzeroInput and msg.lastNonzeroInput > 0 then lastNonzeroInput = msg.lastNonzeroInput end
     if msg.lastNonzeroOutput and msg.lastNonzeroOutput > 0 then lastNonzeroOutput = msg.lastNonzeroOutput end
 
-    history[#history + 1] = msg.percent or 0
-    local net = effectiveNet(msg)
-    netHistory[#netHistory + 1] = net
+    -- QUICK-4: never push a fabricated 0% into the graphs while the sensor is unreachable
+    if msg.sensorOk ~= false then
+      history[#history + 1] = msg.percent or 0
+      local net = effectiveNet(msg)
+      netHistory[#netHistory + 1] = net
 
-    while #history > HISTORY_LIMIT do table.remove(history, 1) end
-    while #netHistory > HISTORY_LIMIT do table.remove(netHistory, 1) end
+      while #history > HISTORY_LIMIT do table.remove(history, 1) end
+      while #netHistory > HISTORY_LIMIT do table.remove(netHistory, 1) end
+    end
   end
 
   -- A render error (e.g. a malformed packet) logs and self-heals on the next
