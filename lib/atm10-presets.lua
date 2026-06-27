@@ -93,38 +93,54 @@ do
   local items = {}
   local function add(x) items[#items + 1] = x end
   local function buf(name, label, target) add({ name = name, label = label, target = target, craftTo = target }) end
-  -- Blocks are NOT stockpiled (no floor) - a big block quota isn't useful. The
-  -- valuable direction is OVERFLOW: hold the ingot in a band and compress its
-  -- surplus down into blocks (dense storage). So the block is only the compress
-  -- sink for the ingot's ceiling, never a refill target of its own.
-  -- chain: dust band (264k; compress surplus to ingot at 350k) -> ingot (100k;
-  -- compress surplus to block at 150k, 9:1) -> block (overflow only, no floor).
-  local function chain(dust, ingot, block, label)
-    add({ name = dust, label = label .. " Dust", target = 264000, craftTo = 264000,
-      ceiling = 350000, into = { name = ingot, label = label .. " Ingot" }, ratio = 1 })
-    add({ name = ingot, label = label .. " Ingot", target = 100000, craftTo = 100000,
-      ceiling = 150000, into = { name = block, label = label .. " Block" }, ratio = 9 })
+  -- METAL DUST TIERS (operator's late-game ore-balancer, 2026-06-27). DORMANT until
+  -- the autocrafter + dust->ingot PROCESSING patterns exist (rows read NOT CRAFTABLE,
+  -- fail-inert, until then). Strip these dusts from the smelter exporter filters so the
+  -- on-demand autocrafter owns them, not the blanket exporters. Steel/bronze/brass/
+  -- invar/electrum/battery-alloy are SMELT-IMMEDIATELY (blanket exporters) -> not here.
+
+  -- RESERVE metals: keep `keep` dust (for alloys); smelt the SURPLUS above it into
+  -- ingots (overflow: ceiling=keep, into=ingot, ratio 1; target/craftTo=1 -- dust isn't
+  -- refillable from ingots, so no floor).
+  local function reserve(dust, ingot, label, keep)
+    add({ name = dust, label = label .. " Dust", target = 1, craftTo = 1,
+      ceiling = keep, into = { name = ingot, label = label .. " Ingot" }, ratio = 1 })
   end
+  reserve("alltheores:copper_dust",    "minecraft:copper_ingot",    "Copper",   150000)
+  reserve("alltheores:iron_dust",      "minecraft:iron_ingot",      "Iron",     150000)
+  reserve("alltheores:tin_dust",       "alltheores:tin_ingot",      "Tin",      150000)
+  reserve("alltheores:aluminum_dust",  "alltheores:aluminum_ingot", "Aluminum", 150000)
+  reserve("alltheores:zinc_dust",      "alltheores:zinc_ingot",     "Zinc",     150000)
+  reserve("alltheores:osmium_dust",    "alltheores:osmium_ingot",   "Osmium",   150000)
+  reserve("alltheores:gold_dust",      "minecraft:gold_ingot",      "Gold",     150000)
+  reserve("alltheores:lead_dust",      "alltheores:lead_ingot",     "Lead",     150000)
+  reserve("alltheores:nickel_dust",    "alltheores:nickel_ingot",   "Nickel",   120000)
+  reserve("alltheores:uranium_dust",   "alltheores:uranium_ingot",  "Uranium",  5000) -- VERIFY-JEI uranium dust id
 
-  -- Normal metals: full dust->ingot->block chain (IDs from base recon; iron/gold/
-  -- copper/netherite use minecraft: ingot+block, the rest are alltheores:).
-  chain("alltheores:iron_dust", "minecraft:iron_ingot", "minecraft:iron_block", "Iron")
-  chain("alltheores:gold_dust", "minecraft:gold_ingot", "minecraft:gold_block", "Gold")
-  chain("alltheores:copper_dust", "minecraft:copper_ingot", "minecraft:copper_block", "Copper")
-  chain("alltheores:tin_dust", "alltheores:tin_ingot", "alltheores:tin_block", "Tin")
-  chain("alltheores:lead_dust", "alltheores:lead_ingot", "alltheores:lead_block", "Lead")
-  chain("alltheores:silver_dust", "alltheores:silver_ingot", "alltheores:silver_block", "Silver")
-  chain("alltheores:nickel_dust", "alltheores:nickel_ingot", "alltheores:nickel_block", "Nickel")
-  chain("alltheores:aluminum_dust", "alltheores:aluminum_ingot", "alltheores:aluminum_block", "Aluminum")
-  chain("alltheores:osmium_dust", "alltheores:osmium_ingot", "alltheores:osmium_block", "Osmium")
-  chain("alltheores:zinc_dust", "alltheores:zinc_ingot", "alltheores:zinc_block", "Zinc")
-  -- Steel has dust/block too; Zach wants it on the metal chain (264k dust / 100k ingot).
-  chain("alltheores:steel_dust", "alltheores:steel_ingot", "alltheores:steel_block", "Steel")
+  -- MOSTLY-DUST metals: keep ~2.5k ingots, the rest stays dust (ingot floor smelts dust
+  -- via craftFrom; surplus dust accumulates). silver feeds electrum; plat/iridium rare.
+  local function mostly(ingot, dust, label)
+    add({ name = ingot, label = label .. " Ingot", target = 2500, craftTo = 2500,
+      craftFrom = { name = dust, reserve = 0, ratio = 1 } })
+  end
+  mostly("alltheores:silver_ingot",   "alltheores:silver_dust",   "Silver")
+  mostly("alltheores:platinum_ingot", "alltheores:platinum_dust", "Platinum") -- VERIFY-JEI platinum dust id
+  mostly("alltheores:iridium_ingot",  "alltheores:iridium_dust",  "Iridium")  -- VERIFY-JEI iridium dust id
 
-  -- Rarer/special metals: modest ingot buffers (NOT the 264k metal chain).
-  buf("alltheores:platinum_ingot", "Platinum", 5000)
-  buf("alltheores:iridium_ingot", "Iridium", 5000)
-  buf("alltheores:uranium_ingot", "Uranium", 5000)
+  -- TINY dusts: keep 10k of each (watch-only -- needs dust->tiny patterns to refill). VERIFY-JEI ALL ids.
+  local function tinyd(name, label) add({ name = name, label = label, target = 10000 }) end
+  tinyd("alltheores:copper_tiny_dust",   "Tiny Copper Dust")
+  tinyd("alltheores:iron_tiny_dust",     "Tiny Iron Dust")
+  tinyd("alltheores:tin_tiny_dust",      "Tiny Tin Dust")
+  tinyd("alltheores:aluminum_tiny_dust", "Tiny Aluminum Dust")
+  tinyd("alltheores:zinc_tiny_dust",     "Tiny Zinc Dust")
+  tinyd("alltheores:osmium_tiny_dust",   "Tiny Osmium Dust")
+  tinyd("alltheores:gold_tiny_dust",     "Tiny Gold Dust")
+  tinyd("alltheores:lead_tiny_dust",     "Tiny Lead Dust")
+  tinyd("alltheores:nickel_tiny_dust",   "Tiny Nickel Dust")
+  tinyd("alltheores:silver_tiny_dust",   "Tiny Silver Dust")
+  tinyd("modern_industrialization:antimony_tiny_dust", "Tiny Antimony Dust")
+
   buf("minecraft:netherite_ingot", "Netherite", 5000)
 
   -- Non-Mekanism alloys: keep >= 35k. Exceptions: enderium + stainless steel = 10k.
