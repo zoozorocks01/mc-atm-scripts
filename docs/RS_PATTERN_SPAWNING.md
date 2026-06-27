@@ -105,6 +105,45 @@ exact component shape varies. Proven approach:
 This was the planned next step and is still **in-game-gated** until that one
 reference pattern exists.
 
+### Step-by-step: capture your first dust → ingot pattern (at the machine)
+
+Do this once. It unblocks the **entire** dust tier — every other metal is the same
+shape with the item ids swapped, which I can generate for you afterward.
+
+**Prerequisite:** an RS **Pattern Grid** (the device that *encodes* patterns; the
+Autocrafter only *holds/runs* them). Craft one if you don't have it.
+
+1. **Place + open the Pattern Grid.** Put a blank `refinedstorage:pattern` in its
+   pattern slot.
+2. **Switch it to Processing mode.** Top-left mode button cycles
+   Crafting → Processing → Stonecutter → Smithing; stop on **Processing**. You'll
+   now see two grids: **Inputs** (left) and **Outputs** (right).
+3. **Fill it for the recipe the smelter does:** put **1 copper dust** in an Inputs
+   slot and **1 copper ingot** in an Outputs slot. (Use copper as the reference —
+   it's verified and high-volume.) Counts matter: 1 → 1.
+4. **Take the encoded pattern out** of the pattern slot.
+5. **Insert it into the Autocrafter** that's wired to a smelter (autocrafter front
+   face → smelter input; smelter output → back to RS via importer/cable). Make sure
+   the chunk is loaded/force-loaded (same AP-crash rule as above).
+6. **Confirm it works:** request 1 copper ingot from RS (or watch the manager PLAN
+   page flip copper from `NOT CRAFTABLE` → `WOULD CRAFT`). If the smelter fires and
+   the ingot returns, the pattern + wiring are correct.
+
+### Hand me the NBT so I can clone the other metals
+
+Once the copper pattern works, with the **pattern item in your hand**, run:
+
+```
+/data get entity @s SelectedItem
+```
+
+Paste me the full output. It contains the real `processing_pattern_state` component
+shape (which I won't guess — see the warning above). From that one reference I'll
+emit ready-to-paste `/give` lines for every other reserve/mostly-dust metal
+(iron, tin, aluminum, zinc, osmium, gold, lead, nickel, silver, platinum, iridium,
+uranium), so you insert the rest without re-encoding each by hand. That's also what
+turns the dormant rows in the Zoozo preset live.
+
 ---
 
 ## Why this matters for the codebase
