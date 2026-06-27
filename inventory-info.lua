@@ -130,6 +130,8 @@ local ui = {            -- bundled flash/page transient scalars (B1-prep)
   flashMsg = nil,       -- transient confirmation on the active page hint line
   flashAt = 0,          -- when flashMsg was set (ms)
   FLASH_MS = 4000,      -- how long an approve/cancel confirmation stays up
+  frame = nil,          -- B1: in-progress render buffer (set during a render)
+  prevFrame = nil,      -- B1: last rendered buffer, for the flicker-free diff
 }
 local smartRowRegions = {} -- tappable suggestion rows on the Smart page
 local smartButtons = nil   -- enable/disable + clear toggle row on the Smart page
@@ -530,8 +532,36 @@ local function pickTextScale()
   monitor.setTextScale(0.5)
 end
 
+-- B1 double-buffer: route drawing through the frame buffer when one is active (set
+-- during a render via present()/the render frame-setup), so the screen diff-renders
+-- with NO monitor.clear() flash between frames. ui.frame holds the in-progress buffer
+-- (a field on the ui table -- no new top-level local at the manager's cap). When no
+-- frame is active (e.g. a direct call outside a render) these write straight through.
 local function line(y, text, color)
-  uiDraw.line(monitor, y, text, color or colors.white, colors.black)
+  if ui.frame then
+    uiDraw.bufferWrite(ui.frame, 1, y, uiDraw.fit(text, ui.frame.width), color or colors.white, colors.black)
+  else
+    uiDraw.line(monitor, y, text, color or colors.white, colors.black)
+  end
+end
+
+local function mwrite(x, y, text, fg, bg)
+  if ui.frame then
+    uiDraw.bufferWrite(ui.frame, x, y, text, fg or colors.white, bg or colors.black)
+  else
+    mwrite(x, y, text, fg or colors.white, bg or colors.black)
+  end
+end
+
+-- Build one frame via renderFn (which draws through line()/mwrite()), then diff-render
+-- only the rows that changed -- no whole-screen clear flash. Used by the small direct
+-- renders (drawWaiting); the main render inlines the same setup/teardown.
+local function present(renderFn)
+  local w, h = monitor.getSize()
+  ui.frame = uiDraw.newBuffer(w, h)
+  renderFn()
+  ui.prevFrame = uiDraw.renderBuffer(monitor, ui.frame, ui.prevFrame)
+  ui.frame = nil
 end
 
 local function getItems()
@@ -1344,11 +1374,11 @@ local function broadcast(data)
 end
 
 local function drawWaiting(message)
-  monitor.setBackgroundColor(colors.black)
-  monitor.clear()
-  line(1, TITLE, colors.cyan)
-  line(3, message, colors.red)
-  line(5, "Attach monitor + RS Bridge to this computer.", colors.gray)
+  present(function()
+    line(1, TITLE, colors.cyan)
+    line(3, message, colors.red)
+    line(5, "Attach monitor + RS Bridge to this computer.", colors.gray)
+  end)
 end
 
 -- The manager monitor is the control console (Plan / Queue / Browse / Presets /
@@ -1414,15 +1444,15 @@ local function drawPlanPage(data)
 
   -- nav row (paging) + a compact tally on the same line
   local prev, next = "[< PREV]", "[NEXT >]"
-  uiDraw.write(monitor, 1, navY, prev, pg.page > 1 and colors.cyan or colors.gray, colors.black)
-  uiDraw.write(monitor, 11, navY, next, pg.page < pg.pages and colors.cyan or colors.gray, colors.black)
+  mwrite(1, navY, prev, pg.page > 1 and colors.cyan or colors.gray, colors.black)
+  mwrite(11, navY, next, pg.page < pg.pages and colors.cyan or colors.gray, colors.black)
   planNavRegions = {
     { x1 = 1, x2 = #prev, y = navY, delta = -1 },
     { x1 = 11, x2 = 10 + #next, y = navY, delta = 1 },
   }
   local tally = data.stockTally or {}
   if w >= 40 then
-    uiDraw.write(monitor, 21, navY, "+" .. fmt(tally.OK) .. " >" .. fmt(tally.WOULD) ..
+    mwrite(21, navY, "+" .. fmt(tally.OK) .. " >" .. fmt(tally.WOULD) ..
       " ~" .. fmt(tally.CRAFTING) .. " x" .. fmt(tally.NO_RECIPE) .. " #" .. fmt(tally.BLOCKED), colors.gray)
   end
 
@@ -1435,7 +1465,7 @@ local function drawPlanPage(data)
     local label = "[APPROVE ALL]"
     local bx = w - #label + 1
     if bx > 30 then
-      uiDraw.write(monitor, bx, h, label, colors.lime, colors.black)
+      mwrite(bx, h, label, colors.lime, colors.black)
       planActionRegion = { x1 = bx, x2 = w, y = h }
     end
   else
@@ -1518,7 +1548,7 @@ local function drawQueuePage(data)
     local label = "[CLEAR QUEUE]"
     local bx = w - #label + 1
     if bx > 34 then
-      uiDraw.write(monitor, bx, hintY, label, colors.orange, colors.black)
+      mwrite(bx, hintY, label, colors.orange, colors.black)
       queueActionRegion = { x1 = bx, x2 = w, y = hintY }
     end
   end
@@ -1596,8 +1626,8 @@ local function drawBrowsePage(data)
 
   local navY = h
   local prev, next = "[< PREV]", "[NEXT >]"
-  uiDraw.write(monitor, 1, navY, prev, pg.page > 1 and colors.cyan or colors.gray, colors.black)
-  uiDraw.write(monitor, 11, navY, next, pg.page < pg.pages and colors.cyan or colors.gray, colors.black)
+  mwrite(1, navY, prev, pg.page > 1 and colors.cyan or colors.gray, colors.black)
+  mwrite(11, navY, next, pg.page < pg.pages and colors.cyan or colors.gray, colors.black)
   browseNavRegions = {
     { x1 = 1, x2 = #prev, y = navY, delta = -1 },
     { x1 = 11, x2 = 10 + #next, y = navY, delta = 1 },
@@ -1606,10 +1636,10 @@ local function drawBrowsePage(data)
   -- Hidden while picking a compress target, where tapping it would be a dead no-op.
   if not (editing and editing.pickingInto) then
     local toggle = browseFilter and "[MANAGED]" or "[ALL]"
-    uiDraw.write(monitor, 21, navY, toggle, colors.black, browseFilter and colors.lime or colors.cyan)
+    mwrite(21, navY, toggle, colors.black, browseFilter and colors.lime or colors.cyan)
     browseFilterBtn = { x1 = 21, x2 = 20 + #toggle, y = navY }
     if w >= 52 then
-      uiDraw.write(monitor, 21 + #toggle + 1, navY, "tap item to set quota", colors.gray, colors.black)
+      mwrite(21 + #toggle + 1, navY, "tap item to set quota", colors.gray, colors.black)
     end
   end
 end
@@ -1618,7 +1648,7 @@ end
 local function renderButtonRow(specs, y)
   local row = console.buttonRow(specs, y, 1, 1)
   for _, b in ipairs(row.buttons) do
-    uiDraw.write(monitor, b.x1, y, b.text, colors.cyan, colors.black)
+    mwrite(b.x1, y, b.text, colors.cyan, colors.black)
   end
   editorRows[#editorRows + 1] = row
   return row
@@ -1647,10 +1677,10 @@ local function renderFieldRow(label, value, field, y)
   -- placed left-to-right with no hardcoded x: [-] LABEL: value [+]. The [+] sits
   -- right after the (exact-integer) value, so it never overlaps a big number.
   local text = label .. ": " .. tostring(math.floor(tonumber(value) or 0))
-  uiDraw.write(monitor, 1, y, "[-]", colors.cyan, colors.black)
-  uiDraw.write(monitor, 5, y, text, colors.white, colors.black)
+  mwrite(1, y, "[-]", colors.cyan, colors.black)
+  mwrite(5, y, text, colors.white, colors.black)
   local plusX = 5 + #text + 1
-  uiDraw.write(monitor, plusX, y, "[+]", colors.cyan, colors.black)
+  mwrite(plusX, y, "[+]", colors.cyan, colors.black)
   editorRows[#editorRows + 1] = { y = y, buttons = {
     { key = field .. ":-", x1 = 1, x2 = 3 },
     { key = field .. ":+", x1 = plusX, x2 = plusX + 2 },
@@ -1669,11 +1699,11 @@ local function drawEditor()
   line(7, "stored: " .. fmt(e.amount) .. "   craftable: " .. (e.craftable and "yes" or "NO"),
     e.craftable and colors.gray or colors.orange)
 
-  uiDraw.write(monitor, 1, 8, "step: " .. stepLabel(e.step) ..
+  mwrite(1, 8, "step: " .. stepLabel(e.step) ..
     (e.step >= STACK and ("  (" .. fmt(e.step) .. ")") or ""), colors.gray, colors.black)
   do
     local r = console.buttonRow({ { label = "STEP", key = "step" } }, 8, 14)
-    for _, b in ipairs(r.buttons) do uiDraw.write(monitor, b.x1, 8, b.text, colors.cyan, colors.black) end
+    for _, b in ipairs(r.buttons) do mwrite(b.x1, 8, b.text, colors.cyan, colors.black) end
     editorRows[#editorRows + 1] = r
   end
 
@@ -1768,7 +1798,7 @@ local function drawSmartPage(data)
     local specs = { { label = on and "DISABLE" or "ENABLE", key = "smarttoggle" } }
     if on and #(data.suggestions or {}) > 0 then specs[#specs + 1] = { label = "CLEAR", key = "smartclear" } end
     local r = console.buttonRow(specs, 7, 1)
-    for _, b in ipairs(r.buttons) do uiDraw.write(monitor, b.x1, 7, b.text, colors.cyan, colors.black) end
+    for _, b in ipairs(r.buttons) do mwrite(b.x1, 7, b.text, colors.cyan, colors.black) end
     smartButtons = r
   end
 
@@ -1834,8 +1864,10 @@ local function draw(data)
     return
   end
 
-  monitor.setBackgroundColor(colors.black)
-  monitor.clear()
+  -- B1: draw into a fresh frame buffer (line()/mwrite() target it); diff-rendered at
+  -- the end of this function instead of a whole-screen monitor.clear() flash.
+  local rw, rh = monitor.getSize()
+  ui.frame = uiDraw.newBuffer(rw, rh)
   planRowRegions = {} -- rebuilt each render for touch hit-testing
   planNavRegions = {}
   planActionRegion = nil
@@ -1861,13 +1893,10 @@ local function draw(data)
   if (tabStrip.tabs[#tabStrip.tabs] and tabStrip.tabs[#tabStrip.tabs].x2 or 0) > tabW then
     tabStrip = console.tabs(PAGES_SHORT, 2)
   end
-  monitor.setCursorPos(1, 2)
-  monitor.setBackgroundColor(colors.black)
-  monitor.clearLine()
   -- active tab is highlighted (inverted) so "you are here" + tap targets are clear
   for _, tab in ipairs(tabStrip.tabs) do
     local active = tab.page == pageIndex
-    uiDraw.write(monitor, tab.x1, tabStrip.y, "[" .. tab.label .. "]",
+    mwrite(tab.x1, tabStrip.y, "[" .. tab.label .. "]",
       active and colors.black or colors.lightGray, active and colors.cyan or colors.black)
   end
 
@@ -1889,20 +1918,17 @@ local function draw(data)
     local craftLive = (config.allowAutocraft == true)
       and (mode == control.MODE_MANUAL or mode == control.MODE_AUTO)
     -- tappable mode chip: tap to cycle monitor->dry-run->manual->auto (auto needs a confirm tap)
-    monitor.setCursorPos(1, 4)
-    monitor.setBackgroundColor(colors.black)
-    monitor.clearLine()
     local chip = "[" .. mode .. (ui.modeConfirm == control.MODE_AUTO and " AUTO?" or "") .. "]"
-    uiDraw.write(monitor, 1, 4, chip, colors.black,
+    mwrite(1, 4, chip, colors.black,
       ui.modeConfirm == control.MODE_AUTO and colors.orange or colors.cyan)
     modeChip = { x1 = 1, x2 = #chip, y = 4 }
-    uiDraw.write(monitor, #chip + 2, 4, "autocraft: " .. (craftLive and "ON" or "off") ..
+    mwrite(#chip + 2, 4, "autocraft: " .. (craftLive and "ON" or "off") ..
       "   Queue: " .. cqueue.count(craftQueue), craftLive and colors.lime or colors.gray)
     -- right-aligned reboot-safety chip (warns before a detach that could crash the
     -- server); only drawn when the monitor is wide enough to avoid clobbering above
     local rbText, rbColor = rebootChip()
     local rbx = tabW - #rbText + 1
-    if rbx > #chip + 30 then uiDraw.write(monitor, rbx, 4, rbText, rbColor, colors.black) end
+    if rbx > #chip + 30 then mwrite(rbx, 4, rbText, rbColor, colors.black) end
   end
 
   -- the quota editor is a modal: it renders over any tab when open (unless we're
@@ -1922,6 +1948,10 @@ local function draw(data)
   else
     drawPlanPage(data)
   end
+
+  -- B1: flush the frame -- diff-render only the changed rows (no clear() flash).
+  ui.prevFrame = uiDraw.renderBuffer(monitor, ui.frame, ui.prevFrame)
+  ui.frame = nil
 end
 
 local function setPage(i)
