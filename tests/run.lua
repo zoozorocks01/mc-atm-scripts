@@ -1638,6 +1638,15 @@ t.check(shortStrip.tabs[#shortStrip.tabs].x2 <= 34, "short tab strip fits a ~34-
 local hitRows = { { y = 5, entry = "a" }, { y = 6, entry = "b" } }
 t.eq(console.rowHit(hitRows, 6), "b", "rowHit returns the entry at that y")
 t.eq(console.rowHit(hitRows, 9), nil, "rowHit miss -> nil")
+-- forgiving taps: tolerance snaps a near-miss to the nearest target (the finicky-tap fix).
+local tolRows = { { y = 5, entry = "a" }, { y = 8, entry = "b" } }
+t.eq(console.rowHit(tolRows, 6), nil, "rowHit tol 0 (default): a 1-off tap still misses")
+t.eq(console.rowHit(tolRows, 6, 1), "a", "rowHit tol 1: 1-off snaps to the nearest row (5)")
+t.eq(console.rowHit(tolRows, 9, 1), "b", "rowHit tol 1: 1-off snaps to the nearest row (8)")
+t.eq(console.rowHit(tolRows, 12, 1), nil, "rowHit tol 1: beyond tolerance -> nil")
+t.eq(console.tabHit(strip, 3, 3), nil, "tabHit tol 0: a 1-off row misses")
+t.eq(console.tabHit(strip, 3, 3, 1), 1, "tabHit tol 1: a 1-off row still hits the tab")
+t.eq(console.tabHit(strip, 3, 5, 1), nil, "tabHit tol 1: 3 rows off is still beyond tolerance")
 
 -- display profile resolver (viewer screens), mirrors the theme resolver
 t.clearFiles()

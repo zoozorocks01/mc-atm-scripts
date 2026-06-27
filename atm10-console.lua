@@ -25,8 +25,12 @@ function console.tabs(pageNames, y, startX)
 end
 
 -- Which page index (if any) was tapped on the tab strip.
-function console.tabHit(tabStrip, x, y)
-  if type(tabStrip) ~= "table" or y ~= tabStrip.y then return nil end
+-- tol (optional) widens the vertical hit window: a tap within `tol` rows of the
+-- strip still counts (the tab strip's neighbour rows are non-interactive, so this
+-- is a free precision boost on a finicky monitor). x must still be within a tab.
+function console.tabHit(tabStrip, x, y, tol)
+  if type(tabStrip) ~= "table" then return nil end
+  if math.abs(y - tabStrip.y) > (tonumber(tol) or 0) then return nil end
   for _, t in ipairs(tabStrip.tabs or {}) do
     if x >= t.x1 and x <= t.x2 then return t.page end
   end
@@ -35,11 +39,19 @@ end
 
 -- rows: array of { y = <screen row>, entry = <opaque> }. Returns the entry whose
 -- row matches y, or nil. The renderer only adds rows that are actionable.
-function console.rowHit(rows, y)
+-- tol (optional, default 0 = exact) makes a near-miss SNAP to the nearest actionable
+-- row within `tol` rows -- so a tap a row or two off a list item still selects it.
+-- Ties resolve to the first row encountered (deterministic).
+function console.rowHit(rows, y, tol)
+  tol = tonumber(tol) or 0
+  local best, bestDist
   for _, r in ipairs(rows or {}) do
-    if r.y == y then return r.entry end
+    local d = math.abs(r.y - y)
+    if d <= tol and (not bestDist or d < bestDist) then
+      best, bestDist = r.entry, d
+    end
   end
-  return nil
+  return best
 end
 
 -- Lay out a row of labeled buttons like "[-1] [+1] [SAVE]" at (startX, y).

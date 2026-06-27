@@ -2141,7 +2141,7 @@ end
 -- Touch handling while the quota editor is open.
 local function handleEditorTouch(x, y)
   -- tabs still navigate (and exit the editor)
-  local page = console.tabHit(tabStrip, x, y)
+  local page = console.tabHit(tabStrip, x, y, 1)
   if page then setPage(page); renderCurrent(); return end
 
   for _, row in ipairs(editorRows) do
@@ -2180,7 +2180,7 @@ end
 
 -- Touch handling while picking a compress-into target from the Browse grid.
 local function handlePickIntoTouch(x, y)
-  local page = console.tabHit(tabStrip, x, y)
+  local page = console.tabHit(tabStrip, x, y, 1)
   if page then setPage(page); renderCurrent(); return end -- tab cancels the whole edit
 
   for _, nav in ipairs(browseNavRegions) do
@@ -2190,7 +2190,7 @@ local function handlePickIntoTouch(x, y)
     end
   end
 
-  local pick = console.rowHit(browseRowRegions, y)
+  local pick = console.rowHit(browseRowRegions, y, 1)
   if pick then
     editing.into = { name = pick.name, label = pick.label }
     editing.pickingInto = false
@@ -2221,7 +2221,7 @@ local function handleTouch(x, y)
     return
   end
 
-  local page = console.tabHit(tabStrip, x, y)
+  local page = console.tabHit(tabStrip, x, y, 1)
   if page then
     setPage(page)
     renderCurrent()
@@ -2245,7 +2245,7 @@ local function handleTouch(x, y)
     return
   end
 
-  local planEntry = console.rowHit(planRowRegions, y)
+  local planEntry = console.rowHit(planRowRegions, y, 1)
   if planEntry then
     approve(planEntry)
     renderCurrent()
@@ -2259,14 +2259,14 @@ local function handleTouch(x, y)
     return
   end
 
-  local queueEntry = console.rowHit(queueRowRegions, y)
+  local queueEntry = console.rowHit(queueRowRegions, y, 1)
   if queueEntry then
     cancelEntry(queueEntry)
     renderCurrent()
     return
   end
 
-  local presetEntry = console.rowHit(presetRowRegions, y)
+  local presetEntry = console.rowHit(presetRowRegions, y, 1)
   if presetEntry then
     applyPreset(presetEntry)
     renderCurrent()
@@ -2292,7 +2292,7 @@ local function handleTouch(x, y)
     renderCurrent()
     return
   end
-  local smartEntry = console.rowHit(smartRowRegions, y)
+  local smartEntry = console.rowHit(smartRowRegions, y, 1)
   if smartEntry then
     openEditor({ name = smartEntry.name, label = smartEntry.label, craftable = true, seeded = true,
       target = smartEntry.target, craftTo = smartEntry.craftTo, ceiling = smartEntry.ceiling })
@@ -2317,11 +2317,18 @@ local function handleTouch(x, y)
     end
   end
 
-  local browseEntry = console.rowHit(browseRowRegions, y)
+  local browseEntry = console.rowHit(browseRowRegions, y, 1)
   if browseEntry then
     openEditor(browseEntry)
     renderCurrent()
+    return
   end
+
+  -- Nothing matched: flash the tap's coords so a "dead" tap is VISIBLE (taps on this
+  -- monitor are finicky; this shows exactly where a miss landed, to tune targets).
+  ui.flashMsg = "tap " .. x .. "," .. y .. " - no target"
+  ui.flashAt = nowMs()
+  renderCurrent()
 end
 
 -- A rising edge on the configured side flips to the next page.
