@@ -7,6 +7,7 @@
 -- read with `edit`. NEVER crafts/exports/moves anything; only reads getCraftableItems.
 
 local managed = require("atm10-managed")
+local pgive = require("atm10-pattern-give")
 
 local OUT_FILE = ".atm10-patterns-needed.txt"
 local CONFIG_FILE = "inventory-config"
@@ -107,6 +108,23 @@ local cat = nil
 for _, it in ipairs(need) do
   if it.category ~= cat then cat = it.category; out("-- " .. tostring(cat) .. " --") end
   out("  " .. it.label .. "   (" .. it.name .. ")")
+end
+
+-- Ready-to-paste /give commands for the patterns we can DERIVE (block compress /
+-- ingot uncompress). Paste each in chat as op, then insert the pattern into the
+-- autocrafter by hand. Items without a *_ingot/*_block suffix are NOT auto-derivable
+-- (processing patterns like dust->ingot still need an in-world reference -- see
+-- docs/RS_PATTERN_SPAWNING.md).
+local gives = pgive.emitForItems(need)
+out("")
+out("== /GIVE COMMANDS (" .. #gives .. " derivable: block compress / ingot uncompress) ==")
+if #gives == 0 then
+  out("  (none of the needed items are a *_ingot/*_block we can derive a pattern for)")
+else
+  for _, g in ipairs(gives) do
+    out("-- " .. g.label .. " [" .. g.kind .. "]")
+    out(g.command)
+  end
 end
 
 out("")

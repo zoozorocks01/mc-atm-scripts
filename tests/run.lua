@@ -2051,4 +2051,20 @@ t.eq(pgive.deriveIngotId("alltheores:tin_block"), "alltheores:tin_ingot", "deriv
 t.eq(pgive.deriveBlockId("minecraft:diamond"), nil, "deriveBlockId nil when no _ingot suffix")
 t.eq(pgive.deriveIngotId("minecraft:diamond"), nil, "deriveIngotId nil when no _block suffix")
 
+-- emitForItems: derive a compress (block) / uncompress (ingot) /give per item, skip
+-- non-derivable ones, with a distinct running idQuad. This is what atm10-patterns
+-- prints. Biting: wrong derivation/id/skip changes the command or the count.
+local em = pgive.emitForItems({
+  { name = "alltheores:tin_block", label = "Tin Block" },
+  { name = "alltheores:lead_ingot", label = "Lead Ingot" },
+  { name = "minecraft:redstone", label = "Redstone" }, -- not derivable -> skipped
+})
+t.eq(#em, 2, "emitForItems: derivable block+ingot emitted, non-metal skipped")
+t.eq(em[1].kind, "compress", "emitForItems: *_block -> compress")
+t.eq(em[1].command, pgive.compressIngotToBlock("alltheores:tin_ingot", pgive.idQuad(1)),
+  "emitForItems: block emits the compress-from-ingot command (derived ingot + id #1)")
+t.eq(em[2].kind, "uncompress", "emitForItems: *_ingot -> uncompress")
+t.eq(em[2].command, pgive.uncompressBlockToIngots("alltheores:lead_block", pgive.idQuad(2, "uncompress")),
+  "emitForItems: ingot emits the uncompress-from-block command (derived block + id #2)")
+
 os.exit(t.summary() and 0 or 1)

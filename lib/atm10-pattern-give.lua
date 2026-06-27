@@ -98,4 +98,32 @@ function give.deriveIngotId(blockId)
   return stem .. "_ingot"
 end
 
+-- For a list of needed items { {name, label} ... }, emit a ready-to-paste /give for
+-- each one we can DERIVE a crafting pattern for, NEVER guessing:
+--   *_block -> a compress-from-ingots pattern (9 ingots -> block, 3x3)
+--   *_ingot -> an uncompress-from-block pattern (1 block -> 9 ingots, 1x1)
+-- Anything else (no _ingot/_block suffix) is skipped. Each emitted pattern gets a
+-- distinct idQuad (running index; compress uses the default band, uncompress the
+-- 80000 band, so the two never collide). Returns { {name, label, kind, command} }.
+function give.emitForItems(items)
+  local out, n = {}, 0
+  for _, it in ipairs(items or {}) do
+    local name = it and it.name
+    if type(name) == "string" then
+      local cmd, kind
+      if name:match("_block$") then
+        local ingot = give.deriveIngotId(name)
+        if ingot then n = n + 1; cmd = give.compressIngotToBlock(ingot, give.idQuad(n)); kind = "compress" end
+      elseif name:match("_ingot$") then
+        local block = give.deriveBlockId(name)
+        if block then n = n + 1; cmd = give.uncompressBlockToIngots(block, give.idQuad(n, "uncompress")); kind = "uncompress" end
+      end
+      if cmd then
+        out[#out + 1] = { name = name, label = it.label or name, kind = kind, command = cmd }
+      end
+    end
+  end
+  return out
+end
+
 return give
