@@ -40,6 +40,41 @@ _G.os = {
   -- pullEvent is installed below once the event queue is built
 }
 
+-- ---- parallel stub (TOUCH-DECOUPLE) ----------------------------------------
+-- The manager's main loop is now parallel.waitForAny(scanLoop, inputLoop); plain Lua
+-- has no `parallel` API, so we stub it. The stub re-creates CC's scheduling over the
+-- smoke's EXISTING scripted event array with NO edits: _G.os.pullEvent is the master
+-- timeline, and each scripted event is routed onto the two decoupled coroutines as CC
+-- would --
+--   {"timer", ...}  -> run ONE scan/render cycle (scanLoop: refreshAndDraw then sleep)
+--   any other event -> deliver to the input loop's os.pullEvent (tab taps, preset/
+--                      smart toggles, redstone, resize)
+-- so the PLAN page still renders from a scan and every tap is still dispatched, in
+-- scripted order. When the script is exhausted the smoke's pullEvent raises the
+-- SENTINEL, which propagates out of waitForAny -> dofile -> the smoke's pcall.
+_G.parallel = {
+  waitForAny = function(scanLoop, inputLoop)
+    local script = _G.os.pullEvent          -- the smoke's scripted event source
+    local scanCo = coroutine.create(scanLoop)
+    local inputCo = coroutine.create(inputLoop)
+    _G.sleep = function() return coroutine.yield() end
+    _G.os.pullEvent = function() return coroutine.yield() end
+    local function step(co, ...)
+      local ok, err = coroutine.resume(co, ...)
+      if not ok then error(err, 0) end       -- propagate a real loop error OR the SENTINEL
+    end
+    step(inputCo)                            -- prime the input loop to its first pullEvent
+    while true do
+      local ev = { script() }                -- next scripted event (raises SENTINEL when done)
+      if ev[1] == "timer" then
+        step(scanCo)
+      else
+        step(inputCo, table.unpack(ev))
+      end
+    end
+  end,
+}
+
 -- in-memory filesystem: no files exist; writes go to a sink
 local files = {}
 _G.fs = {
@@ -154,12 +189,15 @@ local events = {
   { "monitor_resize" },                 -- resize -> rescale + redraw
 }
 local ei = 0
-_G.os.pullEvent = function()
+-- named so each run can re-install it (the parallel stub overwrites _G.os.pullEvent
+-- with its yield-version during a run, so the next run must restore the script source).
+local function scriptPull()
   ei = ei + 1
   local ev = events[ei]
   if not ev then error(SENTINEL, 0) end
   return table.unpack(ev)
 end
+_G.os.pullEvent = scriptPull
 
 -- ---- run it ----------------------------------------------------------------
 print("smoke: running inventory/manager.lua against stubbed CC env")
@@ -187,6 +225,7 @@ check(blob:find("Attach monitor", 1, true) == nil,
 do
   screen = {}
   ei = 0
+  _G.os.pullEvent = scriptPull -- restore the script source (the prior run clobbered it)
   -- present a modem on "back" so openBroadcastModems flips broadcastReady = true
   _G.peripheral.getType = function(n)
     if n == "monitor_0" then return "monitor" end

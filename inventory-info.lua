@@ -2420,33 +2420,48 @@ do
   end
 end
 
-local refreshTimer = os.startTimer(0)
-
-while true do
-  local ev = { os.pullEvent() }
-  local kind = ev[1]
-
-  if kind == "timer" and ev[2] == refreshTimer then
-    guard(advancePageIfDue)
-    guard(refreshAndDraw)
-    -- a completed refresh tick means the loop is alive: ping the watchdog. (A hang
-    -- inside refreshAndDraw stops these pings, and the startup watchdog restarts us.)
-    writeHeartbeat(nowMs())
-    -- poll interval is operator-tunable (config.refreshSeconds) so a laggy server
-    -- can dial back RS-Bridge load; falls back to the constant before first load
-    refreshTimer = os.startTimer((config and config.refreshSeconds) or REFRESH_SECONDS)
-  elseif kind == "monitor_touch" then
-    guard(handleTouch, ev[3], ev[4])
-  elseif kind == "redstone" then
-    guard(handleRedstone)
-  elseif kind == "monitor_resize" then
-    guard(function()
-      if monitor then pickTextScale() end
-      renderCurrent()
-    end)
-  elseif kind == "rednet_message" and ev[4] == control.PROTOCOL then
-    -- CTRL-3: inbound control command (off unless config.controlEnabled). Guarded
-    -- like every loop step so a malformed command can't freeze the console.
-    guard(handleControlMessage, ev[2], ev[3])
+-- TOUCH-DECOUPLE: the heavy RS scan (refreshAndDraw -> bridge.getItems over a huge
+-- network) blocks the single CC thread; in a single os.pullEvent loop, a tap arriving
+-- mid-scan is dead until the scan returns. Split into two coroutines via
+-- parallel.waitForAny: the scan/render loop sleeps between scans (yielding the thread),
+-- and an independent input loop services monitor_touch/redstone/resize/control the
+-- whole time -- including WHILE the scan is parked inside getItems (which yields
+-- internally, so CC keeps the input coroutine responsive). Behavior of every handler
+-- is unchanged; only the dispatch is decoupled. (`parallel` is a CC global; the
+-- off-CC smokes stub it.) No new top-level locals -- both loops are anonymous.
+parallel.waitForAny(
+  function()
+    -- scan/render loop: refresh FIRST, then sleep the operator-tunable interval
+    -- (config.refreshSeconds, falling back to the constant before first load). A
+    -- completed refresh pings the watchdog -- a hang inside refreshAndDraw stops the
+    -- pings, and the startup watchdog restarts us.
+    while true do
+      guard(advancePageIfDue)
+      guard(refreshAndDraw)
+      writeHeartbeat(nowMs())
+      sleep((config and config.refreshSeconds) or REFRESH_SECONDS)
+    end
+  end,
+  function()
+    -- input loop: services taps/redstone/resize/control independently of the scan,
+    -- so a tap during a scan is handled the moment the scan yields, not after it
+    -- returns. Every dispatch is guarded so a malformed event can't freeze the loop.
+    while true do
+      local ev = { os.pullEvent() }
+      local kind = ev[1]
+      if kind == "monitor_touch" then
+        guard(handleTouch, ev[3], ev[4])
+      elseif kind == "redstone" then
+        guard(handleRedstone)
+      elseif kind == "monitor_resize" then
+        guard(function()
+          if monitor then pickTextScale() end
+          renderCurrent()
+        end)
+      elseif kind == "rednet_message" and ev[4] == control.PROTOCOL then
+        -- CTRL-3: inbound control command (off unless config.controlEnabled).
+        guard(handleControlMessage, ev[2], ev[3])
+      end
+    end
   end
-end
+)

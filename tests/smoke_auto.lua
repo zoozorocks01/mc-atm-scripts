@@ -31,6 +31,44 @@ _G.os = {
   getComputerID = function() return 7 end,
 }
 
+-- ---- parallel stub (TOUCH-DECOUPLE) ----------------------------------------
+-- The manager's main loop is now parallel.waitForAny(scanLoop, inputLoop), but plain
+-- Lua has no `parallel` API, so we stub it. The stub re-creates CC's scheduling over
+-- the smoke's EXISTING scripted event arrays with NO edits to them: the smoke's
+-- _G.os.pullEvent is the master timeline, and we route each scripted event onto the
+-- two decoupled coroutines exactly as CC would --
+--   {"timer", ...}  -> run ONE scan/render cycle (scanLoop: refreshAndDraw then sleep)
+--   any other event -> deliver to the input loop's os.pullEvent (touch/redstone/
+--                      resize/control)
+-- so scan-driven assertions still see refreshAndDraw fire, and event-driven assertions
+-- still see their event dispatched -- interleaved in scripted order. When the script
+-- is exhausted, the smoke's pullEvent raises the SENTINEL, which propagates out of
+-- waitForAny -> dofile -> the smoke's pcall, exactly as before.
+_G.parallel = {
+  waitForAny = function(scanLoop, inputLoop)
+    local script = _G.os.pullEvent          -- the smoke's scripted event source
+    local scanCo = coroutine.create(scanLoop)
+    local inputCo = coroutine.create(inputLoop)
+    -- inside the loops: sleep() parks the scan coroutine after one cycle; os.pullEvent()
+    -- parks the input coroutine until the driver hands it the next routed event.
+    _G.sleep = function() return coroutine.yield() end
+    _G.os.pullEvent = function() return coroutine.yield() end
+    local function step(co, ...)
+      local ok, err = coroutine.resume(co, ...)
+      if not ok then error(err, 0) end       -- propagate a real loop error OR the SENTINEL
+    end
+    step(inputCo)                            -- prime: advance the input loop to its first pullEvent
+    while true do
+      local ev = { script() }                -- next scripted event (raises SENTINEL when done)
+      if ev[1] == "timer" then
+        step(scanCo)                          -- one refresh cycle; parks at sleep()
+      else
+        step(inputCo, table.unpack(ev))       -- one event delivered; parks at os.pullEvent()
+      end
+    end
+  end,
+}
+
 -- in-memory fs: only the managed-store file "exists" (carries a sentinel we map to
 -- the real store in unserialize). No queue/ledger/trends files -> clean no-file
 -- paths, so no stale ledger cooldown interferes with the single cycle.
@@ -134,12 +172,15 @@ _G.peripheral = {
 local SENTINEL = "__SMOKE_AUTO_DONE__"
 local events = { { "timer", 1 } }
 local ei = 0
-_G.os.pullEvent = function()
+-- named so the STAB-2 run (which reuses this single-timer script) can re-install it:
+-- the parallel stub overwrites _G.os.pullEvent with its yield-version during a run.
+local function scriptPull()
   ei = ei + 1
   local ev = events[ei]
   if not ev then error(SENTINEL, 0) end
   return table.unpack(ev)
 end
+_G.os.pullEvent = scriptPull
 
 -- ---- run it ----------------------------------------------------------------
 print("smoke-auto: running inventory/manager.lua in AUTO mode against a craftable deficit")
@@ -179,6 +220,7 @@ end
 files = { [MANAGED_FILE] = "MANAGED" }
 clock = 0
 ei = 0
+_G.os.pullEvent = scriptPull -- restore the script source (the prior run clobbered it)
 local BR2 = fakeBridgeRace()
 _G.peripheral.wrap = function(n)
   if n == "monitor_0" then return MON end
