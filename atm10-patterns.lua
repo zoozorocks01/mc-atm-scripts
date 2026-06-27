@@ -7,7 +7,11 @@
 -- read with `edit`. NEVER crafts/exports/moves anything; only reads getCraftableItems.
 
 local managed = require("atm10-managed")
-local pgive = require("atm10-pattern-give")
+-- Optional: a missing atm10-pattern-give (e.g. not yet deployed -- update fetches a
+-- newly-added manifest file only on the SECOND run) must NOT crash the tool. pcall it
+-- and just skip the /give section if absent.
+local okPgive, pgive = pcall(require, "atm10-pattern-give")
+if not okPgive then pgive = nil end
 
 local OUT_FILE = ".atm10-patterns-needed.txt"
 local CONFIG_FILE = "inventory-config"
@@ -115,15 +119,20 @@ end
 -- autocrafter by hand. Items without a *_ingot/*_block suffix are NOT auto-derivable
 -- (processing patterns like dust->ingot still need an in-world reference -- see
 -- docs/RS_PATTERN_SPAWNING.md).
-local gives = pgive.emitForItems(need)
-out("")
-out("== /GIVE COMMANDS (" .. #gives .. " derivable: block compress / ingot uncompress) ==")
-if #gives == 0 then
-  out("  (none of the needed items are a *_ingot/*_block we can derive a pattern for)")
+if not pgive then
+  out("")
+  out("(/give emission unavailable: atm10-pattern-give not deployed -- run `update` again)")
 else
-  for _, g in ipairs(gives) do
-    out("-- " .. g.label .. " [" .. g.kind .. "]")
-    out(g.command)
+  local gives = pgive.emitForItems(need)
+  out("")
+  out("== /GIVE COMMANDS (" .. #gives .. " derivable: block compress / ingot uncompress) ==")
+  if #gives == 0 then
+    out("  (none of the needed items are a *_ingot/*_block we can derive a pattern for)")
+  else
+    for _, g in ipairs(gives) do
+      out("-- " .. g.label .. " [" .. g.kind .. "]")
+      out(g.command)
+    end
   end
 end
 
