@@ -21,6 +21,7 @@ local presets = require("atm10-presets")
 local console = require("atm10-console")
 local power = require("atm10-power")
 local health = require("atm10-health")
+local pgive = require("atm10-pattern-give")
 
 -- ---------------------------------------------------------------------------
 print("status vocabulary")
@@ -1999,5 +2000,55 @@ for file, libs in pairs(requireGuards) do
     t.check(src:find('require("' .. lib .. '")', 1, true) ~= nil, file .. " requires " .. lib)
   end
 end
+
+-- ---------------------------------------------------------------------------
+print("pattern /give emitter (CRAFT-4)")
+
+-- GOLDEN: byte-exact match to the in-world-proven commands. These literals are
+-- copied verbatim from the two ~/Downloads give-command files (compress + un-
+-- compress) that were pasted live. If any byte of the format drifts (fuzzyMode,
+-- left/top, count, bracket nesting, item order) these FAIL -> the test is biting.
+local GOLD_LEAD = [[/give @s refinedstorage:pattern[refinedstorage:pattern_state={type:"crafting",id:[I;3001,9003,15005,21007]},refinedstorage:crafting_pattern_state={input:{input:{height:3,width:3,items:[{id:"alltheores:lead_ingot",count:1},{id:"alltheores:lead_ingot",count:1},{id:"alltheores:lead_ingot",count:1},{id:"alltheores:lead_ingot",count:1},{id:"alltheores:lead_ingot",count:1},{id:"alltheores:lead_ingot",count:1},{id:"alltheores:lead_ingot",count:1},{id:"alltheores:lead_ingot",count:1},{id:"alltheores:lead_ingot",count:1}]},left:0,top:0},fuzzyMode:0b}] 1]]
+local GOLD_STEEL = [[/give @s refinedstorage:pattern[refinedstorage:pattern_state={type:"crafting",id:[I;3005,9015,15025,21035]},refinedstorage:crafting_pattern_state={input:{input:{height:3,width:3,items:[{id:"alltheores:steel_ingot",count:1},{id:"alltheores:steel_ingot",count:1},{id:"alltheores:steel_ingot",count:1},{id:"alltheores:steel_ingot",count:1},{id:"alltheores:steel_ingot",count:1},{id:"alltheores:steel_ingot",count:1},{id:"alltheores:steel_ingot",count:1},{id:"alltheores:steel_ingot",count:1},{id:"alltheores:steel_ingot",count:1}]},left:0,top:0},fuzzyMode:0b}] 1]]
+local GOLD_TIN = [[/give @s refinedstorage:pattern[refinedstorage:pattern_state={type:"crafting",id:[I;80001,80002,80003,80004]},refinedstorage:crafting_pattern_state={input:{input:{height:1,width:1,items:[{id:"alltheores:tin_block",count:1}]},left:0,top:0},fuzzyMode:0b}] 1]]
+
+t.eq(pgive.compressIngotToBlock("alltheores:lead_ingot", { 3001, 9003, 15005, 21007 }), GOLD_LEAD,
+  "lead compress give matches proven command")
+t.eq(pgive.compressIngotToBlock("alltheores:steel_ingot", { 3005, 9015, 15025, 21035 }), GOLD_STEEL,
+  "steel compress give matches proven command")
+t.eq(pgive.uncompressBlockToIngots("alltheores:tin_block", { 80001, 80002, 80003, 80004 }), GOLD_TIN,
+  "tin uncompress give matches proven command")
+
+-- idQuad: determinism + the default block scheme + distinctness per pattern.
+local q1 = pgive.idQuad(1)
+t.eq(q1[1], 3001, "idQuad(1)[1]"); t.eq(q1[2], 9003, "idQuad(1)[2]")
+t.eq(q1[3], 15005, "idQuad(1)[3]"); t.eq(q1[4], 21007, "idQuad(1)[4]")
+local q2 = pgive.idQuad(2)
+t.eq(q2[1], 3002, "idQuad(2)[1]"); t.eq(q2[2], 9006, "idQuad(2)[2]")
+t.eq(q2[3], 15010, "idQuad(2)[3]"); t.eq(q2[4], 21014, "idQuad(2)[4]")
+local seen = {}
+local distinct = true
+for n = 1, 20 do
+  local q = pgive.idQuad(n)
+  for i = 1, 4 do
+    if seen[q[i]] then distinct = false end
+    seen[q[i]] = true
+  end
+end
+t.check(distinct, "idQuad n=1..20 produces 80 distinct ints (no handle collisions)")
+-- uncompress scheme reproduces the uncompress-file band (tin n=0 -> 80001..80004).
+local qu = pgive.idQuad(0, "uncompress")
+t.eq(qu[1], 80001, "uncompress idQuad(0)[1]"); t.eq(qu[4], 80004, "uncompress idQuad(0)[4]")
+
+-- ARITY guard (biting on the no-partial-emit safety rule): 2 items != 3x3.
+local bad, badErr = pgive.craftingGive({ items = { "a", "a" }, width = 3, height = 3, id = { 1, 2, 3, 4 } })
+t.eq(bad, nil, "craftingGive rejects wrong item count (returns nil)")
+t.check(type(badErr) == "string", "craftingGive returns an error string on arity failure")
+
+-- derive: suffix swap pairs ingot<->block; nil when the suffix is absent (no guess).
+t.eq(pgive.deriveBlockId("alltheores:lead_ingot"), "alltheores:lead_block", "deriveBlockId lead")
+t.eq(pgive.deriveIngotId("alltheores:tin_block"), "alltheores:tin_ingot", "deriveIngotId tin")
+t.eq(pgive.deriveBlockId("minecraft:diamond"), nil, "deriveBlockId nil when no _ingot suffix")
+t.eq(pgive.deriveIngotId("minecraft:diamond"), nil, "deriveIngotId nil when no _block suffix")
 
 os.exit(t.summary() and 0 or 1)
