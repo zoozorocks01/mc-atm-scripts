@@ -125,6 +125,97 @@ return {
           { label = "Basic Processor", name = "refinedstorage:processor", target = 64, craftTo = 128 },
         },
       },
+
+      -- ============================================================================
+      -- DUST / SMELTER TIER (paste-ready) -- operator's late-game ore-balancer spec
+      -- ============================================================================
+      -- THIS WHOLE BLOCK IS DORMANT UNTIL THE AUTOCRAFTER + PROCESSING PATTERNS EXIST.
+      -- It needs, to actually move anything:
+      --   1. The autocrafter wired (allowAutocraft = true, mode manual/auto, approve).
+      --   2. dust -> ingot PROCESSING PATTERNS spawned in RS for every metal below
+      --      (a smelter recipe RS can fire). Without them every row reads NOT
+      --      CRAFTABLE and the balancer plans nothing -- harmless, just inert.
+      --   3. The reserve/mostly-dust/tiny-dust items STRIPPED FROM THE EXPORTER
+      --      FILTERS so the manager (not blanket exporters) governs them. Items the
+      --      exporters still blanket-smelt (steel/bronze/brass/invar/electrum/etc.)
+      --      must NOT be listed here -- they have NO manager config by design.
+      --
+      -- THE MODEL (three tiers, all built from existing managed-quota fields):
+      --   * RESERVE metals  = DUST OVERFLOW. Entry sits on the DUST: keep N dust,
+      --     smelt the SURPLUS above N into the ingot. ceiling = the reserve N,
+      --     into = { the ingot }, ratio = 1. target is small (dust is not
+      --     refillable -- nothing crafts INTO dust here), so it never tries to make
+      --     dust; it only compresses the overflow downward into ingots.
+      --   * MOSTLY-DUST metals = INGOT FLOOR. Entry sits on the INGOT: keep ~2.5k
+      --     ingots, the rest of the metal stays as dust. target/craftTo = 2500 and
+      --     craftFrom = { the dust, reserve = 0, ratio = 1 } -- smelts dust ONLY up
+      --     to the 2.5k ingot floor; any surplus stays dust.
+      --   * TINY dusts = WATCH-ONLY floor (target only, no craftTo/ceiling). They
+      --     cannot refill until dust->tiny CRAFTING patterns exist; for now they are
+      --     just a keep-N watch so a drain is visible on the Plan page.
+      --
+      -- NOT IN THIS BLOCK (intentional):
+      --   * SMELT-IMMEDIATELY alloys (steel, bronze, brass, invar, electrum, battery
+      --     alloy, other alloys): operator's exporters blanket-smelt these -> no
+      --     manager config.
+      --   * MI metals: handled by Modern Industrialization, NOT managed here (the one
+      --     exception, battery alloy, falls under smelt-immediately above).
+      --
+      -- ID VERIFICATION (against lib/atm10-presets.lua zoozo-late-game chains):
+      --   VERIFIED dust+ingot pairs: copper, iron, tin, aluminum, zinc, osmium, gold,
+      --   lead, nickel, silver. Ingots minecraft: for iron/gold/copper, alltheores:
+      --   for the rest. The lines below tagged "VERIFY-JEI" are IDs the presets file
+      --   did NOT contain -- the operator MUST confirm them in JEI before relying on
+      --   them (see the FLAGGED list in the handoff). Do not assume they are correct.
+      {
+        label = "Dust: reserve metals (dust overflow -> ingot)",
+        items = {
+          -- Keep `ceiling` dust; smelt everything above it into the ingot (ratio 1).
+          -- target = 1 (dust isn't refillable here; keep tiny so nothing crafts dust).
+          { label = "Copper Dust",   name = "alltheores:copper_dust",   target = 1, craftTo = 1, ceiling = 150000, ratio = 1, into = { name = "minecraft:copper_ingot",    label = "Copper Ingot"   } },
+          { label = "Iron Dust",     name = "alltheores:iron_dust",     target = 1, craftTo = 1, ceiling = 150000, ratio = 1, into = { name = "minecraft:iron_ingot",      label = "Iron Ingot"     } },
+          { label = "Tin Dust",      name = "alltheores:tin_dust",      target = 1, craftTo = 1, ceiling = 150000, ratio = 1, into = { name = "alltheores:tin_ingot",      label = "Tin Ingot"      } },
+          { label = "Aluminum Dust", name = "alltheores:aluminum_dust", target = 1, craftTo = 1, ceiling = 150000, ratio = 1, into = { name = "alltheores:aluminum_ingot", label = "Aluminum Ingot" } },
+          { label = "Zinc Dust",     name = "alltheores:zinc_dust",     target = 1, craftTo = 1, ceiling = 150000, ratio = 1, into = { name = "alltheores:zinc_ingot",     label = "Zinc Ingot"     } },
+          { label = "Osmium Dust",   name = "alltheores:osmium_dust",   target = 1, craftTo = 1, ceiling = 150000, ratio = 1, into = { name = "alltheores:osmium_ingot",   label = "Osmium Ingot"   } },
+          { label = "Gold Dust",     name = "alltheores:gold_dust",     target = 1, craftTo = 1, ceiling = 150000, ratio = 1, into = { name = "minecraft:gold_ingot",      label = "Gold Ingot"     } },
+          { label = "Lead Dust",     name = "alltheores:lead_dust",     target = 1, craftTo = 1, ceiling = 150000, ratio = 1, into = { name = "alltheores:lead_ingot",     label = "Lead Ingot"     } },
+          { label = "Nickel Dust",   name = "alltheores:nickel_dust",   target = 1, craftTo = 1, ceiling = 120000, ratio = 1, into = { name = "alltheores:nickel_ingot",   label = "Nickel Ingot"   } },
+          -- VERIFY-JEI: uranium dust ID NOT in presets (only the ingot is). Confirm in JEI.
+          { label = "Uranium Dust",  name = "alltheores:uranium_dust",  target = 1, craftTo = 1, ceiling = 5000,   ratio = 1, into = { name = "alltheores:uranium_ingot",  label = "Uranium Ingot"  } }, -- VERIFY-JEI dust id
+        },
+      },
+      {
+        label = "Dust: mostly-dust metals (ingot floor 2500 <- dust)",
+        items = {
+          -- Keep ~2.5k ingots; smelt dust up to that floor only, surplus stays dust.
+          { label = "Silver Ingot",   name = "alltheores:silver_ingot",   target = 2500, craftTo = 2500, craftFrom = { name = "alltheores:silver_dust",   reserve = 0, ratio = 1 } },
+          -- VERIFY-JEI: platinum + iridium DUST ids NOT in presets (only ingots are). Confirm in JEI.
+          { label = "Platinum Ingot", name = "alltheores:platinum_ingot", target = 2500, craftTo = 2500, craftFrom = { name = "alltheores:platinum_dust", reserve = 0, ratio = 1 } }, -- VERIFY-JEI dust id
+          { label = "Iridium Ingot",  name = "alltheores:iridium_ingot",  target = 2500, craftTo = 2500, craftFrom = { name = "alltheores:iridium_dust",  reserve = 0, ratio = 1 } }, -- VERIFY-JEI dust id
+        },
+      },
+      {
+        -- WATCH-ONLY for now: tiny dusts have NO dust->tiny crafting pattern yet, so
+        -- target alone (no craftTo) just surfaces a drain on the Plan page. Add a
+        -- craftTo + craftFrom later once the dust->tiny pattern exists.
+        -- VERIFY-JEI: EVERY id below is a naming-convention GUESS -- no tiny/nugget id
+        -- appears anywhere in the repo. The operator MUST confirm each in JEI.
+        label = "Dust: tiny dusts (watch-only, VERIFY-JEI all ids)",
+        items = {
+          { label = "Tiny Copper Dust",   name = "alltheores:copper_tiny_dust",   target = 10000 }, -- VERIFY-JEI
+          { label = "Tiny Iron Dust",     name = "alltheores:iron_tiny_dust",     target = 10000 }, -- VERIFY-JEI
+          { label = "Tiny Tin Dust",      name = "alltheores:tin_tiny_dust",      target = 10000 }, -- VERIFY-JEI
+          { label = "Tiny Aluminum Dust", name = "alltheores:aluminum_tiny_dust", target = 10000 }, -- VERIFY-JEI
+          { label = "Tiny Zinc Dust",     name = "alltheores:zinc_tiny_dust",     target = 10000 }, -- VERIFY-JEI
+          { label = "Tiny Osmium Dust",   name = "alltheores:osmium_tiny_dust",   target = 10000 }, -- VERIFY-JEI
+          { label = "Tiny Gold Dust",     name = "alltheores:gold_tiny_dust",     target = 10000 }, -- VERIFY-JEI
+          { label = "Tiny Lead Dust",     name = "alltheores:lead_tiny_dust",     target = 10000 }, -- VERIFY-JEI
+          { label = "Tiny Nickel Dust",   name = "alltheores:nickel_tiny_dust",   target = 10000 }, -- VERIFY-JEI
+          { label = "Tiny Silver Dust",   name = "alltheores:silver_tiny_dust",   target = 10000 }, -- VERIFY-JEI
+          { label = "Tiny Antimony Dust", name = "modern_industrialization:antimony_tiny_dust", target = 10000 }, -- VERIFY-JEI
+        },
+      },
     },
   },
 }
