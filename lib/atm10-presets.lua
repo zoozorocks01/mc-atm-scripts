@@ -143,6 +143,9 @@ do
 
   buf("minecraft:netherite_ingot", "Netherite", 5000)
 
+  -- Bulk materials: keep a reserve floor (refills if craftable, else a watch).
+  buf("minecraft:sand", "Sand", 10000)
+
   -- Non-Mekanism alloys: keep >= 35k. Exceptions: enderium + stainless steel = 10k.
   buf("alltheores:bronze_ingot", "Bronze", 35000)
   buf("alltheores:brass_ingot", "Brass", 35000)
