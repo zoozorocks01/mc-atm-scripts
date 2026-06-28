@@ -1949,6 +1949,22 @@ local function draw(data)
     drawPlanPage(data)
   end
 
+  -- DIAG (temporary): record what draw() actually built, so a black screen can be
+  -- diagnosed from the file instead of guessed. Guarded so it cannot affect rendering.
+  pcall(function()
+    if fs and fs.open then
+      local _f = fs.open(".atm10-render-dbg", "w")
+      if _f then
+        _f.write("MAIN data=" .. tostring(data ~= nil)
+          .. " mon=" .. tostring(monitor ~= nil)
+          .. " size=" .. tostring(rw) .. "x" .. tostring(rh)
+          .. " buf=" .. tostring(ui.frame and ui.frame.width) .. "x" .. tostring(ui.frame and ui.frame.height)
+          .. " prev=" .. tostring(ui.prevFrame ~= nil)
+          .. " row1=[" .. tostring(ui.frame and ui.frame.rows and ui.frame.rows[1] and ui.frame.rows[1].text) .. "]")
+        _f.close()
+      end
+    end
+  end)
   -- B1: flush the frame -- diff-render only the changed rows (no clear() flash).
   ui.prevFrame = uiDraw.renderBuffer(monitor, ui.frame, ui.prevFrame)
   ui.frame = nil
