@@ -42,9 +42,9 @@ local EDIT_STEPS = {
   { value = 1000 * STACK, label = "1000 stacks" },
 }
 local PAGE_SECONDS = 0 -- auto page-rotation seconds; 0 = off (the manager is interactive)
-local PAGES = { "PLAN", "QUEUE", "BROWSE", "PRESETS", "SMART" }
+local PAGES = { "PLAN", "QUEUE", "HEALTH", "BROWSE", "PRESETS", "SMART" }
 -- short tab labels used when the full strip would overflow a narrow monitor
-local PAGES_SHORT = { "PLAN", "QUE", "BRWS", "PRE", "SMRT" }
+local PAGES_SHORT = { "PLAN", "QUE", "HLTH", "BRWS", "PRE", "SMRT" }
 local MODE_CYCLE = { "monitor", "dry-run", "manual", "auto" } -- console mode-chip order
 local QUEUE_MAX_AGE_MS = 30 * 60 * 1000 -- prune approvals older than 30 minutes
 local PAGE_BUTTON_SIDE = "back"          -- a redstone pulse here flips to the next page ("none" disables)
@@ -1863,6 +1863,81 @@ local function rebootChip()
   return "DO NOT REBOOT" .. (v.secondsLeft and (" " .. v.secondsLeft .. "s") or ""), colors.red
 end
 
+-- HEALTH page (MON-1): "is it functioning, and is it keeping up?" Derives from the
+-- atm10-monitor lib over the existing queue/results/trend snapshots. Read-only; the
+-- monitor lib is required defensively + named `monlib` so it never shadows the
+-- `monitor` PERIPHERAL. Internal helpers stay function-local (manager locals cap).
+local function drawHealthPage(data)
+  local w, h = monitor.getSize()
+  local ok, monlib = pcall(require, "atm10-monitor")
+  if not ok or not monlib then
+    line(6, "atm10-monitor not deployed -- run `update`.", colors.orange)
+    return
+  end
+  local now = nowMs()
+
+  -- FUNCTIONING --------------------------------------------------------------
+  local ch = monlib.craft(data.craftQueue, craftResults, #firedTimes, now, {})
+  local btxt, bcol = "ONLINE", colors.lime
+  if data.online == false then
+    btxt, bcol = "OFFLINE", colors.red
+  elseif craftingCache.__bridge and craftingCache.__bridge.allowFire == false then
+    btxt, bcol = "HELD (bridge degraded)", colors.red
+  end
+  line(6, "SYSTEM HEALTH", colors.cyan)
+  mwrite(1, 7, "Bridge: ", colors.gray)
+  mwrite(9, 7, btxt, bcol)
+  line(8, "Crafts: " .. ch.ratePerMin .. "/min   " .. ch.inFlight .. " in-flight" ..
+    (#ch.stuck > 0 and ("   " .. #ch.stuck .. " STUCK") or ""),
+    #ch.stuck > 0 and colors.orange or colors.white)
+  line(9, "Recent: " .. ch.recentOk .. " ok   " .. ch.recentFail .. " failed (30m)",
+    ch.recentFail > 0 and colors.orange or colors.gray)
+
+  local function eta(m)
+    if not m or m <= 0 then return "" end
+    if m >= 120 then return "  ~" .. math.floor(m / 60) .. "h" end
+    return "  ~" .. math.floor(m) .. "m"
+  end
+  local function row(r)
+    return "  " .. uiDraw.fit(tostring(r.label), 16) .. " v" .. fmt(math.floor(r.perMin)) .. "/min" .. eta(r.etaMin)
+  end
+
+  local y = 11
+  if #ch.stuck > 0 then
+    line(y, "STUCK JOBS (" .. #ch.stuck .. "):", colors.red); y = y + 1
+    for i = 1, math.min(#ch.stuck, 3) do
+      line(y, "  " .. uiDraw.fit(tostring(ch.stuck[i].label), 18) .. " " .. math.floor(ch.stuck[i].ageMin) .. "m", colors.red)
+      y = y + 1
+    end
+    y = y + 1
+  end
+
+  -- KEEPING UP ---------------------------------------------------------------
+  if next(trendHistory) == nil then
+    line(y, "Enable Smart mode (SMART tab) to track demand.", colors.gray)
+    return
+  end
+  local craftable = {}
+  for _, p in ipairs(data.stockPlans or {}) do
+    if p.name then craftable[p.name] = (p.action ~= "NOT CRAFTABLE") end
+  end
+  local dm = monlib.demand(trendHistory, craftable, { top = 5 })
+
+  line(y, "FALLING BEHIND (crafting can't keep up):", colors.orange); y = y + 1
+  if #dm.fallingBehind == 0 then
+    line(y, "  none -- managed items holding", colors.lime); y = y + 1
+  else
+    for _, r in ipairs(dm.fallingBehind) do line(y, row(r), colors.orange); y = y + 1 end
+  end
+  y = y + 1
+  line(y, "SOURCE MORE (mine/farm -- inputs draining):", colors.yellow); y = y + 1
+  if #dm.sourceMore == 0 then
+    line(y, "  none flagged", colors.gray); y = y + 1
+  else
+    for _, r in ipairs(dm.sourceMore) do line(y, row(r), colors.yellow); y = y + 1 end
+  end
+end
+
 local function draw(data)
   if not monitor then return end
 
@@ -1946,6 +2021,8 @@ local function draw(data)
     drawBrowsePage(data)
   elseif pageName == "QUEUE" then
     drawQueuePage(data)
+  elseif pageName == "HEALTH" then
+    drawHealthPage(data)
   elseif pageName == "BROWSE" then
     drawBrowsePage(data)
   elseif pageName == "PRESETS" then
@@ -1969,7 +2046,7 @@ local function setPage(i)
 end
 
 -- Only the dashboard pages auto-rotate; Browse/Presets are interactive and held.
-local AUTO_PAGES = { PLAN = true, QUEUE = true }
+local AUTO_PAGES = { PLAN = true, QUEUE = true, HEALTH = true }
 
 local function advancePageIfDue()
   if PAGE_SECONDS <= 0 then return end -- auto-rotation disabled

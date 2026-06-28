@@ -16,6 +16,7 @@ local commonFiles = {
   { remote = "lib/atm10-presets.lua", localName = "atm10-presets.lua" },
   { remote = "lib/atm10-console.lua", localName = "atm10-console.lua" },
   { remote = "lib/atm10-health.lua", localName = "atm10-health.lua" }, -- bridge-health gating (A3)
+  { remote = "lib/atm10-monitor.lua", localName = "atm10-monitor.lua" }, -- HEALTH page: functioning + keeping-up (MON-1)
   { remote = "lib/atm10-pattern-give.lua", localName = "atm10-pattern-give.lua" }, -- /give builder (used by atm10-patterns)
   { remote = "atm10-bridge-probe.lua", localName = "atm10-bridge-probe" }, -- READ-ONLY RS Bridge diagnostic
   { remote = "atm10-patterns.lua", localName = "atm10-patterns" }, -- READ-ONLY patterns worklist (CRAFT-4)

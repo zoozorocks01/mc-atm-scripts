@@ -24,6 +24,46 @@ local health = require("atm10-health")
 local pgive = require("atm10-pattern-give")
 
 -- ---------------------------------------------------------------------------
+print("monitor (HEALTH page derivation)")
+-- Placed here near the top because run.lua's main chunk approaches Lua's 200-local
+-- limit by the end. Own do-scope. Biting: a wrong stuck-timer, craftable split, or
+-- decline threshold changes the counts/lists.
+do
+  local monitor = require("atm10-monitor")
+  local NOW = 10000000
+  local mq = {
+    a = { state = "CRAFTING", craftingAt = NOW - 400000, label = "Stuck One" }, -- 6.6m -> stuck
+    b = { state = "CRAFTING", craftingAt = NOW - 60000,  label = "Fresh One" }, -- 1m   -> not stuck
+    c = { state = "APPROVED", approvedAt = NOW - 1000,   label = "Waiting" },   -- not in-flight
+  }
+  local mres = {
+    x = { ok = true,  at = NOW - 60000 },
+    y = { ok = false, at = NOW - 120000, reason = "no" },
+    z = { ok = true,  at = NOW - 9999999 }, -- too old -> excluded
+  }
+  local ch = monitor.craft(mq, mres, 12, NOW, { stuckMs = 300000, recentMs = 1800000 })
+  t.eq(ch.inFlight, 2, "monitor.craft: 2 CRAFTING in-flight")
+  t.eq(#ch.stuck, 1, "monitor.craft: 1 stuck (>5m CRAFTING)")
+  t.eq(ch.stuck[1].label, "Stuck One", "monitor.craft: names the stuck job")
+  t.eq(ch.recentOk, 1, "monitor.craft: 1 recent ok")
+  t.eq(ch.recentFail, 1, "monitor.craft: 1 recent fail")
+  t.eq(ch.ratePerMin, 12, "monitor.craft: passes through crafts/min")
+
+  local trends = {
+    ["ma:silver_dust"] = { label = "Silver Dust", t0 = NOW - 1200000, tN = NOW, a0 = 5000, aN = 1000, n = 6 }, -- -200/min, raw
+    ["mc:inferium"]    = { label = "Inferium",    t0 = NOW - 1200000, tN = NOW, a0 = 9000, aN = 5000, n = 6 }, -- -200/min, craftable
+    ["mx:flat"]        = { label = "Flat",        t0 = NOW - 1200000, tN = NOW, a0 = 1000, aN = 1000, n = 6 }, -- no decline
+    ["my:tiny"]        = { label = "Tiny",        t0 = NOW - 1200000, tN = NOW, a0 = 1100, aN = 1000, n = 6 }, -- -5/min, below thresh
+  }
+  local dm = monitor.demand(trends, { ["mc:inferium"] = true }, { minPerMin = 20, minWindowMin = 10, minSamples = 4, top = 6 })
+  t.eq(#dm.fallingBehind, 1, "monitor.demand: 1 falling-behind (craftable + draining)")
+  t.eq(dm.fallingBehind[1].name, "mc:inferium", "monitor.demand: inferium falling behind")
+  t.eq(#dm.sourceMore, 1, "monitor.demand: 1 source-more (raw input draining)")
+  t.eq(dm.sourceMore[1].name, "ma:silver_dust", "monitor.demand: silver dust -> source more")
+  t.check(dm.sourceMore[1].perMin >= 199 and dm.sourceMore[1].perMin <= 201, "monitor.demand: ~200/min drain")
+end
+
+-- ---------------------------------------------------------------------------
 print("status vocabulary")
 t.eq(status.normalize("WOULD CRAFT"), status.WOULD, "WOULD CRAFT -> WOULD")
 t.eq(status.normalize("NOT CRAFTABLE"), status.NO_RECIPE, "NOT CRAFTABLE -> NO_RECIPE")
