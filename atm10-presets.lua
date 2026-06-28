@@ -127,19 +127,14 @@ do
   mostly("alltheores:platinum_ingot", "alltheores:platinum_dust", "Platinum") -- VERIFY-JEI platinum dust id
   mostly("alltheores:iridium_ingot",  "alltheores:iridium_dust",  "Iridium")  -- VERIFY-JEI iridium dust id
 
-  -- TINY dusts: keep 10k of each (watch-only -- needs dust->tiny patterns to refill). VERIFY-JEI ALL ids.
-  local function tinyd(name, label) add({ name = name, label = label, target = 10000 }) end
-  tinyd("alltheores:copper_tiny_dust",   "Tiny Copper Dust")
-  tinyd("alltheores:iron_tiny_dust",     "Tiny Iron Dust")
-  tinyd("alltheores:tin_tiny_dust",      "Tiny Tin Dust")
-  tinyd("alltheores:aluminum_tiny_dust", "Tiny Aluminum Dust")
-  tinyd("alltheores:zinc_tiny_dust",     "Tiny Zinc Dust")
-  tinyd("alltheores:osmium_tiny_dust",   "Tiny Osmium Dust")
-  tinyd("alltheores:gold_tiny_dust",     "Tiny Gold Dust")
-  tinyd("alltheores:lead_tiny_dust",     "Tiny Lead Dust")
-  tinyd("alltheores:nickel_tiny_dust",   "Tiny Nickel Dust")
-  tinyd("alltheores:silver_tiny_dust",   "Tiny Silver Dust")
-  tinyd("modern_industrialization:antimony_tiny_dust", "Tiny Antimony Dust")
+  -- TINY dusts: maintain 10k, crafted from dust via the operator's 1 dust -> 9 tiny
+  -- patterns. VERIFIED LIVE 2026-06-28 (atm10-patterns): the real ids are
+  -- modern_industrialization:, NOT alltheores:, and ONLY MI metals have a tiny-dust
+  -- form -- aluminum + antimony are confirmed craftable. The base alltheores metals
+  -- (copper/iron/tin/zinc/osmium/gold/lead/nickel/silver) have NO tiny dust at all, so
+  -- they are intentionally omitted (the old alltheores:*_tiny_dust rows were junk).
+  add({ name = "modern_industrialization:aluminum_tiny_dust", label = "Tiny Aluminum Dust", target = 10000, craftTo = 10000 })
+  add({ name = "modern_industrialization:antimony_tiny_dust", label = "Tiny Antimony Dust", target = 10000, craftTo = 10000 })
 
   buf("minecraft:netherite_ingot", "Netherite", 5000)
 
