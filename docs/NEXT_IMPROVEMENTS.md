@@ -81,6 +81,19 @@ fully. Mirror pair stayed byte-identical.
   SMOKE-REQUEST OK.
 - **in-game-verify: pending** — graph framing/flicker needs a real monitor look.
 
+## Session log — 2026-06-29 (B1 hardening + A3/D3 header chips shipped)
+
+Manager header/render polish shipped. B1 was already present in code, but this pass
+hardened the buffer-aware writer fallback (`mwrite` no longer recurses if called outside
+an active frame), verified the manager mirror pair, and marked the B1 row as done. The
+header now renders as a full-width title band with mode/autocraft chips on every page,
+and the A3 craft-hold state surfaces as a visible `[BRIDGE HELD]` chip when degraded
+bridge gating pauses craft firing.
+
+- **Gate:** 784 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK.
+- **in-game-verify: pending** — header spacing/color/readability needs a real monitor look.
+
 ## Session log — 2026-06-26 (A2 — request-panel program shipped)
 
 New viewer-style touch program **inventory/request.lua** (+ root mirror +
@@ -516,15 +529,15 @@ at 186 (state folded onto existing tables).
 |---|---|---|---|---|---|---|
 | A1 | STAB-2 craftItem isConnected recheck | S | high | med | gate | DONE (already shipped, test bites) |
 | A2 | STAB-1 pin with smoke tests | S | high | low | gate | DONE (smoke_auto bites) |
-| A3 | bridge-degraded helper / gating / chip | S | med | low | gate | helper + GATING (craft back-off) DONE (`bb73312`, gateCrafts wired into scan/refreshAndDraw); chip still pinned (visual, wire with B1) |
-| B1 | UI-2 manager double buffer | major | high | high | visual | discuss |
+| A3 | bridge-degraded helper / gating / chip | S | med | low | gate | DONE (helper + gating + `[BRIDGE HELD]` header chip; in-game-verify pending) |
+| B1 | UI-2 manager double buffer | major | high | high | visual | DONE (existing diff-buffer path hardened; in-game-verify pending) |
 | B2 | shrink touch-block window | M | high | med | gate | Code slice DONE (trend gated; scan no longer always sorts full grid); coroutine rewrite still discuss |
 | C1 | tap flash on Browse/Smart/Presets/editor | S | med | low | gate | DONE (`166a75c`, in-game-verify pending) |
 | C2 | notInGrid hoist | S | med | low | gate | DONE (d0cfc86) |
 | C3 | UI-4 enlarge tap targets | M | med | med | visual | discuss |
 | D1 | power-display double buffer | M | high | med | visual | DONE (diff-buffer wired; in-game-verify pending) |
 | D2 | box/gauge wire-or-delete | S | med | low | gate | DONE (`draw.box`/`draw.gauge` wired into viewer panels; buffer target covered) |
-| D3 | UI-3 header band + chips | M | med | med | visual | discuss |
+| D3 | UI-3 header band + chips | M | med | med | visual | DONE (header band + mode/autocraft/bridge chips; in-game-verify pending) |
 | D4 | viewer zebra rows | S | med | low | visual | DONE (alternating viewer row backgrounds; in-game-verify pending) |
 | D5 | UI-5 empty/too-small panels | M | med | low | gate+visual | DONE (viewer waiting/no-items/too-small panels shipped; in-game-verify pending) |
 | E1 | pause auto-rotation on interaction | S | low | low | gate | DONE (touches now pause dashboard auto-rotation) |

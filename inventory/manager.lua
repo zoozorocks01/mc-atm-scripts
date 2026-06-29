@@ -545,11 +545,11 @@ end
 -- with NO monitor.clear() flash between frames. ui.frame holds the in-progress buffer
 -- (a field on the ui table -- no new top-level local at the manager's cap). When no
 -- frame is active (e.g. a direct call outside a render) these write straight through.
-local function line(y, text, color)
+local function line(y, text, color, bg)
   if ui.frame then
-    uiDraw.bufferWrite(ui.frame, 1, y, uiDraw.fit(text, ui.frame.width), color or colors.white, colors.black)
+    uiDraw.bufferWrite(ui.frame, 1, y, uiDraw.fit(text, ui.frame.width), color or colors.white, bg or colors.black)
   else
-    uiDraw.line(monitor, y, text, color or colors.white, colors.black)
+    uiDraw.line(monitor, y, text, color or colors.white, bg or colors.black)
   end
 end
 
@@ -557,7 +557,7 @@ local function mwrite(x, y, text, fg, bg)
   if ui.frame then
     uiDraw.bufferWrite(ui.frame, x, y, text, fg or colors.white, bg or colors.black)
   else
-    mwrite(x, y, text, fg or colors.white, bg or colors.black)
+    uiDraw.write(monitor, x, y, text, fg or colors.white, bg or colors.black)
   end
 end
 
@@ -1970,7 +1970,7 @@ local function draw(data)
 
   local pageName = PAGES[pageIndex]
 
-  line(1, TITLE, colors.cyan)
+  line(1, TITLE .. "  " .. pageName, colors.black, colors.cyan)
 
   -- tappable tab strip (right-click a tab to switch pages). Use short labels when
   -- the full strip would run off this monitor, so SMART is never cut off/untappable.
@@ -2005,16 +2005,32 @@ local function draw(data)
       and (mode == control.MODE_MANUAL or mode == control.MODE_AUTO)
     -- tappable mode chip: tap to cycle monitor->dry-run->manual->auto (auto needs a confirm tap)
     local chip = "[" .. mode .. (ui.modeConfirm == control.MODE_AUTO and " AUTO?" or "") .. "]"
-    mwrite(1, 4, chip, colors.black,
-      ui.modeConfirm == control.MODE_AUTO and colors.orange or colors.cyan)
+    local modeBg = colors.cyan
+    if ui.modeConfirm == control.MODE_AUTO then modeBg = colors.orange
+    elseif mode == control.MODE_AUTO then modeBg = colors.lime
+    elseif mode == control.MODE_DRY_RUN then modeBg = colors.yellow
+    elseif mode == control.MODE_MONITOR then modeBg = colors.gray end
+    mwrite(1, 4, chip, colors.black, modeBg)
     modeChip = { x1 = 1, x2 = #chip, y = 4 }
-    mwrite(#chip + 2, 4, "autocraft: " .. (craftLive and "ON" or "off") ..
-      "   Queue: " .. cqueue.count(craftQueue), craftLive and colors.lime or colors.gray)
+    local x = #chip + 2
+    local craftChip = craftLive and "[CRAFT ON]" or "[CRAFT off]"
+    mwrite(x, 4, craftChip, craftLive and colors.black or colors.lightGray,
+      craftLive and colors.lime or colors.black)
+    x = x + #craftChip + 1
+    if data.bridgeDegraded then
+      local held = "[BRIDGE HELD]"
+      mwrite(x, 4, held, colors.black, colors.orange)
+      x = x + #held + 1
+    end
+    mwrite(x, 4, "Queue: " .. cqueue.count(craftQueue), colors.gray, colors.black)
     -- right-aligned reboot-safety chip (warns before a detach that could crash the
     -- server); only drawn when the monitor is wide enough to avoid clobbering above
     local rbText, rbColor = rebootChip()
     local rbx = tabW - #rbText + 1
-    if rbx > #chip + 30 then mwrite(rbx, 4, rbText, rbColor, colors.black) end
+    if rbx > x + 12 then
+      mwrite(rbx, 4, rbText, rbText == "reboot ok" and colors.lightGray or colors.black,
+        rbText == "reboot ok" and colors.black or rbColor)
+    end
   end
 
   -- the quota editor is a modal: it renders over any tab when open (unless we're
