@@ -22,6 +22,19 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-29 (C3 manager tap targets shipped)
+
+Manager touch-target polish shipped. PLAN/BROWSE nav arrows, PLAN approve-all,
+QUEUE clear-all, the header mode chip, and quota-editor action/step/plus-minus
+controls now render as wider filled chips, with each hit region rebuilt from the
+same painted width so taps match what the monitor shows. Mirror pair stayed
+byte-identical.
+
+- **Gate:** 784 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK.
+- **in-game-verify: pending** — the render/hit geometry is stub/compile verified;
+  physical monitor tap comfort and spacing still need an in-world look.
+
 ## Session log — 2026-06-29 (D2 + D5 viewer panels shipped)
 
 Viewer polish shipped for the read-only inventory display. `draw.box` / `draw.gauge`
@@ -356,7 +369,7 @@ at 186 (state folded onto existing tables).
   rebuilt) and cache; the page reads the cached count. Pure refactor, no visual change.
 
 ### C3. UI-4: enlarge tap targets for destructive/primary buttons
-- **M · value med · risk med · Verify: visual · Phase: discuss**
+- **M · value med · risk med · Verify: visual · Phase: DONE**
 - One-row, label-width targets: APPROVE ALL (`1331`), CLEAR QUEUE (`1407`), mode chip
   (`1768`), nav arrows, editor `[+]`/`[-]` (`1536-1539`). Coarse cursor → dangerous
   mis-taps (CLEAR QUEUE, mode→auto).
@@ -364,7 +377,8 @@ at 186 (state folded onto existing tables).
   widen destructive ones. **CRITICAL:** update the matching region builder
   (`planActionRegion:1332`, `queueActionRegion:1408`, `modeChip:1770`, `*NavRegions`,
   editorRows `1540`) in the SAME edit. Depends on B1 landing first.
-- **Pinned:** depends on the buffer; mis-tap behavior is physical (in-game only).
+- **Shipped:** wider painted chips + matching hit regions are in code; physical
+  monitor feel remains **in-game-verify: pending**.
 
 ---
 
@@ -534,7 +548,7 @@ at 186 (state folded onto existing tables).
 | B2 | shrink touch-block window | M | high | med | gate | Code slice DONE (trend gated; scan no longer always sorts full grid); coroutine rewrite still discuss |
 | C1 | tap flash on Browse/Smart/Presets/editor | S | med | low | gate | DONE (`166a75c`, in-game-verify pending) |
 | C2 | notInGrid hoist | S | med | low | gate | DONE (d0cfc86) |
-| C3 | UI-4 enlarge tap targets | M | med | med | visual | discuss |
+| C3 | UI-4 enlarge tap targets | M | med | med | visual | DONE (wider painted chips + matching hit regions; in-game-verify pending) |
 | D1 | power-display double buffer | M | high | med | visual | DONE (diff-buffer wired; in-game-verify pending) |
 | D2 | box/gauge wire-or-delete | S | med | low | gate | DONE (`draw.box`/`draw.gauge` wired into viewer panels; buffer target covered) |
 | D3 | UI-3 header band + chips | M | med | med | visual | DONE (header band + mode/autocraft/bridge chips; in-game-verify pending) |

@@ -1454,16 +1454,20 @@ local function drawPlanPage(data)
   end
 
   -- nav row (paging) + a compact tally on the same line
-  local prev, next = "[< PREV]", "[NEXT >]"
-  mwrite(1, navY, prev, pg.page > 1 and colors.cyan or colors.gray, colors.black)
-  mwrite(11, navY, next, pg.page < pg.pages and colors.cyan or colors.gray, colors.black)
+  local prev, next = "[ < PREV ]", "[ NEXT > ]"
+  local nextX = #prev + 2
+  mwrite(1, navY, prev, pg.page > 1 and colors.black or colors.gray,
+    pg.page > 1 and colors.cyan or colors.black)
+  mwrite(nextX, navY, next, pg.page < pg.pages and colors.black or colors.gray,
+    pg.page < pg.pages and colors.cyan or colors.black)
   planNavRegions = {
     { x1 = 1, x2 = #prev, y = navY, delta = -1 },
-    { x1 = 11, x2 = 10 + #next, y = navY, delta = 1 },
+    { x1 = nextX, x2 = nextX + #next - 1, y = navY, delta = 1 },
   }
   local tally = data.stockTally or {}
   if w >= 40 then
-    mwrite(21, navY, "+" .. fmt(tally.OK) .. " >" .. fmt(tally.WOULD) ..
+    local tallyX = nextX + #next + 2
+    mwrite(tallyX, navY, "+" .. fmt(tally.OK) .. " >" .. fmt(tally.WOULD) ..
       " ~" .. fmt(tally.CRAFTING) .. " x" .. fmt(tally.NO_RECIPE) .. " #" .. fmt(tally.BLOCKED), colors.gray)
   end
 
@@ -1473,11 +1477,11 @@ local function drawPlanPage(data)
     line(h, flashing and ui.flashMsg or "Tap a > WOULD row to approve.", flashing and colors.white or colors.lime)
     -- bulk: one tap approves EVERY WOULD CRAFT row (all pages), right-aligned so
     -- it never collides with the hint text
-    local label = "[APPROVE ALL]"
+    local label = " [ APPROVE ALL ] "
     local bx = w - #label + 1
     if bx > 30 then
-      mwrite(bx, h, label, colors.lime, colors.black)
-      planActionRegion = { x1 = bx, x2 = w, y = h }
+      mwrite(bx, h, label, colors.black, colors.lime)
+      planActionRegion = { x1 = bx, x2 = bx + #label - 1, y = h }
     end
   else
     line(h, "Nothing craftable yet - RS reports no patterns (set up Crafters).", colors.gray)
@@ -1556,11 +1560,11 @@ local function drawQueuePage(data)
     local flashing = ui.flashMsg and (nowMs() - ui.flashAt < ui.FLASH_MS)
     line(hintY, flashing and ui.flashMsg or "Tap a row to cancel its approval.", flashing and colors.white or colors.gray)
     -- bulk: one tap cancels every approval, right-aligned past the hint text
-    local label = "[CLEAR QUEUE]"
+    local label = " [ CLEAR QUEUE ] "
     local bx = w - #label + 1
     if bx > 34 then
-      mwrite(bx, hintY, label, colors.orange, colors.black)
-      queueActionRegion = { x1 = bx, x2 = w, y = hintY }
+      mwrite(bx, hintY, label, colors.black, colors.red)
+      queueActionRegion = { x1 = bx, x2 = bx + #label - 1, y = hintY }
     end
   end
 end
@@ -1636,30 +1640,41 @@ local function drawBrowsePage(data)
   end
 
   local navY = h
-  local prev, next = "[< PREV]", "[NEXT >]"
-  mwrite(1, navY, prev, pg.page > 1 and colors.cyan or colors.gray, colors.black)
-  mwrite(11, navY, next, pg.page < pg.pages and colors.cyan or colors.gray, colors.black)
+  local prev, next = "[ < PREV ]", "[ NEXT > ]"
+  local nextX = #prev + 2
+  mwrite(1, navY, prev, pg.page > 1 and colors.black or colors.gray,
+    pg.page > 1 and colors.cyan or colors.black)
+  mwrite(nextX, navY, next, pg.page < pg.pages and colors.black or colors.gray,
+    pg.page < pg.pages and colors.cyan or colors.black)
   browseNavRegions = {
     { x1 = 1, x2 = #prev, y = navY, delta = -1 },
-    { x1 = 11, x2 = 10 + #next, y = navY, delta = 1 },
+    { x1 = nextX, x2 = nextX + #next - 1, y = navY, delta = 1 },
   }
   -- ALL <-> MANAGED filter toggle (cuts the ~5.9k haystack to your quota'd items).
   -- Hidden while picking a compress target, where tapping it would be a dead no-op.
   if not (editing and editing.pickingInto) then
     local toggle = browseFilter and "[MANAGED]" or "[ALL]"
-    mwrite(21, navY, toggle, colors.black, browseFilter and colors.lime or colors.cyan)
-    browseFilterBtn = { x1 = 21, x2 = 20 + #toggle, y = navY }
+    local toggleX = nextX + #next + 2
+    mwrite(toggleX, navY, toggle, colors.black, browseFilter and colors.lime or colors.cyan)
+    browseFilterBtn = { x1 = toggleX, x2 = toggleX + #toggle - 1, y = navY }
     if w >= 52 then
-      mwrite(21 + #toggle + 1, navY, "tap item to set quota", colors.gray, colors.black)
+      mwrite(toggleX + #toggle + 1, navY, "tap item to set quota", colors.gray, colors.black)
     end
   end
 end
 
 -- Render a button row and keep it for hit-testing. specs: {{label,key}}.
 local function renderButtonRow(specs, y)
-  local row = console.buttonRow(specs, y, 1, 1)
-  for _, b in ipairs(row.buttons) do
-    mwrite(b.x1, y, b.text, colors.cyan, colors.black)
+  local row = { buttons = {}, y = y }
+  local x = 1
+  for _, spec in ipairs(specs or {}) do
+    local text = " [ " .. tostring(spec.label) .. " ] "
+    local x1 = x
+    local x2 = x + #text - 1
+    local b = { key = spec.key, label = spec.label, text = text, x1 = x1, x2 = x2, y = y }
+    row.buttons[#row.buttons + 1] = b
+    mwrite(x1, y, text, colors.black, colors.cyan)
+    x = x2 + 3
   end
   editorRows[#editorRows + 1] = row
   return row
@@ -1682,19 +1697,25 @@ local function stepLabel(cur)
 end
 
 -- A "[-] LABEL: value [+]" row that adjusts `field` by the current step size.
--- Shows the EXACT integer (not fmt-rounded) so a small step on a big number is
--- visible (e.g. +100 on 264000 must not display as unchanged "264.0k").
+-- Shows the exact integer (not fmt-rounded) whenever width allows, so a small
+-- step on a big number is visible (e.g. +100 on 264000 must not display as an
+-- unchanged "264.0k").
 local function renderFieldRow(label, value, field, y)
   -- placed left-to-right with no hardcoded x: [-] LABEL: value [+]. The [+] sits
   -- right after the (exact-integer) value, so it never overlaps a big number.
+  local w = monitor.getSize()
   local text = label .. ": " .. tostring(math.floor(tonumber(value) or 0))
-  mwrite(1, y, "[-]", colors.cyan, colors.black)
-  mwrite(5, y, text, colors.white, colors.black)
-  local plusX = 5 + #text + 1
-  mwrite(plusX, y, "[+]", colors.cyan, colors.black)
+  local minusText, plusText = " [ - ] ", " [ + ] "
+  local textX = #minusText + 2
+  local maxText = math.max(1, w - textX - #plusText - 1)
+  if #text > maxText then text = uiDraw.fit(text, maxText) end
+  mwrite(1, y, minusText, colors.black, colors.cyan)
+  mwrite(textX, y, text, colors.white, colors.black)
+  local plusX = textX + #text + 1
+  mwrite(plusX, y, plusText, colors.black, colors.cyan)
   editorRows[#editorRows + 1] = { y = y, buttons = {
-    { key = field .. ":-", x1 = 1, x2 = 3 },
-    { key = field .. ":+", x1 = plusX, x2 = plusX + 2 },
+    { key = field .. ":-", x1 = 1, x2 = #minusText },
+    { key = field .. ":+", x1 = plusX, x2 = plusX + #plusText - 1 },
   } }
 end
 
@@ -1710,11 +1731,18 @@ local function drawEditor()
   line(7, "stored: " .. fmt(e.amount) .. "   craftable: " .. (e.craftable and "yes" or "NO"),
     e.craftable and colors.gray or colors.orange)
 
-  mwrite(1, 8, "step: " .. stepLabel(e.step) ..
-    (e.step >= STACK and ("  (" .. fmt(e.step) .. ")") or ""), colors.gray, colors.black)
+  local stepText = "step: " .. stepLabel(e.step) ..
+    (e.step >= STACK and ("  (" .. fmt(e.step) .. ")") or "")
+  local stepButton = " [ STEP ] "
+  local stepMaxText = math.max(1, w - #stepButton - 1)
+  if #stepText > stepMaxText then stepText = uiDraw.fit(stepText, stepMaxText) end
+  mwrite(1, 8, stepText, colors.gray, colors.black)
   do
-    local r = console.buttonRow({ { label = "STEP", key = "step" } }, 8, 14)
-    for _, b in ipairs(r.buttons) do mwrite(b.x1, 8, b.text, colors.cyan, colors.black) end
+    local stepX = math.max(1, math.min(w - #stepButton + 1, #stepText + 2))
+    local r = { y = 8, buttons = {
+      { key = "step", label = "STEP", text = stepButton, x1 = stepX, x2 = stepX + #stepButton - 1, y = 8 },
+    } }
+    for _, b in ipairs(r.buttons) do mwrite(b.x1, 8, b.text, colors.black, colors.cyan) end
     editorRows[#editorRows + 1] = r
   end
 
@@ -2004,7 +2032,7 @@ local function draw(data)
     local craftLive = (config.allowAutocraft == true)
       and (mode == control.MODE_MANUAL or mode == control.MODE_AUTO)
     -- tappable mode chip: tap to cycle monitor->dry-run->manual->auto (auto needs a confirm tap)
-    local chip = "[" .. mode .. (ui.modeConfirm == control.MODE_AUTO and " AUTO?" or "") .. "]"
+    local chip = "[ " .. mode .. (ui.modeConfirm == control.MODE_AUTO and " AUTO?" or "") .. " ]"
     local modeBg = colors.cyan
     if ui.modeConfirm == control.MODE_AUTO then modeBg = colors.orange
     elseif mode == control.MODE_AUTO then modeBg = colors.lime
