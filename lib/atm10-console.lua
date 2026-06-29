@@ -192,6 +192,20 @@ function console.sortedItems(items, mode, acc)
   return console.sortItems(out, mode, acc)
 end
 
+-- Auto-rotation timing for the manager dashboard pages. A recent touch counts as
+-- activity even if the page itself was shown earlier, so PLAN/QUEUE/HEALTH do not
+-- flip away immediately after an operator interaction.
+function console.autoRotateDue(pageName, autoPages, shownAt, interactedAt, now, seconds)
+  seconds = tonumber(seconds) or 0
+  if seconds <= 0 then return false end
+  if type(autoPages) ~= "table" or not autoPages[pageName] then return false end
+  now = tonumber(now) or 0
+  local anchor = tonumber(shownAt) or now
+  local touched = tonumber(interactedAt) or 0
+  if touched > anchor then anchor = touched end
+  return (now - anchor) >= seconds * 1000
+end
+
 -- ===========================================================================
 -- A2 REQUEST-PANEL helpers. Pure browse/quantity/job-row logic for the new
 -- craft-request touch program (inventory/request.lua). No peripherals; unit

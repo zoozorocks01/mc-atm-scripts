@@ -49,6 +49,16 @@ parallel/coroutine scan rewrite remains pinned for discussion.
 - **in-game-verify: n/a** — behavior-preserving sort placement change; no new visual
   layout or bridge call path.
 
+## Session log — 2026-06-29 (E1 page-rotation pause shipped)
+
+Small interaction polish shipped. The manager records the most recent monitor touch on
+the existing `ui` state table, and auto-rotation now waits from the newer of page-shown
+time or last-touch time. PLAN/QUEUE/HEALTH no longer rotate immediately after a tap.
+
+- **Gate:** 784 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK.
+- **in-game-verify: n/a** — pure timing change with unit coverage.
+
 ## Session log — 2026-06-26 (A2 — request-panel program shipped)
 
 New viewer-style touch program **inventory/request.lua** (+ root mirror +
@@ -495,7 +505,7 @@ at 186 (state folded onto existing tables).
 | D3 | UI-3 header band + chips | M | med | med | visual | discuss |
 | D4 | viewer zebra rows | S | med | low | visual | Code |
 | D5 | UI-5 empty/too-small panels | M | med | low | gate+visual | DONE (viewer waiting/no-items/too-small panels shipped; in-game-verify pending) |
-| E1 | pause auto-rotation on interaction | S | low | low | gate | Code/skip |
+| E1 | pause auto-rotation on interaction | S | low | low | gate | DONE (touches now pause dashboard auto-rotation) |
 | SMART-1 | confidence-weighted ranking | S | high | low | gate | DONE (`8b35ac3`) |
 | SMART-2 | maxA + spiky detection | M | high | low | gate | DONE (`db2b73f`) |
 | SMART-3 | surface rate+conf on SMART row | S | med | low | gate | DONE (`195c096`, in-game-verify pending) |

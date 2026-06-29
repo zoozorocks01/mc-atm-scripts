@@ -125,6 +125,7 @@ local browseNavRegions = {}
 local presetRowRegions = {}
 local ui = {            -- bundled flash/page transient scalars (B1-prep)
   pageShownAt = nil,    -- auto-rotate timer anchor
+  lastInteractionAt = nil, -- last monitor touch; pauses auto-rotation after taps
   modeConfirm = nil,    -- mode awaiting a confirm tap (auto only)
   presetStatus = nil,   -- short confirmation line after applying a preset
   flashMsg = nil,       -- transient confirmation on the active page hint line
@@ -2059,7 +2060,7 @@ local function advancePageIfDue()
     ui.pageShownAt = nowT -- manual page: don't auto-rotate away
     return
   end
-  if nowT - ui.pageShownAt >= PAGE_SECONDS * 1000 then
+  if console.autoRotateDue(PAGES[pageIndex], AUTO_PAGES, ui.pageShownAt, ui.lastInteractionAt, nowT, PAGE_SECONDS) then
     local nextIndex = pageIndex
     for _ = 1, #PAGES do
       nextIndex = nextIndex % #PAGES + 1
@@ -2288,6 +2289,7 @@ local function handlePickIntoTouch(x, y)
 end
 
 local function handleTouch(x, y)
+  ui.lastInteractionAt = nowMs()
   if editing and editing.pickingInto then
     handlePickIntoTouch(x, y)
     return

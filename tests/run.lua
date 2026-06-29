@@ -1740,6 +1740,17 @@ t.eq(console.buttonHit(row, row.buttons[3].x1, 5), "save", "tap SAVE -> save key
 t.eq(console.buttonHit(row, 1, 6), nil, "tap the wrong row -> nil")
 t.eq(console.buttonHit(row, 999, 5), nil, "tap past the buttons -> nil")
 
+-- autoRotateDue (E1): recent touches pause auto-rotation on dashboard pages
+local autoPages = { PLAN = true, QUEUE = true, HEALTH = true }
+t.eq(console.autoRotateDue("PLAN", autoPages, 1000, nil, 7000, 5), true,
+  "autoRotateDue: auto page rotates once page age exceeds threshold")
+t.eq(console.autoRotateDue("PLAN", autoPages, 1000, 6500, 7000, 5), false,
+  "autoRotateDue: recent touch pauses rotation even when page is old")
+t.eq(console.autoRotateDue("BROWSE", autoPages, 1000, nil, 7000, 5), false,
+  "autoRotateDue: manual page never rotates")
+t.eq(console.autoRotateDue("PLAN", autoPages, 1000, nil, 7000, 0), false,
+  "autoRotateDue: PAGE_SECONDS=0 disables rotation")
+
 -- boundedSlice (VIEW-1): payload entry count stays <= cap regardless of grid size
 do
   local grid = {}
