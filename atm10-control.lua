@@ -312,6 +312,32 @@ function control.rebootSafety(state)
   return { safe = true, crafting = 0, secondsLeft = 0, reason = "no crafts in flight" }
 end
 
+-- Authoritative live craft count straight from the rs_bridge -- independent of the
+-- manager's craftstate file (which goes STALE the moment you Ctrl+T the manager, the
+-- exact situation in which the old safereboot rebooted too early and crashed). Tries
+-- the task-list methods first (AP-version-dependent), then falls back to per-item
+-- isItemCrafting over the supplied names. This is what makes a safe-reboot truly safe:
+-- it asks RS "are you still crafting anything RIGHT NOW?" rather than trusting a snapshot.
+-- Returns: count (number), method (string: the source used / "no-bridge" / "none").
+function control.activeCraftCount(bridge, fallbackNames)
+  if not bridge then return 0, "no-bridge" end
+  for _, m in ipairs({ "getCraftingTasks", "getTasks", "listCraftingTasks" }) do
+    if type(bridge[m]) == "function" then
+      local ok, res = pcall(bridge[m])
+      if ok and type(res) == "table" then return #res, m end
+    end
+  end
+  if type(bridge.isItemCrafting) == "function" and type(fallbackNames) == "table" then
+    local n = 0
+    for _, name in ipairs(fallbackNames) do
+      local ok, res = pcall(bridge.isItemCrafting, { name = name })
+      if ok and res == true then n = n + 1 end
+    end
+    return n, "isItemCrafting"
+  end
+  return 0, "none"
+end
+
 -- ===========================================================================
 -- CONTROL COMMANDS (CTRL-1): the foundation for the eventual control center.
 -- A `command` is a pure data shape { action, target, args, token }; dispatch()

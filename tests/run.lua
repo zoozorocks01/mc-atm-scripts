@@ -65,6 +65,22 @@ do
   t.check(dm.sourceMore[1].perMin >= 199 and dm.sourceMore[1].perMin <= 201, "monitor.demand: ~200/min drain")
 end
 
+-- control.activeCraftCount: the LIVE bridge query the hardened safereboot relies on.
+-- Biting: wrong method preference / fallback / nil-handling changes count or method.
+do
+  local c, m = control.activeCraftCount({ getCraftingTasks = function() return { {}, {} } end })
+  t.eq(c, 2, "activeCraftCount: getCraftingTasks list -> count 2")
+  t.eq(m, "getCraftingTasks", "activeCraftCount: reports authoritative method")
+  local c2 = control.activeCraftCount({ isItemCrafting = function(a) return a.name == "x" end }, { "x", "y" })
+  t.eq(c2, 1, "activeCraftCount: isItemCrafting fallback counts only crafting names")
+  local c3, m3 = control.activeCraftCount({})
+  t.eq(c3, 0, "activeCraftCount: no craft-status method -> 0")
+  t.eq(m3, "none", "activeCraftCount: reports 'none' when blind")
+  local c4, m4 = control.activeCraftCount(nil)
+  t.eq(c4, 0, "activeCraftCount: nil bridge -> 0")
+  t.eq(m4, "no-bridge", "activeCraftCount: nil bridge -> 'no-bridge'")
+end
+
 -- ---------------------------------------------------------------------------
 print("status vocabulary")
 t.eq(status.normalize("WOULD CRAFT"), status.WOULD, "WOULD CRAFT -> WOULD")
