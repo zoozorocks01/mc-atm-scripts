@@ -1884,6 +1884,15 @@ do
   writes = {}
   draw.renderBuffer(target, buf, buf)
   t.eq(#writes, 0, "renderBuffer skips unchanged rows (diff)")
+
+  local panel = draw.newBuffer(18, 5)
+  draw.box(panel, 2, 1, 16, 3, "Power", colors.cyan, colors.black)
+  t.eq(panel.rows[1].text:sub(2, 2), "+", "box writes its left corner into a render buffer")
+  t.eq(panel.rows[1].text:sub(17, 17), "+", "box writes its right corner into a render buffer")
+  t.check(panel.rows[1].text:find("POWER", 1, true) ~= nil, "box writes its title into a render buffer")
+  draw.gauge(panel, 3, 4, 10, 50, colors.yellow)
+  t.eq(panel.rows[4].text:sub(3, 12), "[####----]", "gauge writes into a render buffer")
+  t.eq(panel.rows[4].fg:sub(3, 12), "4444444444", "gauge preserves the requested color in buffer cells")
 end
 
 -- ---------------------------------------------------------------------------

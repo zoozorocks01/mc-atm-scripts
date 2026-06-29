@@ -40,6 +40,10 @@ end
 
 function draw.write(target, x, y, text, fg, bg)
   if not target then return end
+  if target.rows and target.width and target.height then
+    draw.bufferWrite(target, x, y, text, fg, bg)
+    return
+  end
   local _, h = target.getSize()
   if y < 1 or y > h then return end
   target.setCursorPos(x, y)

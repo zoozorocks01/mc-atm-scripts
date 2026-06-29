@@ -22,6 +22,20 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-29 (D2 + D5 viewer panels shipped)
+
+Viewer polish shipped for the read-only inventory display. `draw.box` / `draw.gauge`
+now support render-buffer targets, so the diff-buffered viewer can use the shared
+panel primitives without bypassing `renderBuffer`. The VIEW profile now renders boxed
+Storage and Energy panels with gauges, boxed WAITING / NO ITEMS / MONITOR TOO SMALL
+states, and the old local one-off bar renderer was removed. Mirror pairs stayed
+byte-identical.
+
+- **Gate:** 777 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK.
+- **in-game-verify: pending** — this was render-stub/compile verified; real monitor
+  spacing and readability still need an in-world look.
+
 ## Session log — 2026-06-26 (A2 — request-panel program shipped)
 
 New viewer-style touch program **inventory/request.lua** (+ root mirror +
@@ -464,10 +478,10 @@ at 186 (state folded onto existing tables).
 | C2 | notInGrid hoist | S | med | low | gate | DONE (d0cfc86) |
 | C3 | UI-4 enlarge tap targets | M | med | med | visual | discuss |
 | D1 | power-display double buffer | M | high | med | visual | discuss |
-| D2 | box/gauge wire-or-delete | S | med | low | gate | Code |
+| D2 | box/gauge wire-or-delete | S | med | low | gate | DONE (`draw.box`/`draw.gauge` wired into viewer panels; buffer target covered) |
 | D3 | UI-3 header band + chips | M | med | med | visual | discuss |
 | D4 | viewer zebra rows | S | med | low | visual | Code |
-| D5 | UI-5 empty/too-small panels | M | med | low | gate+visual | Code |
+| D5 | UI-5 empty/too-small panels | M | med | low | gate+visual | DONE (viewer waiting/no-items/too-small panels shipped; in-game-verify pending) |
 | E1 | pause auto-rotation on interaction | S | low | low | gate | Code/skip |
 | SMART-1 | confidence-weighted ranking | S | high | low | gate | DONE (`8b35ac3`) |
 | SMART-2 | maxA + spiky detection | M | high | low | gate | DONE (`db2b73f`) |

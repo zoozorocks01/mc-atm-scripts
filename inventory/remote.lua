@@ -25,6 +25,9 @@ local viewSort = "qty" -- VIEW-3: current sort mode (qty / az / mod)
 local frame = nil      -- UI-1: current render buffer (set during present())
 local prevFrame = nil  -- UI-1: last rendered buffer, for diff (flicker-free redraw)
 
+local MIN_WIDTH = 42
+local MIN_HEIGHT = 18
+
 local function peripheralTypeMatches(actual, expected)
   if actual == expected then return true end
   if type(actual) == "table" then
@@ -195,37 +198,37 @@ local function line(y, text, color)
   end
 end
 
-local function bar(y, label, used, total)
-  local w = frame and frame.width or monitor.getSize()
-  local p = pct(used, total)
-  local barWidth = math.max(10, w - #label - 12)
-  local filled = math.floor((p / 100) * barWidth)
-  local barX = #label + 3
-
+local function writeAt(x, y, text, color, bg)
   if frame then
-    uiDraw.bufferWrite(frame, 1, y, label .. " [", colors.white, colors.black)
-    uiDraw.bufferWrite(frame, barX, y, string.rep(" ", filled), colors.white, colorForPercent(p))
-    uiDraw.bufferWrite(frame, barX + filled, y, string.rep(" ", barWidth - filled), colors.white, colors.gray)
-    uiDraw.bufferWrite(frame, barX + barWidth, y, "] " .. string.format("%3.0f%%", p), colors.white, colors.black)
-    return
+    uiDraw.bufferWrite(frame, x, y, text, color or colors.white, bg or colors.black)
+  else
+    uiDraw.write(monitor, x, y, text, color or colors.white, bg or colors.black)
   end
+end
 
-  monitor.setCursorPos(1, y)
-  monitor.setTextColor(colors.white)
-  monitor.setBackgroundColor(colors.black)
-  monitor.clearLine()
-  monitor.write(label .. " [")
-  for i = 1, barWidth do
-    monitor.setBackgroundColor(i <= filled and colorForPercent(p) or colors.gray)
-    monitor.write(" ")
+local function drawPanel(title, lines, y, height, fg)
+  local w = frame and frame.width or monitor.getSize()
+  local panelW = math.min(w, math.max(28, math.min(54, w - 2)))
+  local panelH = math.max(3, height or (#(lines or {}) + 2))
+  panelH = math.min(panelH, (frame and frame.height or select(2, monitor.getSize())) - y + 1)
+  if panelH < 3 then return end
+  local x = math.max(1, math.floor((w - panelW) / 2) + 1)
+  uiDraw.box(frame or monitor, x, y, panelW, panelH, title, fg or colors.cyan, colors.black)
+  for i, text in ipairs(lines or {}) do
+    if i > panelH - 2 then break end
+    writeAt(x + 2, y + i, uiDraw.fit(text, panelW - 4), colors.white, colors.black)
   end
-  monitor.setBackgroundColor(colors.black)
-  monitor.setTextColor(colors.white)
-  monitor.write("] " .. string.format("%3.0f%%", p))
+end
+
+local function drawGauge(x, y, width, used, total)
+  local p = pct(used, total)
+  local gaugeWidth = math.max(8, math.min(width, 24))
+  uiDraw.gauge(frame or monitor, x, y, gaugeWidth, p, colorForPercent(p))
+  writeAt(x + gaugeWidth + 1, y, string.format("%3.0f%%", p), colors.white, colors.black)
 end
 
 -- UI-1: render a frame through the diff double-buffer. The renderFn draws via
--- line()/bar() into `frame`; renderBuffer rewrites only the rows that changed
+-- line()/writeAt() into `frame`; renderBuffer rewrites only the rows that changed
 -- (blit), so there is no whole-screen monitor.clear flash between frames.
 local function present(renderFn)
   if not monitor then return end
@@ -237,10 +240,13 @@ local function present(renderFn)
 end
 
 local function drawWaiting(message)
-  present(function()
+  present(function(_, h)
     line(1, TITLE, colors.cyan)
-    line(3, message, colors.yellow)
-    line(5, "Needs modem on " .. PROTOCOL, colors.gray)
+    local panelY = math.max(3, math.floor((h - 4) / 2))
+    drawPanel("Waiting", {
+      message,
+      "Protocol: " .. PROTOCOL,
+    }, panelY, 4, colors.yellow)
   end)
 end
 
@@ -250,31 +256,53 @@ local function drawView(data)
   line(4, "Managed: " .. fmt(data.managedItemCount) .. "   Listed: " .. fmt(data.listedItemCount) ..
     "   Default: " .. tostring(data.defaultHandling or "unmanaged"), colors.gray)
 
+  local headerY = 11
   if data.usedItemStorage and data.totalItemStorage then
     -- QUICK-6: surface free headroom alongside used/total
     local free = data.availableItemStorage or (data.totalItemStorage - data.usedItemStorage)
-    line(5, "Item Storage: " .. fmt(data.usedItemStorage) .. " / " .. fmt(data.totalItemStorage) ..
-      "   free " .. fmt(free), colors.white)
-    bar(6, "Items", data.usedItemStorage, data.totalItemStorage)
+    if w >= 70 then
+      local boxW = math.floor((w - 3) / 2)
+      uiDraw.box(frame or monitor, 1, 5, boxW, 4, "Storage", colors.cyan, colors.black)
+      writeAt(3, 6, uiDraw.fit(fmt(data.usedItemStorage) .. " / " .. fmt(data.totalItemStorage), boxW - 4), colors.white)
+      writeAt(3, 7, uiDraw.fit("free " .. fmt(free), math.max(6, boxW - 32)), colors.gray)
+      drawGauge(math.max(3, boxW - 27), 7, 18, data.usedItemStorage, data.totalItemStorage)
+    else
+      uiDraw.box(frame or monitor, 1, 5, w, 3, "Storage", colors.cyan, colors.black)
+      writeAt(3, 6, uiDraw.fit(fmt(data.usedItemStorage) .. " / " .. fmt(data.totalItemStorage) ..
+        " free " .. fmt(free), math.max(8, w - 30)), colors.white)
+      drawGauge(math.max(3, w - 27), 6, 16, data.usedItemStorage, data.totalItemStorage)
+      headerY = 12
+    end
   else
     -- QUICK-6: fallback so the section never degrades to a single gray line when the disk
     -- capacity API is unavailable -- show what we DO know (unique type count + total count)
-    line(5, "Stored: " .. fmt(data.unique or data.listedItemCount or 0) .. " types   " ..
-      fmt(data.totalAmount or 0) .. " items", colors.white)
+    uiDraw.box(frame or monitor, 1, 5, w >= 70 and math.floor((w - 3) / 2) or w, 3, "Storage", colors.cyan, colors.black)
+    writeAt(3, 6, uiDraw.fit(fmt(data.unique or data.listedItemCount or 0) .. " types   " ..
+      fmt(data.totalAmount or 0) .. " items", (w >= 70 and math.floor((w - 3) / 2) or w) - 4), colors.white)
   end
 
+  local energyX = (w >= 70) and (math.floor((w - 3) / 2) + 3) or 1
+  local energyY = (w >= 70) and 5 or 8
+  local energyW = (w >= 70) and (w - energyX + 1) or w
+  uiDraw.box(frame or monitor, energyX, energyY, energyW, 3, "Energy", colors.cyan, colors.black)
   if data.storedEnergy and data.energyCapacity then
-    line(8, "RS Energy: " .. fmt(data.storedEnergy) .. " / " .. fmt(data.energyCapacity) .. " FE", colors.white)
+    writeAt(energyX + 2, energyY + 1,
+      uiDraw.fit(fmt(data.storedEnergy) .. " / " .. fmt(data.energyCapacity) .. " FE", math.max(8, energyW - 30)),
+      colors.white)
+    drawGauge(math.max(energyX + 2, energyX + energyW - 27), energyY + 1, 16,
+      data.storedEnergy, data.energyCapacity)
+  else
+    writeAt(energyX + 2, energyY + 1, uiDraw.fit("No energy capacity in snapshot", energyW - 4), colors.gray)
   end
   if data.energyUsage then
-    line(9, "RS Usage:  " .. fmt(data.energyUsage) .. " FE/t", colors.white)
+    writeAt(energyX + 2, energyY + 2, uiDraw.fit("Usage " .. fmt(data.energyUsage) .. " FE/t", energyW - 4), colors.gray)
   end
 
   -- VIEW-2: paginated, touch-scrollable stored-items list (consumes VIEW-1's bounded
   -- viewItems; falls back to the 8-item summary if an older source is broadcasting).
   local items = data.viewItems or data.topItems or {}
   console.sortItems(items, viewSort) -- VIEW-3: re-sort per the tappable sort chip
-  local headerY, navY = 11, h
+  local navY = h
   local listStart = headerY + 1
   local perPage = math.max(1, navY - listStart)
   local pg = console.paginate(#items, perPage, viewPage)
@@ -286,23 +314,30 @@ local function drawView(data)
   -- line(); shown only when the monitor is wide enough, else the row degrades to name+amount.
   local maxAmt = 0
   for _, it in ipairs(items) do local a = tonumber(it.amount) or 0; if a > maxAmt then maxAmt = a end end
-  for i = pg.from, pg.to do
-    local item = items[i]
-    if item then
-      local y = listStart + (i - pg.from)
-      -- VIEW-5: per-item trend arrow + per-min rate (hidden when no trend data)
-      local trend = ""
-      if type(item.trend) == "table" then
-        local arrow = (item.trend.dir == "up" and "^") or (item.trend.dir == "down" and "v") or "-"
-        trend = " " .. rjust(arrow .. fmt(math.abs(item.trend.perMin or 0)) .. "/m", 8)
+  if #items == 0 then
+    drawPanel("No Items", {
+      "No stored items in this snapshot.",
+      "Waiting for the next inventory broadcast.",
+    }, listStart + 1, math.min(5, math.max(3, navY - listStart - 1)), colors.gray)
+  else
+    for i = pg.from, pg.to do
+      local item = items[i]
+      if item then
+        local y = listStart + (i - pg.from)
+        -- VIEW-5: per-item trend arrow + per-min rate (hidden when no trend data)
+        local trend = ""
+        if type(item.trend) == "table" then
+          local arrow = (item.trend.dir == "up" and "^") or (item.trend.dir == "down" and "v") or "-"
+          trend = " " .. rjust(arrow .. fmt(math.abs(item.trend.perMin or 0)) .. "/m", 8)
+        end
+        local mag = ""
+        if w >= 50 and maxAmt > 0 then
+          mag = " " .. uiDraw.barText((tonumber(item.amount) or 0) / maxAmt * 100, 6)
+        end
+        local nameW = (mag ~= "") and math.max(6, w - 34) or math.max(8, w - 27)
+        line(y, rjust(i, 4) .. ". " .. uiDraw.fit(tostring(item.name), nameW) ..
+          mag .. "  " .. rjust(fmt(item.amount), 10) .. trend, colors.white)
       end
-      local mag = ""
-      if w >= 50 and maxAmt > 0 then
-        mag = " " .. uiDraw.barText((tonumber(item.amount) or 0) / maxAmt * 100, 6)
-      end
-      local nameW = (mag ~= "") and math.max(6, w - 34) or math.max(8, w - 27)
-      line(y, rjust(i, 4) .. ". " .. uiDraw.fit(tostring(item.name), nameW) ..
-        mag .. "  " .. rjust(fmt(item.amount), 10) .. trend, colors.white)
     end
   end
   -- nav row (reuses the tested console.buttonRow / buttonHit)
@@ -313,7 +348,7 @@ local function drawView(data)
   }, navY, 1)
   for _, b in ipairs(viewNavRow.buttons) do
     local enabled = (b.key == "prev" and pg.page > 1) or (b.key == "next" and pg.page < pg.pages) or (b.key == "sort")
-    uiDraw.write(monitor, b.x1, navY, b.text, enabled and colors.cyan or colors.gray, colors.black)
+    writeAt(b.x1, navY, b.text, enabled and colors.cyan or colors.gray, colors.black)
   end
 end
 
@@ -416,6 +451,15 @@ local function draw(data)
 
   present(function()
     line(1, TITLE .. "  [" .. PROFILE .. "]", colors.cyan)
+
+    local w, h = monitor.getSize()
+    if w < MIN_WIDTH or h < MIN_HEIGHT then
+      drawPanel("Monitor Too Small", {
+        "Current: " .. tostring(w) .. "x" .. tostring(h),
+        "Need: >= " .. MIN_WIDTH .. "x" .. MIN_HEIGHT,
+      }, math.max(3, math.floor((h - 4) / 2)), 4, colors.orange)
+      return
+    end
 
     -- Readiness banner: say plainly whether this screen is live or reconnecting, so
     -- a frozen-looking display is never mistaken for current data.
