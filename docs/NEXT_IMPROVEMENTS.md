@@ -69,6 +69,18 @@ changing paging, sorting, nav buttons, or broadcast payloads.
   SMOKE-REQUEST OK.
 - **in-game-verify: pending** — visual readability needs a real monitor look.
 
+## Session log — 2026-06-29 (D1 power-display double buffer shipped)
+
+Power display flicker polish shipped. `power/display.lua` now renders through the
+shared diff-buffer path used by the viewer: line/bar/graph cells write into a frame
+when active, then `renderBuffer` updates only changed rows/cells. The render-error
+fallback resets the diff baseline after a manual clear so the next good frame redraws
+fully. Mirror pair stayed byte-identical.
+
+- **Gate:** 784 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK.
+- **in-game-verify: pending** — graph framing/flicker needs a real monitor look.
+
 ## Session log — 2026-06-26 (A2 — request-panel program shipped)
 
 New viewer-style touch program **inventory/request.lua** (+ root mirror +
@@ -510,7 +522,7 @@ at 186 (state folded onto existing tables).
 | C1 | tap flash on Browse/Smart/Presets/editor | S | med | low | gate | DONE (`166a75c`, in-game-verify pending) |
 | C2 | notInGrid hoist | S | med | low | gate | DONE (d0cfc86) |
 | C3 | UI-4 enlarge tap targets | M | med | med | visual | discuss |
-| D1 | power-display double buffer | M | high | med | visual | discuss |
+| D1 | power-display double buffer | M | high | med | visual | DONE (diff-buffer wired; in-game-verify pending) |
 | D2 | box/gauge wire-or-delete | S | med | low | gate | DONE (`draw.box`/`draw.gauge` wired into viewer panels; buffer target covered) |
 | D3 | UI-3 header band + chips | M | med | med | visual | discuss |
 | D4 | viewer zebra rows | S | med | low | visual | DONE (alternating viewer row backgrounds; in-game-verify pending) |

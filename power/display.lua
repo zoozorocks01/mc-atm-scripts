@@ -75,6 +75,8 @@ local lastNonzeroInput = 0
 local lastNonzeroOutput = 0
 local alarmActive = false -- QUICK-3: carries the alarm edge-state across frames
 local speaker = (peripheral and peripheral.find) and peripheral.find("speaker") or nil
+local frame = nil      -- D1: current render buffer, set during present()
+local prevFrame = nil  -- D1: previous frame for diff-rendering
 
 local function now()
   if os.epoch then return math.floor(os.epoch("utc") / 1000) end
@@ -99,35 +101,64 @@ local function colorForPercent(p)
   return colors.lime
 end
 
-local function line(y, text, color)
-  uiDraw.line(mon, y, text, color or colors.white, colors.black)
+local function line(y, text, color, bg)
+  if frame then
+    uiDraw.bufferWrite(frame, 1, y, uiDraw.fit(text, frame.width), color or colors.white, bg or colors.black)
+  else
+    uiDraw.line(mon, y, text, color or colors.white, bg or colors.black)
+  end
+end
+
+local function cell(x, y, bg)
+  if frame then
+    uiDraw.bufferWrite(frame, x, y, " ", colors.white, bg or colors.black)
+    return
+  end
+  mon.setCursorPos(x, y)
+  mon.setBackgroundColor(bg or colors.black)
+  mon.write(" ")
 end
 
 local function drawBar(y, label, pct)
-  local w = mon.getSize()
+  local w = frame and frame.width or mon.getSize()
   local barW = math.max(10, w - #label - 8)
   local filled = math.floor(barW * math.max(0, math.min(100, pct)) / 100)
 
-  mon.setCursorPos(1, y)
-  mon.setTextColor(colors.white)
-  mon.setBackgroundColor(colors.black)
-  mon.clearLine()
-  mon.write(label .. " [")
-
-  for i = 1, barW do
-    mon.setBackgroundColor(i <= filled and colorForPercent(pct) or colors.gray)
-    mon.write(" ")
+  line(y, "", colors.white)
+  if frame then
+    uiDraw.bufferWrite(frame, 1, y, label .. " [", colors.white, colors.black)
+  else
+    mon.setCursorPos(1, y)
+    mon.setTextColor(colors.white)
+    mon.setBackgroundColor(colors.black)
+    mon.write(label .. " [")
   end
 
-  mon.setBackgroundColor(colors.black)
-  mon.setTextColor(colors.white)
-  mon.write("] " .. string.format("%3.0f%%", pct))
+  for i = 1, barW do
+    cell(#label + 3 + i - 1, y, i <= filled and colorForPercent(pct) or colors.gray)
+  end
+
+  if frame then
+    uiDraw.bufferWrite(frame, #label + 3 + barW, y, "] " .. string.format("%3.0f%%", pct), colors.white, colors.black)
+  else
+    mon.setBackgroundColor(colors.black)
+    mon.setTextColor(colors.white)
+    mon.write("] " .. string.format("%3.0f%%", pct))
+  end
+end
+
+local function present(renderFn)
+  local w, h = mon.getSize()
+  frame = uiDraw.newBuffer(w, h)
+  renderFn(w, h)
+  prevFrame = uiDraw.renderBuffer(mon, frame, prevFrame)
+  frame = nil
 end
 
 local function drawGraph(top, height, pctHistory)
   if height < 2 then return end
 
-  local w = mon.getSize()
+  local w = frame and frame.width or mon.getSize()
   local left = 2
   local width = w - 2
 
@@ -150,47 +181,41 @@ local function drawGraph(top, height, pctHistory)
     end
 
     for y = 0, height - 1 do
-      mon.setCursorPos(left + x - 1, top + height - y - 1)
+      local bg
       if hasData and y < maxRows then
         -- the range cap (between avg and max) is dimmed; the solid body (<= avg) is full color
         if y < avgRows then
-          mon.setBackgroundColor(colorForPercent(bk.avg))
+          bg = colorForPercent(bk.avg)
         else
-          mon.setBackgroundColor(colors.gray)
+          bg = colors.gray
         end
       else
-        mon.setBackgroundColor(colors.black)
+        bg = colors.black
       end
-      mon.write(" ")
+      cell(left + x - 1, top + height - y - 1, bg)
     end
   end
-  mon.setBackgroundColor(colors.black)
+  if not frame then mon.setBackgroundColor(colors.black) end
 end
 
 local function drawCompactGraph(y, pctHistory)
-  local w = mon.getSize()
+  local w = frame and frame.width or mon.getSize()
   if y < 1 then return end
 
-  mon.setCursorPos(1, y)
-  mon.clearLine()
+  line(y, "", colors.white)
 
   for x = 1, w do
     local sample = pctHistory[#pctHistory - w + x]
-    if sample then
-      mon.setBackgroundColor(colorForPercent(sample))
-    else
-      mon.setBackgroundColor(colors.black)
-    end
-    mon.write(" ")
+    cell(x, y, sample and colorForPercent(sample) or colors.black)
   end
 
-  mon.setBackgroundColor(colors.black)
+  if not frame then mon.setBackgroundColor(colors.black) end
 end
 
 local function drawNetGraph(top, height, values)
   if height < 3 then return end
 
-  local w = mon.getSize()
+  local w = frame and frame.width or mon.getSize()
   local left = 2
   local width = w - 2
   local mid = top + math.floor(height / 2)
@@ -228,139 +253,137 @@ local function drawNetGraph(top, height, values)
     end
 
     for y = top, top + height - 1 do
-      mon.setCursorPos(left + x - 1, y)
+      local bg
       if y == mid then
-        mon.setBackgroundColor(colors.gray)
+        bg = colors.gray
       elseif hasData and y < mid and y >= mid - posRows then
         -- above zero: solid lime up to avg, dimmed (range to max) above it
-        mon.setBackgroundColor(y >= mid - avgPosRows and colors.lime or colors.green)
+        bg = y >= mid - avgPosRows and colors.lime or colors.green
       elseif hasData and y > mid and y <= mid + negRows then
         -- below zero: solid red down to avg, dimmed (range to min) below it
-        mon.setBackgroundColor(y <= mid + avgNegRows and colors.red or colors.brown)
+        bg = y <= mid + avgNegRows and colors.red or colors.brown
       else
-        mon.setBackgroundColor(colors.black)
+        bg = colors.black
       end
-      mon.write(" ")
+      cell(left + x - 1, y, bg)
     end
   end
 
-  mon.setBackgroundColor(colors.black)
+  if not frame then mon.setBackgroundColor(colors.black) end
 end
 
 local function drawCompactNetGraph(y, values)
-  local w = mon.getSize()
+  local w = frame and frame.width or mon.getSize()
   if y < 1 then return end
 
-  mon.setCursorPos(1, y)
-  mon.clearLine()
+  line(y, "", colors.white)
 
   for x = 1, w do
     local sample = values[#values - w + x]
-    if sample and sample > 0 then mon.setBackgroundColor(colors.lime)
-    elseif sample and sample < 0 then mon.setBackgroundColor(colors.red)
-    elseif sample then mon.setBackgroundColor(colors.gray)
-    else mon.setBackgroundColor(colors.black) end
-    mon.write(" ")
+    local bg
+    if sample and sample > 0 then bg = colors.lime
+    elseif sample and sample < 0 then bg = colors.red
+    elseif sample then bg = colors.gray
+    else bg = colors.black end
+    cell(x, y, bg)
   end
 
-  mon.setBackgroundColor(colors.black)
+  if not frame then mon.setBackgroundColor(colors.black) end
 end
 
 local function draw()
-  local _, h = mon.getSize()
-  mon.setBackgroundColor(colors.black)
-  mon.clear()
+  present(function(_, h)
+    line(1, TITLE, colors.cyan)
 
-  line(1, TITLE, colors.cyan)
+    if not last then
+      line(3, "Waiting for power computer...", colors.yellow)
+      line(5, "Protocol: " .. PROTOCOL, colors.gray)
+      return
+    end
 
-  if not last then
-    line(3, "Waiting for power computer...", colors.yellow)
-    line(5, "Protocol: " .. PROTOCOL, colors.gray)
-    return
-  end
+    -- QUICK-4: the probe reached us but its induction port is not responding -- show a SENSOR
+    -- state rather than the fabricated 0/0/0% an unreachable port would otherwise read as.
+    if last.sensorOk == false then
+      line(3, "SENSOR UNREACHABLE", colors.orange)
+      line(5, "The induction port is not responding to reads.", colors.gray)
+      line(6, "Showing no data instead of a fabricated 0%.", colors.gray)
+      line(8, "Check the matrix / port placement on the probe.", colors.gray)
+      line(10, "Last contact age " .. math.floor(now() - (lastSeen or now())) .. "s", colors.gray)
+      return
+    end
 
-  -- QUICK-4: the probe reached us but its induction port is not responding -- show a SENSOR
-  -- state rather than the fabricated 0/0/0% an unreachable port would otherwise read as.
-  if last.sensorOk == false then
-    line(3, "SENSOR UNREACHABLE", colors.orange)
-    line(5, "The induction port is not responding to reads.", colors.gray)
-    line(6, "Showing no data instead of a fabricated 0%.", colors.gray)
-    line(8, "Check the matrix / port placement on the probe.", colors.gray)
-    line(10, "Last contact age " .. math.floor(now() - (lastSeen or now())) .. "s", colors.gray)
-    return
-  end
+    local pct = last.percent or 0
+    local net, netSource = effectiveNet(last)
+    local age = now() - (lastSeen or now())
+    local timeText, timeColor = estimateTime(last.energy, last.maxEnergy, net)
 
-  local pct = last.percent or 0
-  local net, netSource = effectiveNet(last)
-  local age = now() - (lastSeen or now())
-  local timeText, timeColor = estimateTime(last.energy, last.maxEnergy, net)
+    line(3, "Stored: " .. fmt(last.energy) .. " / " .. fmt(last.maxEnergy), colors.white)
+    drawBar(4, "Matrix", pct)
 
-  line(3, "Stored: " .. fmt(last.energy) .. " / " .. fmt(last.maxEnergy), colors.white)
-  drawBar(4, "Matrix", pct)
-
-  line(6, "Full:   " .. string.format("%.2f%%", pct), colorForPercent(pct))
+    line(6, "Full:   " .. string.format("%.2f%%", pct), colorForPercent(pct))
   -- QUICK-1: surface input/output as a fraction of the matrix's per-tick transfer cap
   -- (transferCap is already on the wire from the probe). headroom() hides it when cap is 0.
-  local cap = last.transferCap or 0
-  local inHead = power.headroom(last.input, cap)
-  local outHead = power.headroom(last.output, cap)
-  line(7, "Input:  " .. fmt(last.input) .. "/t" .. (inHead and string.format("  %3.0f%% cap", inHead) or ""), colors.lime)
-  line(8, "Output: " .. fmt(last.output) .. "/t" .. (outHead and string.format("  %3.0f%% cap", outHead) or ""), colors.red)
+    local cap = last.transferCap or 0
+    local inHead = power.headroom(last.input, cap)
+    local outHead = power.headroom(last.output, cap)
+    line(7, "Input:  " .. fmt(last.input) .. "/t" .. (inHead and string.format("  %3.0f%% cap", inHead) or ""), colors.lime)
+    line(8, "Output: " .. fmt(last.output) .. "/t" .. (outHead and string.format("  %3.0f%% cap", outHead) or ""), colors.red)
 
-  local netColor = colors.white
-  if net > 0 then netColor = colors.lime elseif net < 0 then netColor = colors.red end
-  line(9, "Net:    " .. fmt(net) .. "/t " .. netSource, netColor)
+    local netColor = colors.white
+    if net > 0 then netColor = colors.lime elseif net < 0 then netColor = colors.red end
+    line(9, "Net:    " .. fmt(net) .. "/t " .. netSource, netColor)
 
-  if (last.input or 0) == 0 and (last.output or 0) == 0 and (lastNonzeroInput > 0 or lastNonzeroOutput > 0) then
-    line(10, "Last IO: " .. fmt(lastNonzeroInput) .. "/t in  " .. fmt(lastNonzeroOutput) .. "/t out", colors.gray)
-  else
-    line(10, timeText, timeColor)
-  end
+    if (last.input or 0) == 0 and (last.output or 0) == 0 and (lastNonzeroInput > 0 or lastNonzeroOutput > 0) then
+      line(10, "Last IO: " .. fmt(lastNonzeroInput) .. "/t in  " .. fmt(lastNonzeroOutput) .. "/t out", colors.gray)
+    else
+      line(10, timeText, timeColor)
+    end
 
   -- Status label and color come from the shared vocabulary (atm10-status), so
   -- power and inventory speak one language. Thresholds are unchanged.
-  local statusText = "OK"
-  if age > STALE_SECONDS then statusText = "STALE DATA"
-  elseif pct < CRITICAL_PERCENT then statusText = "CRITICAL"
-  elseif pct < LOW_PERCENT then statusText = "LOW"
-  elseif net < 0 then statusText = "DRAINING" end
+    local statusText = "OK"
+    if age > STALE_SECONDS then statusText = "STALE DATA"
+    elseif pct < CRITICAL_PERCENT then statusText = "CRITICAL"
+    elseif pct < LOW_PERCENT then statusText = "LOW"
+    elseif net < 0 then statusText = "DRAINING" end
 
   -- QUICK-3: edge-triggered alarm (decision unit-tested in atm10-power). Redstone is held while
   -- alarming and cleared when it clears; the beep fires once on entry so it can't chatter.
-  if ALARM_ENABLED then
-    local fire
-    fire, alarmActive = power.alarmDecision(statusText, alarmActive)
-    if ALARM_REDSTONE_SIDE and redstone then pcall(redstone.setOutput, ALARM_REDSTONE_SIDE, alarmActive) end
-    if fire and ALARM_SOUND and speaker then pcall(speaker.playNote, "bell", 3, 12) end
-  end
+    if ALARM_ENABLED then
+      local fire
+      fire, alarmActive = power.alarmDecision(statusText, alarmActive)
+      if ALARM_REDSTONE_SIDE and redstone then pcall(redstone.setOutput, ALARM_REDSTONE_SIDE, alarmActive) end
+      if fire and ALARM_SOUND and speaker then pcall(speaker.playNote, "bell", 3, 12) end
+    end
 
-  if (last.input or 0) == 0 and (last.output or 0) == 0 and (lastNonzeroInput > 0 or lastNonzeroOutput > 0) then
-    line(11, timeText, timeColor)
-  end
+    if (last.input or 0) == 0 and (last.output or 0) == 0 and (lastNonzeroInput > 0 or lastNonzeroOutput > 0) then
+      line(11, timeText, timeColor)
+    end
 
-  line(12, "Status: " .. uiStatus.label(statusText) .. "   age " .. math.floor(age) .. "s", uiStatus.color(statusText))
+    line(12, "Status: " .. uiStatus.label(statusText) .. "   age " .. math.floor(age) .. "s", uiStatus.color(statusText))
 
-  if SHOW_NET_GRAPH and SHOW_STORED_GRAPH and h >= 21 then
-    line(13, "Net Flow History", colors.cyan)
-    local netHeight = math.max(3, math.floor((h - 15) / 2))
-    drawNetGraph(14, netHeight, netHistory)
+    if SHOW_NET_GRAPH and SHOW_STORED_GRAPH and h >= 21 then
+      line(13, "Net Flow History", colors.cyan)
+      local netHeight = math.max(3, math.floor((h - 15) / 2))
+      drawNetGraph(14, netHeight, netHistory)
 
-    local storedLabel = 14 + netHeight
-    line(storedLabel, "Stored Energy History", colors.cyan)
-    drawGraph(storedLabel + 1, h - storedLabel, history)
-  elseif SHOW_NET_GRAPH and h >= 16 then
-    line(13, "Net Flow History", colors.cyan)
-    drawNetGraph(14, h - 13, netHistory)
-  elseif SHOW_STORED_GRAPH and h >= 15 then
-    line(13, "Stored Energy History", colors.cyan)
-    drawGraph(14, h - 13, history)
-  elseif SHOW_NET_GRAPH and h >= 13 then
-    drawCompactNetGraph(13, netHistory)
-  elseif SHOW_STORED_GRAPH and h >= 13 then
-    drawCompactGraph(13, history)
-  else
-    line(h, "Scale " .. tostring(textScale) .. " auto", colors.gray)
-  end
+      local storedLabel = 14 + netHeight
+      line(storedLabel, "Stored Energy History", colors.cyan)
+      drawGraph(storedLabel + 1, h - storedLabel, history)
+    elseif SHOW_NET_GRAPH and h >= 16 then
+      line(13, "Net Flow History", colors.cyan)
+      drawNetGraph(14, h - 13, netHistory)
+    elseif SHOW_STORED_GRAPH and h >= 15 then
+      line(13, "Stored Energy History", colors.cyan)
+      drawGraph(14, h - 13, history)
+    elseif SHOW_NET_GRAPH and h >= 13 then
+      drawCompactNetGraph(13, netHistory)
+    elseif SHOW_STORED_GRAPH and h >= 13 then
+      drawCompactGraph(13, history)
+    else
+      line(h, "Scale " .. tostring(textScale) .. " auto", colors.gray)
+    end
+  end)
 end
 
 while true do
@@ -388,6 +411,7 @@ while true do
   if not ok then
     print("draw error: " .. tostring(err))
     pcall(function()
+      prevFrame = nil
       mon.setBackgroundColor(colors.black)
       mon.clear()
       line(1, TITLE, colors.cyan)
