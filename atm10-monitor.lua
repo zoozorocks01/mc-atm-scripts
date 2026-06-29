@@ -68,33 +68,43 @@ function monitor.demand(trends, craftable, opts)
   local minWindowMin = opts.minWindowMin or 10
   local minSamples = opts.minSamples or 4
   local top = opts.top or 6
+  local spikeRatio = opts.spikeRatio or 3 -- swing > spikeRatio*netDrain => transient, ignore
   craftable = craftable or {}
+  local skip = opts.skip or {} -- names to exclude entirely (e.g. watch-only / machine-made)
 
   local falling, source = {}, {}
   for name, t in pairs(trends or {}) do
-    local span = minutesBetween(t.t0, t.tN)
-    local decline = (t.a0 or 0) - (t.aN or 0) -- positive => net drained over the window
-    if span >= minWindowMin and (t.n or 0) >= minSamples and decline > 0 then
-      local perMin = decline / span
-      if perMin >= minPerMin then
-        local eta = (t.aN and t.aN > 0) and (t.aN / perMin) or 0
-        local row = { label = t.label or name, name = name, perMin = perMin, etaMin = eta }
-        if craftable[name] then
-          falling[#falling + 1] = row
-        else
-          source[#source + 1] = row
+    if not skip[name] then
+      local span = minutesBetween(t.t0, t.tN)
+      local decline = (t.a0 or 0) - (t.aN or 0) -- positive => net drained over the window
+      if span >= minWindowMin and (t.n or 0) >= minSamples and decline > 0 then
+        local perMin = decline / span
+        -- Drop transient spikes: if the in-window swing (max-min) dwarfs the NET drain,
+        -- the stock bounced (consumed then refilled) rather than steadily declining --
+        -- not something to go "source more" of. Kills the v10k/min ~0m noise.
+        local swing = (t.maxA or 0) - (t.minA or 0)
+        local spiky = swing > spikeRatio * decline
+        if perMin >= minPerMin and not spiky then
+          local eta = (t.aN and t.aN > 0) and (t.aN / perMin) or 0
+          local row = { label = t.label or name, name = name, perMin = perMin, etaMin = eta }
+          if craftable[name] then
+            falling[#falling + 1] = row
+          else
+            source[#source + 1] = row
+          end
         end
       end
     end
   end
 
-  -- worst first: closest to empty (smallest eta), then biggest drain
-  local function bySeverity(a, b)
-    if a.etaMin ~= b.etaMin then return a.etaMin < b.etaMin end
-    return a.perMin > b.perMin
+  -- Rank by biggest sustained drain first -- the most actionable "what am I burning
+  -- through?" -- with eta shown alongside as the urgency cue.
+  local function byDrain(a, b)
+    if a.perMin ~= b.perMin then return a.perMin > b.perMin end
+    return (a.etaMin or 0) < (b.etaMin or 0)
   end
-  table.sort(falling, bySeverity)
-  table.sort(source, bySeverity)
+  table.sort(falling, byDrain)
+  table.sort(source, byDrain)
 
   local function trim(list)
     local o = {}

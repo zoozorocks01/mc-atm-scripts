@@ -54,11 +54,13 @@ do
     ["mc:inferium"]    = { label = "Inferium",    t0 = NOW - 1200000, tN = NOW, a0 = 9000, aN = 5000, n = 6 }, -- -200/min, craftable
     ["mx:flat"]        = { label = "Flat",        t0 = NOW - 1200000, tN = NOW, a0 = 1000, aN = 1000, n = 6 }, -- no decline
     ["my:tiny"]        = { label = "Tiny",        t0 = NOW - 1200000, tN = NOW, a0 = 1100, aN = 1000, n = 6 }, -- -5/min, below thresh
+    -- net drain 2000 (perMin 100, passes) BUT swing 19000 >> 3*2000 -> transient spike, must be dropped
+    ["mz:spiky"]       = { label = "Spiky",       t0 = NOW - 1200000, tN = NOW, a0 = 10000, aN = 8000, minA = 1000, maxA = 20000, n = 6 },
   }
   local dm = monitor.demand(trends, { ["mc:inferium"] = true }, { minPerMin = 20, minWindowMin = 10, minSamples = 4, top = 6 })
   t.eq(#dm.fallingBehind, 1, "monitor.demand: 1 falling-behind (craftable + draining)")
   t.eq(dm.fallingBehind[1].name, "mc:inferium", "monitor.demand: inferium falling behind")
-  t.eq(#dm.sourceMore, 1, "monitor.demand: 1 source-more (raw input draining)")
+  t.eq(#dm.sourceMore, 1, "monitor.demand: 1 source-more (raw input draining; spiky one excluded)")
   t.eq(dm.sourceMore[1].name, "ma:silver_dust", "monitor.demand: silver dust -> source more")
   t.check(dm.sourceMore[1].perMin >= 199 and dm.sourceMore[1].perMin <= 201, "monitor.demand: ~200/min drain")
 end
