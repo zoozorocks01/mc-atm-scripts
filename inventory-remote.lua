@@ -190,11 +190,11 @@ end
 
 -- UI-1: write through the frame buffer when one is active (the flicker-free path),
 -- else straight to the monitor (defensive fallback).
-local function line(y, text, color)
+local function line(y, text, color, bg)
   if frame then
-    uiDraw.bufferWrite(frame, 1, y, uiDraw.fit(text, frame.width), color or colors.white, colors.black)
+    uiDraw.bufferWrite(frame, 1, y, uiDraw.fit(text, frame.width), color or colors.white, bg or colors.black)
   else
-    uiDraw.line(monitor, y, text, color or colors.white, colors.black)
+    uiDraw.line(monitor, y, text, color or colors.white, bg or colors.black)
   end
 end
 
@@ -335,8 +335,9 @@ local function drawView(data)
           mag = " " .. uiDraw.barText((tonumber(item.amount) or 0) / maxAmt * 100, 6)
         end
         local nameW = (mag ~= "") and math.max(6, w - 34) or math.max(8, w - 27)
+        local bg = ((i - pg.from) % 2 == 1) and colors.gray or colors.black
         line(y, rjust(i, 4) .. ". " .. uiDraw.fit(tostring(item.name), nameW) ..
-          mag .. "  " .. rjust(fmt(item.amount), 10) .. trend, colors.white)
+          mag .. "  " .. rjust(fmt(item.amount), 10) .. trend, colors.white, bg)
       end
     end
   end

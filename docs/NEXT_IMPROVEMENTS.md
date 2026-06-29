@@ -59,6 +59,16 @@ time or last-touch time. PLAN/QUEUE/HEALTH no longer rotate immediately after a 
   SMOKE-REQUEST OK.
 - **in-game-verify: n/a** — pure timing change with unit coverage.
 
+## Session log — 2026-06-29 (D4 viewer zebra rows shipped)
+
+Viewer list polish shipped. The stored-items list now alternates row backgrounds via
+the existing diff-buffer path, making dense item/amount rows easier to scan without
+changing paging, sorting, nav buttons, or broadcast payloads.
+
+- **Gate:** 784 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK.
+- **in-game-verify: pending** — visual readability needs a real monitor look.
+
 ## Session log — 2026-06-26 (A2 — request-panel program shipped)
 
 New viewer-style touch program **inventory/request.lua** (+ root mirror +
@@ -503,7 +513,7 @@ at 186 (state folded onto existing tables).
 | D1 | power-display double buffer | M | high | med | visual | discuss |
 | D2 | box/gauge wire-or-delete | S | med | low | gate | DONE (`draw.box`/`draw.gauge` wired into viewer panels; buffer target covered) |
 | D3 | UI-3 header band + chips | M | med | med | visual | discuss |
-| D4 | viewer zebra rows | S | med | low | visual | Code |
+| D4 | viewer zebra rows | S | med | low | visual | DONE (alternating viewer row backgrounds; in-game-verify pending) |
 | D5 | UI-5 empty/too-small panels | M | med | low | gate+visual | DONE (viewer waiting/no-items/too-small panels shipped; in-game-verify pending) |
 | E1 | pause auto-rotation on interaction | S | low | low | gate | DONE (touches now pause dashboard auto-rotation) |
 | SMART-1 | confidence-weighted ranking | S | high | low | gate | DONE (`8b35ac3`) |
