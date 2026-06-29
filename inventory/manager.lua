@@ -1169,7 +1169,7 @@ local function scan()
   local unique = 0
   local totalAmount = 0
   local craftableCount = 0
-  local sorted = {}
+  local scanned = {}
 
   itemsByName = {} -- rebuilt each scan so findStoredItem is a local lookup
   for _, item in pairs(items) do
@@ -1178,7 +1178,7 @@ local function scan()
     totalAmount = totalAmount + amount
     if item.isCraftable then craftableCount = craftableCount + 1 end
     if item.name then itemsByName[item.name] = item end
-    sorted[#sorted + 1] = item
+    scanned[#scanned + 1] = item
   end
   lastUnique = unique -- remember a good read so the next empty read is caught as stale
 
@@ -1186,8 +1186,6 @@ local function scan()
   -- immediately re-allow firing after a degraded window -- it takes recoverCycles
   -- consecutive clean reads to resume, so a just-reattached bridge isn't crafted at.
   craftingCache.__bridge.allowFire = craftingCache.__health.gateCrafts(craftingCache.__bridge, true)
-
-  table.sort(sorted, function(a, b) return itemAmount(a) > itemAmount(b) end)
 
   local warnings = {}
   for _, target in ipairs(config.lowStock or {}) do
@@ -1227,7 +1225,7 @@ local function scan()
     -- track drain for ALL items, not just craftable ones: with the live grid
     -- reporting craftable=0, gating on isCraftable would learn nothing.
     local snapshot = {}
-    for _, item in ipairs(sorted) do
+    for _, item in ipairs(scanned) do
       if item.name then
         snapshot[#snapshot + 1] = { name = item.name, label = itemName(item), amount = itemAmount(item) }
       end
@@ -1289,7 +1287,7 @@ local function scan()
   return {
     connected = connected,
     online = online,
-    items = sorted,
+    items = scanned,
     unique = unique,
     totalAmount = totalAmount,
     craftableCount = craftableCount,
@@ -1336,6 +1334,11 @@ end
 
 local function broadcast(data)
   if not BROADCAST_ENABLED or not broadcastReady or not data then return end
+  local broadcastItems = console.sortedItems(data.items, "qty", {
+    name = itemName,
+    amount = itemAmount,
+    id = function(it) return it.name end,
+  })
 
   -- The payload table is built OUTSIDE the send pcall so a logic error here still
   -- throws (the pcall must never mask a payload-build bug).
@@ -1354,8 +1357,8 @@ local function broadcast(data)
     unmanagedItemCount = data.unmanagedItemCount,
     listedItems = data.listedItems,
     warnings = data.warnings,
-    topItems = compactItems(data.items, BROADCAST_ITEMS.top),
-    viewItems = compactItems(data.items, BROADCAST_ITEMS.view, true),
+    topItems = compactItems(broadcastItems, BROADCAST_ITEMS.top),
+    viewItems = compactItems(broadcastItems, BROADCAST_ITEMS.view, true),
     usedItemStorage = data.usedItemStorage,
     totalItemStorage = data.totalItemStorage,
     availableItemStorage = data.availableItemStorage,
@@ -1567,7 +1570,7 @@ end
 local function drawBrowsePage(data)
   local w, h = monitor.getSize()
   local store = managedStore or managed.new()
-  local items = data.items or {}
+  local items = console.sortedItems(data.items or {}, "qty", { name = itemName, amount = itemAmount, id = function(it) return it.name end })
 
   -- managed-only filter: cut the ~5.9k-item haystack down to the items you tune
   if browseFilter then

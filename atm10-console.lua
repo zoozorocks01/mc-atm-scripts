@@ -182,6 +182,16 @@ function console.sortItems(items, mode, acc)
   return items
 end
 
+-- Return a sorted COPY, leaving the original scan order untouched. The manager uses
+-- this to avoid paying a full-grid sort in scan() when no rendered/broadcast surface
+-- needs quantity order this cycle.
+function console.sortedItems(items, mode, acc)
+  local out = {}
+  if type(items) ~= "table" then return out end
+  for i = 1, #items do out[i] = items[i] end
+  return console.sortItems(out, mode, acc)
+end
+
 -- ===========================================================================
 -- A2 REQUEST-PANEL helpers. Pure browse/quantity/job-row logic for the new
 -- craft-request touch program (inventory/request.lua). No peripherals; unit

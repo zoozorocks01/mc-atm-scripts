@@ -36,6 +36,19 @@ byte-identical.
 - **in-game-verify: pending** — this was render-stub/compile verified; real monitor
   spacing and readability still need an in-world look.
 
+## Session log — 2026-06-29 (B2 scan-sort trim shipped)
+
+Low-risk B2 code slice shipped. `scan()` no longer sorts the full RS item table every
+refresh; it returns raw scan order, while Browse and viewer broadcasts request sorted
+copies only when those surfaces need quantity ordering. Smart-mode trend snapshots were
+already gated behind `smartMode`, so no further change was needed there. The larger
+parallel/coroutine scan rewrite remains pinned for discussion.
+
+- **Gate:** 780 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK.
+- **in-game-verify: n/a** — behavior-preserving sort placement change; no new visual
+  layout or bridge call path.
+
 ## Session log — 2026-06-26 (A2 — request-panel program shipped)
 
 New viewer-style touch program **inventory/request.lua** (+ root mirror +
@@ -473,7 +486,7 @@ at 186 (state folded onto existing tables).
 | A2 | STAB-1 pin with smoke tests | S | high | low | gate | DONE (smoke_auto bites) |
 | A3 | bridge-degraded helper / gating / chip | S | med | low | gate | helper + GATING (craft back-off) DONE (`bb73312`, gateCrafts wired into scan/refreshAndDraw); chip still pinned (visual, wire with B1) |
 | B1 | UI-2 manager double buffer | major | high | high | visual | discuss |
-| B2 | shrink touch-block window | M | high | med | gate | Code/discuss |
+| B2 | shrink touch-block window | M | high | med | gate | Code slice DONE (trend gated; scan no longer always sorts full grid); coroutine rewrite still discuss |
 | C1 | tap flash on Browse/Smart/Presets/editor | S | med | low | gate | DONE (`166a75c`, in-game-verify pending) |
 | C2 | notInGrid hoist | S | med | low | gate | DONE (d0cfc86) |
 | C3 | UI-4 enlarge tap targets | M | med | med | visual | discuss |

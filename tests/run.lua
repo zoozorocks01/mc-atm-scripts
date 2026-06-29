@@ -1770,6 +1770,11 @@ do
   t.eq(console.nextSort("qty"), "az", "nextSort cycles qty -> az")
   t.eq(console.nextSort("mod"), "qty", "nextSort wraps mod -> qty")
   t.eq(console.sortLabel("az"), "A-Z", "sortLabel maps az")
+  local original = items()
+  local copied = console.sortedItems(original, "qty")
+  t.eq(copied[1].name, "apple", "sortedItems returns a sorted copy")
+  t.eq(original[1].name, "Zinc", "sortedItems leaves original order untouched")
+  t.check(copied ~= original, "sortedItems returns a new table")
 end
 
 -- A2 request-panel helpers (filter / quantity / job-row / token)
