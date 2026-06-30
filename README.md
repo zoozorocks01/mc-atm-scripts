@@ -4,6 +4,8 @@ ComputerCraft/CC:Tweaked scripts for ATM10 base automation.
 
 Full setup instructions live in
 [`docs/INSTALLATION_AND_USE.md`](docs/INSTALLATION_AND_USE.md).
+For the low-babysitting live workflow, see
+[`docs/OPERATOR_MODE.md`](docs/OPERATOR_MODE.md).
 
 ## Updater
 
