@@ -22,6 +22,21 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-30 (Pattern checklist hints shipped)
+
+Pattern checklist groundwork shipped. `atm10-patterns` now writes an IDs-only copy
+list to `.atm10-pattern-ids.txt` alongside the full worklist, and each needed row
+gets a next-step hint from the pattern helper. The `/give` emitter now classifies
+crafting-grid derivations separately from processing-pattern blockers and refuses
+to emit commands for alloy/circuit outputs even when their names end in `_ingot`.
+Processing patterns still require a captured in-world reference; no guessed NBT was
+introduced.
+
+- **Gate:** 798 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK; pattern-give mirror diff empty; `git diff --check` clean.
+- **in-game-verify: pending** — run `atm10-patterns` on the manager computer and
+  inspect both `.atm10-patterns-needed.txt` and `.atm10-pattern-ids.txt`.
+
 ## Session log — 2026-06-30 (Queue retry UX shipped)
 
 Queue retry UX shipped. Failed approvals now show a retry countdown in the Queue

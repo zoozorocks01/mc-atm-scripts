@@ -98,6 +98,59 @@ function give.deriveIngotId(blockId)
   return stem .. "_ingot"
 end
 
+-- Operator-facing next-step hint for the patterns worklist. This does NOT emit
+-- processing patterns; it only says which bucket the item belongs to and whether
+-- the safe crafting-pattern /give derivation below can help.
+function give.hintForItem(name)
+  if type(name) ~= "string" or name == "" then
+    return { kind = "manual", derivable = false, text = "check recipe manually; no registry id" }
+  end
+  local lower = name:lower()
+  if lower:find("alloy", 1, true) or lower:find("circuit", 1, true) then
+    return {
+      kind = "processing",
+      derivable = false,
+      text = "processing: machine recipe needs a captured reference pattern",
+    }
+  end
+  if name:match("_block$") then
+    local ingot = give.deriveIngotId(name)
+    return {
+      kind = "crafting",
+      derivable = ingot ~= nil,
+      text = "crafting-grid: 9x " .. tostring(ingot or "<ingot>") .. " -> " .. name .. " (/give derivable)",
+    }
+  end
+  if name:match("_ingot$") then
+    local block = give.deriveBlockId(name)
+    return {
+      kind = "crafting",
+      derivable = block ~= nil,
+      text = "crafting-grid: 1x " .. tostring(block or "<block>") .. " -> 9x " .. name ..
+        " (/give derivable; dust->ingot still needs a processing reference)",
+    }
+  end
+  if lower:find("dust", 1, true) then
+    return {
+      kind = "processing",
+      derivable = false,
+      text = "processing: capture one real dust->output pattern first; do not /give guess",
+    }
+  end
+  if lower:find("essence", 1, true) then
+    return {
+      kind = "crafting",
+      derivable = false,
+      text = "crafting-grid ladder: encode in Pattern Grid; no safe suffix derivation",
+    }
+  end
+  return {
+    kind = "manual",
+    derivable = false,
+    text = "check recipe in Pattern Grid; no safe /give derivation",
+  }
+end
+
 -- For a list of needed items { {name, label} ... }, emit a ready-to-paste /give for
 -- each one we can DERIVE a crafting pattern for, NEVER guessing:
 --   *_block -> a compress-from-ingots pattern (9 ingots -> block, 3x3)
@@ -111,10 +164,11 @@ function give.emitForItems(items)
     local name = it and it.name
     if type(name) == "string" then
       local cmd, kind
-      if name:match("_block$") then
+      local hint = give.hintForItem(name)
+      if hint.derivable == true and name:match("_block$") then
         local ingot = give.deriveIngotId(name)
         if ingot then n = n + 1; cmd = give.compressIngotToBlock(ingot, give.idQuad(n)); kind = "compress" end
-      elseif name:match("_ingot$") then
+      elseif hint.derivable == true and name:match("_ingot$") then
         local block = give.deriveBlockId(name)
         if block then n = n + 1; cmd = give.uncompressBlockToIngots(block, give.idQuad(n, "uncompress")); kind = "uncompress" end
       end

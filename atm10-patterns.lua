@@ -14,10 +14,12 @@ local okPgive, pgive = pcall(require, "atm10-pattern-give")
 if not okPgive then pgive = nil end
 
 local OUT_FILE = ".atm10-patterns-needed.txt"
+local ID_FILE = ".atm10-pattern-ids.txt"
 local CONFIG_FILE = "inventory-config"
 local MANAGED_FILE = ".atm10-managed"
 
 local lines = {}
+local idLines = {}
 local function out(s)
   s = (s == nil) and "" or tostring(s)
   lines[#lines + 1] = s
@@ -84,6 +86,8 @@ end
 local function save()
   local f = fs.open(OUT_FILE, "w")
   if f then f.write(table.concat(lines, "\n")); f.close(); print(""); print("Saved to " .. OUT_FILE) end
+  local ids = fs.open(ID_FILE, "w")
+  if ids then ids.write(table.concat(idLines, "\n")); ids.close(); print("Saved IDs to " .. ID_FILE) end
 end
 
 out("=== ATM10 patterns worklist (READ-ONLY) ===")
@@ -111,7 +115,12 @@ out("== PATTERNS TO BUILD (" .. #need .. ", deduped) ==")
 local cat = nil
 for _, it in ipairs(need) do
   if it.category ~= cat then cat = it.category; out("-- " .. tostring(cat) .. " --") end
+  idLines[#idLines + 1] = it.name
   out("  " .. it.label .. "   (" .. it.name .. ")")
+  if pgive and pgive.hintForItem then
+    local hint = pgive.hintForItem(it.name)
+    if hint and hint.text then out("    hint: " .. hint.text) end
+  end
 end
 
 -- Ready-to-paste /give commands for the patterns we can DERIVE (block compress /
@@ -138,6 +147,7 @@ end
 
 out("")
 out("Build a pattern + Crafter for each, then re-run -- the list shrinks as patterns appear.")
+out("IDs-only copy list is saved to " .. ID_FILE .. ".")
 out("NOTE: RS craftability introspection can be incomplete, so an item here MIGHT already")
 out("craft (verify in-game). Items genuinely missing a pattern are the real targets.")
 save()

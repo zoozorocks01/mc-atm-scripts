@@ -2156,6 +2156,16 @@ t.eq(pgive.deriveBlockId("alltheores:lead_ingot"), "alltheores:lead_block", "der
 t.eq(pgive.deriveIngotId("alltheores:tin_block"), "alltheores:tin_ingot", "deriveIngotId tin")
 t.eq(pgive.deriveBlockId("minecraft:diamond"), nil, "deriveBlockId nil when no _ingot suffix")
 t.eq(pgive.deriveIngotId("minecraft:diamond"), nil, "deriveIngotId nil when no _block suffix")
+t.eq(pgive.hintForItem("alltheores:lead_block").kind, "crafting", "hintForItem: block is crafting")
+t.check(pgive.hintForItem("alltheores:lead_block").derivable == true,
+  "hintForItem: block pattern is /give derivable")
+t.eq(pgive.hintForItem("alltheores:zinc_dust").kind, "processing", "hintForItem: dust is processing")
+t.check(pgive.hintForItem("alltheores:zinc_dust").derivable == false,
+  "hintForItem: processing pattern is not /give derivable")
+t.eq(pgive.hintForItem("enderio:conductive_alloy_ingot").kind, "processing",
+  "hintForItem: alloy ingot stays processing despite _ingot suffix")
+t.check(pgive.hintForItem("enderio:conductive_alloy_ingot").text:find("captured reference", 1, true) ~= nil,
+  "hintForItem: ingot hint preserves processing-reference warning")
 
 -- emitForItems: derive a compress (block) / uncompress (ingot) /give per item, skip
 -- non-derivable ones, with a distinct running idQuad. This is what atm10-patterns
@@ -2163,9 +2173,10 @@ t.eq(pgive.deriveIngotId("minecraft:diamond"), nil, "deriveIngotId nil when no _
 local em = pgive.emitForItems({
   { name = "alltheores:tin_block", label = "Tin Block" },
   { name = "alltheores:lead_ingot", label = "Lead Ingot" },
+  { name = "enderio:conductive_alloy_ingot", label = "Conductive Alloy" }, -- processing -> skipped
   { name = "minecraft:redstone", label = "Redstone" }, -- not derivable -> skipped
 })
-t.eq(#em, 2, "emitForItems: derivable block+ingot emitted, non-metal skipped")
+t.eq(#em, 2, "emitForItems: derivable block+ingot emitted, processing/manual skipped")
 t.eq(em[1].kind, "compress", "emitForItems: *_block -> compress")
 t.eq(em[1].command, pgive.compressIngotToBlock("alltheores:tin_ingot", pgive.idQuad(1)),
   "emitForItems: block emits the compress-from-ingot command (derived ingot + id #1)")
