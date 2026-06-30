@@ -22,6 +22,22 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-29 (QA/resilience sweep shipped)
+
+Manager QA/resilience sweep shipped. The loop guard now only drops/reacquires the
+monitor for display/peripheral-sensitive failures, while render failures are handled
+inside `renderCurrent()` where the failing surface is known. Bridge storage/energy
+stats now preserve prior per-field values when a throttled stat refresh returns nil,
+so viewer panels do not blank from one partial read. State writes now serialize tables
+inside `atomicWrite()`, keeping serialization failures inside the guarded best-effort
+write path instead of leaking to the loop guard. Smoke coverage now bites all three
+paths.
+
+- **Gate:** 784 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK.
+- **in-game-verify: n/a** — these are fail-safe control/display semantics covered by
+  off-CC smoke tests; live observation is still useful for wording/readability.
+
 ## Session log — 2026-06-29 (scan error hold-last-good shipped)
 
 Scan-loop resilience shipped. If `scan()` throws after a previous good frame, the
@@ -192,20 +208,21 @@ at 186 (state folded onto existing tables).
   ordering wrong could resurrect stale data over good. Not trivially gate-provable
   without a multi-file crash-simulation harness → **pinned for a careful, owned
   commit** rather than fired unattended this pass.
-- **Scan-loop: scope guard()'s monitor-drop to render/peripheral faults only** —
+- **Scan-loop: scope guard()'s monitor-drop to render/peripheral faults only — SHIPPED** —
   `S · value med`. `guard()` (`inventory-info.lua:2237-2244`) nulls the monitor on
   ANY error class, so a logic/persistence fault needlessly drops a healthy monitor +
   forces a full palette/redraw. Refinement, not a crash hole (the loop already
-  survives). Pinned: distinguishing fault classes is a behavior change worth doing
-  deliberately, lower value than the four shipped.
+  survives). Shipped with a redstone-handler smoke that proves a non-render handler
+  failure does not force a monitor re-wrap.
 - **Scan-loop: hold-last-good on a THROWN scan — SHIPPED** — `S · value med`. The pcall-failed
   branch (`2227-2229`) nulls `lastData` and drops to WAITING, unlike the `stale`
   branch which holds the last plan. A transient scan throw should hold last-good with
   a banner. Shipped as the smaller owned slice first; guard() monitor-drop scoping
   remains separate.
-- **Scan-loop: per-field hold-last-good on bridgeStats** — `S · value low`. The
+- **Scan-loop: per-field hold-last-good on bridgeStats — SHIPPED** — `S · value low`. The
   whole `bridgeStats` table is replaced each throttled refresh, so a transient nil
-  blanks all six display stats. Display-only, lowest value. Pinned.
+  blanks all six display stats. Shipped with a broadcast-payload smoke that proves
+  storage/energy fields preserve their prior values on a partial nil refresh.
 - **AP-window micro-shrinks (both already incidentally contained, low value)** —
   (a) craftrunner offline sentinel: have `requestCraft` return a distinguishable
   `'bridge offline'` so the runner STOPS the rest of the fire loop and leaves

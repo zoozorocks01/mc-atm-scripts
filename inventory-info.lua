@@ -323,11 +323,18 @@ local function readLedger()
   return data
 end
 
--- Atomically write content to path (tmp + move), fully guarded: a full disk, a
--- leftover .tmp from a prior crash, or any fs error returns false instead of
--- throwing up into the event loop (which would freeze the console). Clears a
--- stale .tmp first so a single failed write doesn't wedge every future save.
+-- Atomically write content to path (tmp + move), fully guarded: serialization,
+-- a full disk, a leftover .tmp from a prior crash, or any fs error returns false
+-- instead of throwing up into the event loop (which would freeze the console).
+-- Clears a stale .tmp first so a single failed write doesn't wedge every future
+-- save. Tables are serialized inside this guard so callers cannot accidentally
+-- throw before the protected write path starts.
 local function atomicWrite(path, content)
+  if type(content) ~= "string" then
+    local ok, encoded = pcall(textutils.serialize, content)
+    if not ok or type(encoded) ~= "string" then return false end
+    content = encoded
+  end
   local tmp = path .. ".tmp"
   if fs.exists(tmp) then pcall(fs.delete, tmp) end
   local file = fs.open(tmp, "w")
@@ -344,7 +351,7 @@ local function atomicWrite(path, content)
 end
 
 local function writeLedger(data)
-  return atomicWrite(FILES.ledger, textutils.serialize(data))
+  return atomicWrite(FILES.ledger, data)
 end
 
 -- Load the approved-craft queue (fail-safe: any problem yields an empty queue).
@@ -372,11 +379,11 @@ local function loadManaged()
 end
 
 local function saveManaged(store)
-  return atomicWrite(FILES.managed, textutils.serialize(store))
+  return atomicWrite(FILES.managed, store)
 end
 
 local function saveQueue(q)
-  return atomicWrite(FILES.queue, textutils.serialize(q))
+  return atomicWrite(FILES.queue, q)
 end
 
 -- Liveness ping: the startup watchdog restarts the program if these stop landing
@@ -389,12 +396,12 @@ end
 -- computer is safe even after the manager is terminated (the file outlives the
 -- process). Fixed-size; overwrites in place (no growth). Fail-safe: best effort.
 local function writeCraftState(now, crafting, craftingNames)
-  pcall(atomicWrite, FILES.craftstate, textutils.serialize({
+  pcall(atomicWrite, FILES.craftstate, {
     at = now,
     lastCraftAt = lastCraftAt,
     crafting = tonumber(crafting) or 0,
     craftingNames = craftingNames or {},
-  }))
+  })
 end
 
 -- Smart-mode trend history is wall-clock based (os.epoch), so persisting it lets
@@ -419,7 +426,7 @@ local function loadTrends()
 end
 
 local function saveTrends(history)
-  return atomicWrite(FILES.trends, textutils.serialize(history or {}))
+  return atomicWrite(FILES.trends, history or {})
 end
 
 -- Dismissed smart suggestions persist too: now that the trend window survives a
@@ -436,7 +443,7 @@ local function loadDismissed()
 end
 
 local function saveDismissed(set)
-  return atomicWrite(FILES.dismissed, textutils.serialize(set or {}))
+  return atomicWrite(FILES.dismissed, set or {})
 end
 
 -- Per-item last-craft results (QUICK-5): own file, own cap, atomicWrite -- so a
@@ -458,7 +465,7 @@ local function loadCraftResults()
 end
 
 local function saveCraftResults(map)
-  return atomicWrite(CRAFT_RESULTS.file, textutils.serialize(map or {}))
+  return atomicWrite(CRAFT_RESULTS.file, map or {})
 end
 
 local function ensureCraftResults()
@@ -1274,13 +1281,24 @@ local function scan()
   -- crashed the server). Reuse the cached snapshot between refreshes.
   local statNow = nowMs()
   if not bridgeStats or (statNow - bridgeStatsAt) >= STATS_INTERVAL_MS then
+    local prev = bridgeStats or {}
+    local function keep(key, value)
+      if value ~= nil then return value end
+      return prev[key]
+    end
+    local totalItemStorage = call(bridge, "getTotalItemStorage")
+    if totalItemStorage == nil then totalItemStorage = call(bridge, "getMaxItemDiskStorage") end
+    local storedEnergy = call(bridge, "getStoredEnergy")
+    if storedEnergy == nil then storedEnergy = call(bridge, "getEnergyStorage") end
+    local energyCapacity = call(bridge, "getEnergyCapacity")
+    if energyCapacity == nil then energyCapacity = call(bridge, "getMaxEnergyStorage") end
     bridgeStats = {
-      usedItemStorage = call(bridge, "getUsedItemStorage"),
-      totalItemStorage = call(bridge, "getTotalItemStorage") or call(bridge, "getMaxItemDiskStorage"),
-      availableItemStorage = call(bridge, "getAvailableItemStorage"),
-      storedEnergy = call(bridge, "getStoredEnergy") or call(bridge, "getEnergyStorage"),
-      energyCapacity = call(bridge, "getEnergyCapacity") or call(bridge, "getMaxEnergyStorage"),
-      energyUsage = call(bridge, "getEnergyUsage"),
+      usedItemStorage = keep("usedItemStorage", call(bridge, "getUsedItemStorage")),
+      totalItemStorage = keep("totalItemStorage", totalItemStorage),
+      availableItemStorage = keep("availableItemStorage", call(bridge, "getAvailableItemStorage")),
+      storedEnergy = keep("storedEnergy", storedEnergy),
+      energyCapacity = keep("energyCapacity", energyCapacity),
+      energyUsage = keep("energyUsage", call(bridge, "getEnergyUsage")),
     }
     bridgeStatsAt = statNow
   end
@@ -2116,7 +2134,14 @@ local function advancePageIfDue()
 end
 
 local function renderCurrent()
-  draw(lastData)
+  local ok, err = pcall(draw, lastData)
+  if not ok then
+    print("render error: " .. tostring(err))
+    monitor = nil
+    paletteApplied = false
+    ui.prevFrame = nil
+    ui.frame = nil
+  end
 end
 
 -- Approve a planned/selected craft into the queue. The gated craft runner issues
@@ -2537,15 +2562,24 @@ local function refreshAndDraw()
   renderCurrent()
 end
 
--- Every loop step is guarded: a UI/peripheral error must NOT freeze the console
--- on a dead frame (the worst failure for an unattended in-game screen). On error,
--- log it and drop the monitor handle so the next cycle re-acquires + redraws.
+-- Every loop step is guarded: an event/control error must NOT freeze the console.
+-- Only display/peripheral-sensitive callers ask to drop the monitor handle; render
+-- failures are handled inside renderCurrent(), where the failing surface is known.
 local function guard(fn, ...)
+  local resetDisplay = false
+  if type(fn) == "table" then
+    resetDisplay = fn.resetDisplay == true
+    fn = fn[1]
+  end
   local ok, err = pcall(fn, ...)
   if not ok then
     print("loop error: " .. tostring(err))
-    monitor = nil
-    paletteApplied = false
+    if resetDisplay then
+      monitor = nil
+      paletteApplied = false
+      ui.prevFrame = nil
+      ui.frame = nil
+    end
   end
 end
 
@@ -2578,7 +2612,7 @@ parallel.waitForAny(
     -- pings, and the startup watchdog restarts us.
     while true do
       guard(advancePageIfDue)
-      guard(refreshAndDraw)
+      guard({ refreshAndDraw, resetDisplay = true })
       writeHeartbeat(nowMs())
       sleep((config and config.refreshSeconds) or REFRESH_SECONDS)
     end
@@ -2595,10 +2629,10 @@ parallel.waitForAny(
       elseif kind == "redstone" then
         guard(handleRedstone)
       elseif kind == "monitor_resize" then
-        guard(function()
+        guard({ function()
           if monitor then pickTextScale() end
           renderCurrent()
-        end)
+        end, resetDisplay = true })
       elseif kind == "rednet_message" and ev[4] == control.PROTOCOL then
         -- CTRL-3: inbound control command (off unless config.controlEnabled).
         guard(handleControlMessage, ev[2], ev[3])

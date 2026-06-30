@@ -287,5 +287,131 @@ do
     "thrown scan surfaced a stale/error banner")
 end
 
+-- ---- resilience: non-render handler errors should not drop the monitor --------
+-- A redstone/read/control handler failure is contained by the input-loop guard, but
+-- it should not force a monitor reacquire. Only render/peripheral-display faults
+-- should clear the monitor handle.
+do
+  screen = {}
+  files = {}
+  ei = 0
+  events = {
+    { "timer", 1 }, -- acquire monitor + render
+    { "redstone" }, -- throws in the handler guard
+    { "timer", 1 }, -- should reuse the existing monitor, not wrap it again
+  }
+  _G.os.pullEvent = scriptPull
+  _G.rednet = { open = function() end, broadcast = function() end }
+  BR = fakeBridge()
+  local monitorWraps, redstoneReads = 0, 0
+  local realWrap, realGetInput = _G.peripheral.wrap, _G.rs.getInput
+  _G.peripheral.wrap = function(n)
+    if n == "monitor_0" then monitorWraps = monitorWraps + 1; return MON end
+    if n == "rs_bridge_0" then return BR end
+    return nil
+  end
+  _G.rs.getInput = function()
+    redstoneReads = redstoneReads + 1
+    error("redstone read exploded", 0)
+  end
+
+  local ok4, err4 = pcall(function() dofile("inventory/manager.lua") end)
+  _G.peripheral.wrap, _G.rs.getInput = realWrap, realGetInput
+  check(ok4 == false and tostring(err4):find(SENTINEL, 1, true) ~= nil,
+    "redstone-error run still hit the sentinel (loop survived)")
+  check(redstoneReads == 1, "redstone-error run exercised the throwing handler")
+  check(monitorWraps == 1, "non-render handler error did not drop/re-wrap the monitor")
+end
+
+-- ---- resilience: partial bridge-stat reads keep prior display values ----------
+-- Storage/energy stats are display-only and throttled. If one throttled refresh
+-- returns nil fields, the broadcast/viewer payload should keep the last known value
+-- per field instead of blanking the panels.
+do
+  screen = {}
+  files = {}
+  ei = 0
+  events = {
+    { "timer", 1 },
+    { "timer", 1 },
+  }
+  _G.os.pullEvent = scriptPull
+  local realGetType = _G.peripheral.getType
+  _G.peripheral.getType = function(n)
+    if n == "monitor_0" then return "monitor" end
+    if n == "rs_bridge_0" then return "rs_bridge" end
+    if n == "back" then return "modem" end
+    return "unknown"
+  end
+  local realEpoch = _G.os.epoch
+  _G.os.epoch = function() clock = clock + 20000; return clock end
+  local payloads = {}
+  _G.rednet = {
+    open = function() end,
+    broadcast = function(payload) payloads[#payloads + 1] = payload end,
+  }
+  BR = fakeBridge()
+  local scanN = 0
+  local goodGetItems = BR.getItems
+  BR.getItems = function()
+    scanN = scanN + 1
+    return goodGetItems()
+  end
+  local function stat(v) if scanN <= 1 then return v end return nil end
+  BR.getUsedItemStorage = function() return stat(1000) end
+  BR.getTotalItemStorage = function() return stat(100000) end
+  BR.getAvailableItemStorage = function() return stat(99000) end
+  BR.getStoredEnergy = function() return stat(50000) end
+  BR.getEnergyCapacity = function() return stat(50000) end
+  BR.getEnergyUsage = function() return stat(1000) end
+
+  local ok5, err5 = pcall(function() dofile("inventory/manager.lua") end)
+  _G.peripheral.getType = realGetType
+  _G.os.epoch = realEpoch
+  check(ok5 == false and tostring(err5):find(SENTINEL, 1, true) ~= nil,
+    "partial-stats run still hit the sentinel (loop survived)")
+  check(#payloads >= 2, "partial-stats run broadcast two payloads")
+  local second = payloads[2] or {}
+  check(second.usedItemStorage == 1000 and second.totalItemStorage == 100000,
+    "partial storage stat refresh kept prior storage values")
+  check(second.storedEnergy == 50000 and second.energyCapacity == 50000 and second.energyUsage == 1000,
+    "partial energy stat refresh kept prior energy values")
+end
+
+-- ---- resilience: failed serialization stays inside the guarded write path -----
+-- State writes are best-effort. If serialization itself throws, it should return a
+-- failed write, not escape into the loop guard.
+do
+  screen = {}
+  files = {}
+  ei = 0
+  events = {
+    { "timer", 1 },
+  }
+  _G.os.pullEvent = scriptPull
+  _G.rednet = { open = function() end, broadcast = function() end }
+  BR = fakeBridge()
+  local realSerialize, realPrint = _G.textutils.serialize, print
+  local logged = {}
+  _G.textutils.serialize = function(value)
+    if type(value) == "table" then error("serialize exploded", 0) end
+    return realSerialize(value)
+  end
+  _G.print = function(...)
+    local parts = {}
+    for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
+    logged[#logged + 1] = table.concat(parts, " ")
+    realPrint(...)
+  end
+
+  local ok6, err6 = pcall(function() dofile("inventory/manager.lua") end)
+  _G.textutils.serialize, _G.print = realSerialize, realPrint
+  check(ok6 == false and tostring(err6):find(SENTINEL, 1, true) ~= nil,
+    "serialize-failure run still hit the sentinel (loop survived)")
+  local loopErr = false
+  for _, line in ipairs(logged) do if line:find("loop error", 1, true) then loopErr = true end end
+  check(not loopErr, "serialize failure stayed inside the guarded write path")
+end
+
 print((failures == 0) and "SMOKE OK" or ("SMOKE FAILED (" .. failures .. ")"))
 os.exit(failures == 0 and 0 or 1)
