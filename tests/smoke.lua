@@ -246,5 +246,46 @@ do
     "broadcast throw did not blank the console to the waiting screen")
 end
 
+-- ---- resilience: a thrown scan should hold the last-good plan ----------------
+-- Empty/offline grid reads already return "stale" and keep the last plan. A
+-- transient exception from the bridge read path should do the same instead of
+-- blanking the console to the waiting/attach screen.
+do
+  screen = {}
+  files = {}
+  ei = 0
+  events = {
+    { "timer", 1 }, -- good scan: establish lastData
+    { "timer", 1 }, -- thrown scan: should keep lastData with a stale banner
+  }
+  _G.os.pullEvent = scriptPull
+  _G.rednet = { open = function() end, broadcast = function() end }
+  _G.peripheral.getType = function(n)
+    if n == "monitor_0" then return "monitor" end
+    if n == "rs_bridge_0" then return "rs_bridge" end
+    return "unknown"
+  end
+  BR = fakeBridge()
+  local getItemsCalls = 0
+  local goodGetItems = BR.getItems
+  BR.getItems = function()
+    getItemsCalls = getItemsCalls + 1
+    if getItemsCalls == 2 then return { true } end
+    return goodGetItems()
+  end
+
+  local ok3, err3 = pcall(function() dofile("inventory/manager.lua") end)
+  check(ok3 == false and tostring(err3):find(SENTINEL, 1, true) ~= nil,
+    "throwing-scan run still hit the sentinel (loop survived)")
+  check(getItemsCalls >= 2, "throwing-scan run exercised a good scan then a thrown scan")
+  local blob3 = table.concat(screen, "\n")
+  check(blob3:find("Stock Keeper Plan", 1, true) ~= nil or blob3:find("PLAN", 1, true) ~= nil,
+    "thrown scan kept the last-good plan on screen")
+  check(blob3:find("Attach monitor", 1, true) == nil,
+    "thrown scan did not blank the console to the waiting screen")
+  check(blob3:find("holding last plan", 1, true) ~= nil,
+    "thrown scan surfaced a stale/error banner")
+end
+
 print((failures == 0) and "SMOKE OK" or ("SMOKE FAILED (" .. failures .. ")"))
 os.exit(failures == 0 and 0 or 1)

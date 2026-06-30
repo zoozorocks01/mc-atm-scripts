@@ -22,6 +22,19 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-29 (scan error hold-last-good shipped)
+
+Scan-loop resilience shipped. If `scan()` throws after a previous good frame, the
+manager now keeps the last-good plan on screen, marks it stale with the scan error,
+and feeds the failure into the bridge-degraded craft gate instead of dropping the
+console to the WAITING / attach screen. A smoke regression forces a good scan followed
+by a malformed item scan and checks that the stale banner remains visible.
+
+- **Gate:** 784 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK.
+- **in-game-verify: n/a** — fail-safe display behavior is smoke-covered off-CC; live
+  bridge/peripheral wording can still be observed during the next in-world check.
+
 ## Session log — 2026-06-29 (C3 manager tap targets shipped)
 
 Manager touch-target polish shipped. PLAN/BROWSE nav arrows, PLAN approve-all,
@@ -185,11 +198,11 @@ at 186 (state folded onto existing tables).
   forces a full palette/redraw. Refinement, not a crash hole (the loop already
   survives). Pinned: distinguishing fault classes is a behavior change worth doing
   deliberately, lower value than the four shipped.
-- **Scan-loop: hold-last-good on a THROWN scan** — `S · value med`. The pcall-failed
+- **Scan-loop: hold-last-good on a THROWN scan — SHIPPED** — `S · value med`. The pcall-failed
   branch (`2227-2229`) nulls `lastData` and drops to WAITING, unlike the `stale`
   branch which holds the last plan. A transient scan throw should hold last-good with
-  a banner. Pinned: behavior change to the error-display path; do with the guard()
-  scoping above as one owned display-resilience commit.
+  a banner. Shipped as the smaller owned slice first; guard() monitor-drop scoping
+  remains separate.
 - **Scan-loop: per-field hold-last-good on bridgeStats** — `S · value low`. The
   whole `bridgeStats` table is replaced each throttled refresh, so a transient nil
   blanks all six display stats. Display-only, lowest value. Pinned.

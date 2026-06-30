@@ -2523,8 +2523,16 @@ local function refreshAndDraw()
       lastData = nil -- hard failure (e.g. no bridge): show the waiting screen
     end
   else
-    lastData = nil
     status = tostring(data)
+    if craftingCache.__health and craftingCache.__bridge then
+      craftingCache.__bridge.allowFire = craftingCache.__health.gateCrafts(craftingCache.__bridge, false)
+    end
+    if lastData then
+      lastData.stale = "Scan error - holding last plan: " .. status
+      lastData.bridgeDegraded = true
+    else
+      lastData = nil
+    end
   end
   renderCurrent()
 end
