@@ -2190,6 +2190,12 @@ t.eq(pgive.hintForItem("enderio:conductive_alloy_ingot").kind, "processing",
   "hintForItem: alloy ingot stays processing despite _ingot suffix")
 t.check(pgive.hintForItem("enderio:conductive_alloy_ingot").text:find("captured reference", 1, true) ~= nil,
   "hintForItem: ingot hint preserves processing-reference warning")
+t.eq((pgive.bucketForItem("alltheores:lead_block")), "crafting",
+  "bucketForItem: derivable block goes to crafting bucket")
+t.eq((pgive.bucketForItem("alltheores:zinc_dust")), "processing",
+  "bucketForItem: dust goes to processing bucket")
+t.eq((pgive.bucketForItem("minecraft:diamond")), "manual",
+  "bucketForItem: unknown recipe goes to manual bucket")
 
 -- emitForItems: derive a compress (block) / uncompress (ingot) /give per item, skip
 -- non-derivable ones, with a distinct running idQuad. This is what atm10-patterns

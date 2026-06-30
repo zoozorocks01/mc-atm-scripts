@@ -151,6 +151,13 @@ function give.hintForItem(name)
   }
 end
 
+function give.bucketForItem(name)
+  local hint = give.hintForItem(name)
+  if hint.derivable == true then return "crafting", hint end
+  if hint.kind == "processing" then return "processing", hint end
+  return "manual", hint
+end
+
 -- For a list of needed items { {name, label} ... }, emit a ready-to-paste /give for
 -- each one we can DERIVE a crafting pattern for, NEVER guessing:
 --   *_block -> a compress-from-ingots pattern (9 ingots -> block, 3x3)

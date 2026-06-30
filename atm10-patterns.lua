@@ -15,11 +15,17 @@ if not okPgive then pgive = nil end
 
 local OUT_FILE = ".atm10-patterns-needed.txt"
 local ID_FILE = ".atm10-pattern-ids.txt"
+local BUCKET_ID_FILES = {
+  crafting = ".atm10-pattern-crafting-ids.txt",
+  processing = ".atm10-pattern-processing-ids.txt",
+  manual = ".atm10-pattern-manual-ids.txt",
+}
 local CONFIG_FILE = "inventory-config"
 local MANAGED_FILE = ".atm10-managed"
 
 local lines = {}
 local idLines = {}
+local bucketIdLines = { crafting = {}, processing = {}, manual = {} }
 local function out(s)
   s = (s == nil) and "" or tostring(s)
   lines[#lines + 1] = s
@@ -88,6 +94,16 @@ local function save()
   if f then f.write(table.concat(lines, "\n")); f.close(); print(""); print("Saved to " .. OUT_FILE) end
   local ids = fs.open(ID_FILE, "w")
   if ids then ids.write(table.concat(idLines, "\n")); ids.close(); print("Saved IDs to " .. ID_FILE) end
+  if pgive then
+    for _, bucket in ipairs({ "crafting", "processing", "manual" }) do
+      local bf = fs.open(BUCKET_ID_FILES[bucket], "w")
+      if bf then
+        bf.write(table.concat(bucketIdLines[bucket], "\n"))
+        bf.close()
+        print("Saved " .. bucket .. " IDs to " .. BUCKET_ID_FILES[bucket])
+      end
+    end
+  end
 end
 
 out("=== ATM10 patterns worklist (READ-ONLY) ===")
@@ -118,7 +134,8 @@ for _, it in ipairs(need) do
   idLines[#idLines + 1] = it.name
   out("  " .. it.label .. "   (" .. it.name .. ")")
   if pgive and pgive.hintForItem then
-    local hint = pgive.hintForItem(it.name)
+    local bucket, hint = pgive.bucketForItem(it.name)
+    bucketIdLines[bucket][#bucketIdLines[bucket] + 1] = it.name
     if hint and hint.text then out("    hint: " .. hint.text) end
   end
 end
@@ -148,6 +165,9 @@ end
 out("")
 out("Build a pattern + Crafter for each, then re-run -- the list shrinks as patterns appear.")
 out("IDs-only copy list is saved to " .. ID_FILE .. ".")
+if pgive then
+  out("Bucketed ID lists: crafting / processing / manual are saved separately.")
+end
 out("NOTE: RS craftability introspection can be incomplete, so an item here MIGHT already")
 out("craft (verify in-game). Items genuinely missing a pattern are the real targets.")
 save()

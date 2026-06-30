@@ -22,6 +22,21 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-30 (Pattern bucketed setup lists local)
+
+Pattern/setup workflow improved locally. `atm10-patterns` still writes the flat
+`.atm10-pattern-ids.txt`, but now also writes bucketed setup lists for the three
+different next actions: `.atm10-pattern-crafting-ids.txt` for safe crafting-grid
+patterns that can use the `/give` emitter, `.atm10-pattern-processing-ids.txt` for
+machine/processing patterns that need a captured reference, and
+`.atm10-pattern-manual-ids.txt` for recipe checks that need manual handling.
+
+- **Gate:** 807 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK; SMOKE-REMOTE OK; SMOKE-BRIDGE-PROBE OK; pattern-give mirror
+  diff empty; git diff --check clean.
+- **in-game-verify: pending** — after publishing, run `atm10-patterns` on computer
+  `6` and inspect the flat plus bucketed ID files.
+
 ## Session log — 2026-06-30 (CRAFT-2 active task snapshot local)
 
 Control-truth groundwork is local. `atm10-control` now normalizes the live
