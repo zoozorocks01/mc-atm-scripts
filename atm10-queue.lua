@@ -172,6 +172,43 @@ function queue.markError(q, name, now, reason)
   return q
 end
 
+-- How long a failed entry still has to wait before the runner's failed-craft
+-- backoff will try it again. Non-failed entries are ready (0).
+function queue.retryRemainingMs(entry, now, cooldownMs)
+  if type(entry) ~= "table" or not entry.error then return 0 end
+  cooldownMs = tonumber(cooldownMs) or 0
+  if cooldownMs <= 0 then return 0 end
+  local elapsed = (tonumber(now) or 0) - (tonumber(entry.triedAt) or 0)
+  local remaining = cooldownMs - elapsed
+  if remaining <= 0 then return 0 end
+  return remaining
+end
+
+function queue.retryLabel(entry, now, cooldownMs)
+  local remaining = queue.retryRemainingMs(entry, now, cooldownMs)
+  if remaining <= 0 then return "retry now" end
+  local seconds = math.ceil(remaining / 1000)
+  if seconds < 60 then return "retry " .. seconds .. "s" end
+  return "retry " .. math.ceil(seconds / 60) .. "m"
+end
+
+-- Clear failed-entry backoff so the runner can try those approvals on its next
+-- pass. This never crafts directly; it only removes the local retry delay.
+function queue.retryFailed(q, now)
+  q = queue.normalize(q)
+  local n = 0
+  for _, e in pairs(q.entries) do
+    if e.error then
+      e.error = nil
+      e.triedAt = nil
+      e.state = queue.APPROVED
+      e.approvedAt = tonumber(now) or e.approvedAt
+      n = n + 1
+    end
+  end
+  return q, n
+end
+
 function queue.has(q, name)
   q = queue.normalize(q)
   return q.entries[name] ~= nil

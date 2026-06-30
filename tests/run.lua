@@ -749,12 +749,26 @@ craftrunner.run(qf, depsF)
 t.eq(tries, 1, "failed craft is attempted once")
 t.eq(qf.entries.f.state, cqueue.APPROVED, "a failed craft stays APPROVED for retry")
 t.eq(qf.entries.f.error, "missing ingredients", "failure reason is recorded")
+t.eq(cqueue.retryRemainingMs(qf.entries.f, 1000 + 100000, 300000), 200000,
+  "retryRemainingMs reports the failed-entry backoff window")
+t.eq(cqueue.retryLabel(qf.entries.f, 1000 + 295000, 300000), "retry 5s",
+  "retryLabel surfaces a short countdown")
+t.eq(cqueue.retryLabel(qf.entries.f, 1000 + 1000, 300000), "retry 5m",
+  "retryLabel rounds longer waits up to minutes")
 depsF.now = 1000 + 100000
 craftrunner.run(qf, depsF)
 t.eq(tries, 1, "no retry within the backoff cooldown")
 depsF.now = 1000 + 400000
 craftrunner.run(qf, depsF)
 t.eq(tries, 2, "retries after the backoff cooldown elapses")
+qf = mkQ({ { name = "ra", request = 1 }, { name = "rb", request = 1 } })
+cqueue.markError(qf, "ra", 20, "bridge offline")
+qf, tries = cqueue.retryFailed(qf, 30)
+t.eq(tries, 1, "retryFailed counts failed approvals reset for immediate retry")
+t.eq(qf.entries.ra.error, nil, "retryFailed clears the failure reason")
+t.eq(qf.entries.ra.triedAt, nil, "retryFailed clears the backoff timestamp")
+t.eq(qf.entries.ra.approvedAt, 30, "retryFailed refreshes approval age for reset entries")
+t.eq(qf.entries.rb.approvedAt, 2, "retryFailed leaves healthy approvals alone")
 
 -- maxPerCycle caps NEW bridge requests per run; the rest stay APPROVED
 local fired = {}

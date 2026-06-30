@@ -1510,10 +1510,15 @@ local function drawQueuePage(data)
   local w, h = monitor.getSize()
   local q = data.craftQueue or {}
   local policy = buildPolicy()
+  local retryCooldownMs = (tonumber((config.stockKeeper or {}).cooldownSeconds) or 300) * 1000
 
-  local crafting = 0
-  for _, e in ipairs(q) do if e.state == cqueue.CRAFTING then crafting = crafting + 1 end end
-  line(6, "Craft Queue   " .. #q .. " approved   " .. crafting .. " crafting   ~" .. #firedTimes ..
+  local crafting, failed = 0, 0
+  for _, e in ipairs(q) do
+    if e.state == cqueue.CRAFTING then crafting = crafting + 1 end
+    if e.error then failed = failed + 1 end
+  end
+  line(6, "Craft Queue   " .. #q .. " approved   " .. crafting .. " crafting" ..
+    (failed > 0 and ("   " .. failed .. " failed") or "") .. "   ~" .. #firedTimes ..
     "/min   mode:" .. tostring(effectiveMode()), colors.cyan)
 
   if #q == 0 then
@@ -1524,7 +1529,7 @@ local function drawQueuePage(data)
 
   local wide = w >= 60
   if wide then
-    line(7, uiDraw.fit("ITEM", math.max(16, w - 40)) .. "  REQUEST   GATE      AGE   LAST", colors.gray)
+    line(7, uiDraw.fit("ITEM", math.max(16, w - 40)) .. "  REQUEST   GATE      AGE   LAST/RTY", colors.gray)
   end
 
   local start = wide and 8 or 7
@@ -1554,16 +1559,17 @@ local function drawQueuePage(data)
     else
       reqCol = "+" .. fmt(e.request)
     end
+    local resultCol = e.error and cqueue.retryLabel(e, now, retryCooldownMs) or craftResultShort(e.name, now)
     local text
     if wide then
       text = uiDraw.fit(tostring(e.label or e.name), math.max(16, w - 40)) ..
         "  " .. rjust(reqCol, 7) ..
         "  " .. uiDraw.fit(uiStatus.label(gateState), 8) ..
         "  " .. rjust(ageS .. "s", 4) ..
-        "  " .. uiDraw.fit(craftResultShort(e.name, now), 9)
+        "  " .. uiDraw.fit(resultCol, 9)
     else
       text = uiDraw.fit(tostring(e.label or e.name) .. " " .. reqCol ..
-        " " .. uiStatus.label(gateState), w)
+        " " .. uiStatus.label(gateState) .. (e.error and (" " .. resultCol) or ""), w)
     end
     local y = start + i - 1
     line(y, text, uiStatus.color(gateState))
@@ -1576,10 +1582,19 @@ local function drawQueuePage(data)
   local hintY = start + rows
   if hintY <= h then
     local flashing = ui.flashMsg and (nowMs() - ui.flashAt < ui.FLASH_MS)
-    line(hintY, flashing and ui.flashMsg or "Tap a row to cancel its approval.", flashing and colors.white or colors.gray)
+    local hint = failed > 0 and "Failed rows retry after cooldown." or "Tap a row to cancel its approval."
+    line(hintY, flashing and ui.flashMsg or hint, flashing and colors.white or colors.gray)
     -- bulk: one tap cancels every approval, right-aligned past the hint text
     local label = " [ CLEAR QUEUE ] "
     local bx = w - #label + 1
+    if failed > 0 then
+      local retryLabel = " [ RETRY FAILED ] "
+      local rx = bx - #retryLabel - 1
+      if rx > 20 then
+        mwrite(rx, hintY, retryLabel, colors.black, colors.orange)
+        ui.queueRetryRegion = { x1 = rx, x2 = rx + #retryLabel - 1, y = hintY }
+      end
+    end
     if bx > 34 then
       mwrite(bx, hintY, label, colors.black, colors.red)
       queueActionRegion = { x1 = bx, x2 = bx + #label - 1, y = hintY }
@@ -2027,6 +2042,7 @@ local function draw(data)
   modeChip = nil
   queueRowRegions = {}
   queueActionRegion = nil
+  ui.queueRetryRegion = nil
   browseRowRegions = {}
   browseNavRegions = {}
   browseFilterBtn = nil
@@ -2428,6 +2444,19 @@ local function handleTouch(x, y)
   local planEntry = console.rowHit(planRowRegions, y, 1)
   if planEntry then
     approve(planEntry)
+    renderCurrent()
+    return
+  end
+
+  if ui.queueRetryRegion and y == ui.queueRetryRegion.y
+    and x >= ui.queueRetryRegion.x1 and x <= ui.queueRetryRegion.x2 then
+    local q = craftQueue or loadQueue()
+    local _, n = cqueue.retryFailed(q, nowMs())
+    craftQueue = q
+    if n > 0 then saveQueue(craftQueue) end
+    ui.pageShownAt = nowMs()
+    ui.flashMsg = "retry failed (" .. n .. ")"; ui.flashAt = nowMs()
+    print("Retry failed approvals: " .. n)
     renderCurrent()
     return
   end

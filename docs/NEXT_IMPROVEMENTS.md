@@ -22,6 +22,20 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-30 (Queue retry UX shipped)
+
+Queue retry UX shipped. Failed approvals now show a retry countdown in the Queue
+page's `LAST/RTY` column, the page summary counts failed entries, and the footer
+renders `[RETRY FAILED]` when any approval is waiting on failed-craft backoff. That
+button clears only the local error/backoff timestamps so the gated runner can try
+again on its next pass; it does not craft directly and row taps still cancel.
+
+- **Gate:** 792 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK; manager and queue mirror diffs empty; `git diff --check`
+  clean.
+- **in-game-verify: pending** — off-CC smoke covers failed-row rendering and retry
+  tap persistence; live monitor spacing/readability still needs a look.
+
 ## Session log — 2026-06-30 (Request panel filter UX shipped)
 
 Request-panel UX polish shipped. The craft request browser now renders preset

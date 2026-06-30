@@ -461,5 +461,54 @@ do
     "Browse sort chip cycles from QTY to A-Z")
 end
 
+-- ---- queue: failed entries show retry control and tap clears backoff ----------
+do
+  screen = {}
+  files = { [".atm10-craft-queue"] = "FAILED_QUEUE" }
+  local savedQueue = nil
+  _G.textutils = {
+    serialize = function(t) savedQueue = t; return "{}" end,
+    unserialize = function(text)
+      if text == "FAILED_QUEUE" then
+        return { entries = {
+          failed = {
+            key = "failed",
+            name = "alltheores:zinc_ingot",
+            label = "Zinc",
+            request = 32,
+            state = "APPROVED",
+            approvedAt = 50,
+            triedAt = 1000000000,
+            error = "missing ingredients",
+          },
+        } }
+      end
+      return {}
+    end,
+  }
+  ei = 0
+  events = {
+    { "timer", 1 },
+    { "monitor_touch", "r", 10, 2 }, -- QUEUE tab
+    { "monitor_touch", "r", 26, 9 }, -- [RETRY FAILED]
+  }
+  _G.os.pullEvent = scriptPull
+  _G.rednet = { open = function() end, broadcast = function() end }
+  BR = fakeBridge()
+
+  local ok9, err9 = pcall(function() dofile("inventory/manager.lua") end)
+  check(ok9 == false and tostring(err9):find(SENTINEL, 1, true) ~= nil,
+    "Queue retry run still hit the sentinel (loop survived)")
+  local blob9 = table.concat(screen, "\n")
+  check(blob9:find("[ RETRY FAILED ]", 1, true) ~= nil,
+    "failed Queue entries render a retry-failed footer button")
+  check(type(savedQueue) == "table"
+      and savedQueue.entries
+      and savedQueue.entries.failed
+      and savedQueue.entries.failed.error == nil
+      and savedQueue.entries.failed.triedAt == nil,
+    "tapping retry failed clears the queued entry error/backoff")
+end
+
 print((failures == 0) and "SMOKE OK" or ("SMOKE FAILED (" .. failures .. ")"))
 os.exit(failures == 0 and 0 or 1)
