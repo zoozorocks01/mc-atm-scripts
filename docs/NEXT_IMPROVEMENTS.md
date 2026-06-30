@@ -22,6 +22,19 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-29 (Browse glitch fix shipped)
+
+Browse glitch fix shipped after an in-world report. The smoke test was corrected to
+tap the real BROWSE tab instead of HEALTH, then a regression covered the empty
+MANAGED-filter state. `drawBrowsePage()` no longer returns before drawing the footer
+toggle when the filtered list is empty, clips the footer hint to the monitor width,
+and caches the sorted Browse list for repeated renders of the same scan.
+
+- **Gate:** 784 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK.
+- **in-game-verify: pending** — off-CC smoke now exercises Browse, but Zach should
+  verify the live monitor no longer glitches when entering/toggling Browse.
+
 ## Session log — 2026-06-29 (QA/resilience sweep shipped)
 
 Manager QA/resilience sweep shipped. The loop guard now only drops/reacquires the

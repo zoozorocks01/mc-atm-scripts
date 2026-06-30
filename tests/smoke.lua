@@ -176,7 +176,7 @@ local SENTINEL = "__SMOKE_DONE__"
 local events = {
   { "timer", 1 },                       -- first refresh: scan + draw PLAN
   { "monitor_touch", "r", 10, 2 },      -- tab -> QUEUE
-  { "monitor_touch", "r", 18, 2 },      -- tab -> BROWSE
+  { "monitor_touch", "r", 25, 2 },      -- tab -> BROWSE
   { "monitor_touch", "r", 1, 8 },       -- BROWSE: tap an item -> open editor
   { "monitor_touch", "r", 1, 8 },       -- editor: hit a button row (step/+/-)
   { "monitor_touch", "r", 28, 2 },      -- tab -> PRESETS (exits editor)
@@ -411,6 +411,32 @@ do
   local loopErr = false
   for _, line in ipairs(logged) do if line:find("loop error", 1, true) then loopErr = true end end
   check(not loopErr, "serialize failure stayed inside the guarded write path")
+end
+
+-- ---- browse: empty managed filter must still draw the footer toggle -----------
+-- When MANAGED has zero rows, Browse must still show the bottom toggle so the
+-- operator can get back to ALL. This catches the early-return render path.
+do
+  screen = {}
+  files = {}
+  ei = 0
+  events = {
+    { "timer", 1 },
+    { "monitor_touch", "r", 25, 2 }, -- BROWSE tab
+    { "monitor_touch", "r", 24, 24 }, -- [ALL] -> [MANAGED], which is empty here
+  }
+  _G.os.pullEvent = scriptPull
+  _G.rednet = { open = function() end, broadcast = function() end }
+  BR = fakeBridge()
+
+  local ok7, err7 = pcall(function() dofile("inventory/manager.lua") end)
+  check(ok7 == false and tostring(err7):find(SENTINEL, 1, true) ~= nil,
+    "empty-managed Browse run still hit the sentinel (loop survived)")
+  local blob7 = table.concat(screen, "\n")
+  check(blob7:find("Browse Grid", 1, true) ~= nil,
+    "Browse page actually rendered in smoke")
+  check(blob7:find("[MANAGED]", 1, true) ~= nil,
+    "empty managed Browse still renders the MANAGED footer toggle")
 end
 
 print((failures == 0) and "SMOKE OK" or ("SMOKE FAILED (" .. failures .. ")"))

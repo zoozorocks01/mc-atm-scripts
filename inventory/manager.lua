@@ -1593,7 +1593,13 @@ end
 local function drawBrowsePage(data)
   local w, h = monitor.getSize()
   local store = managedStore or managed.new()
-  local items = console.sortedItems(data.items or {}, "qty", { name = itemName, amount = itemAmount, id = function(it) return it.name end })
+  local sourceItems = type(data.items) == "table" and data.items or nil
+  if ui.browseItemsSource ~= sourceItems or type(ui.browseSortedItems) ~= "table" then
+    ui.browseItemsSource = sourceItems
+    ui.browseSortedItems = console.sortedItems(sourceItems or {}, "qty",
+      { name = itemName, amount = itemAmount, id = function(it) return it.name end })
+  end
+  local items = ui.browseSortedItems
 
   -- managed-only filter: cut the ~5.9k-item haystack down to the items you tune
   if browseFilter then
@@ -1622,8 +1628,8 @@ local function drawBrowsePage(data)
   end
 
   if total == 0 then
-    line(listTop, "Grid is empty or unavailable.", colors.gray)
-    return
+    line(listTop, browseFilter and "No managed quotas yet. Tap MANAGED below to show all items." or
+      "Grid is empty or unavailable.", colors.gray)
   end
 
   for i = pg.from, pg.to do
@@ -1673,10 +1679,13 @@ local function drawBrowsePage(data)
   if not (editing and editing.pickingInto) then
     local toggle = browseFilter and "[MANAGED]" or "[ALL]"
     local toggleX = nextX + #next + 2
-    mwrite(toggleX, navY, toggle, colors.black, browseFilter and colors.lime or colors.cyan)
-    browseFilterBtn = { x1 = toggleX, x2 = toggleX + #toggle - 1, y = navY }
-    if w >= 52 then
-      mwrite(toggleX + #toggle + 1, navY, "tap item to set quota", colors.gray, colors.black)
+    if toggleX + #toggle - 1 <= w then
+      mwrite(toggleX, navY, toggle, colors.black, browseFilter and colors.lime or colors.cyan)
+      browseFilterBtn = { x1 = toggleX, x2 = toggleX + #toggle - 1, y = navY }
+      local hintX = toggleX + #toggle + 1
+      if hintX <= w then
+        mwrite(hintX, navY, uiDraw.fit("tap item to set quota", w - hintX + 1), colors.gray, colors.black)
+      end
     end
   end
 end
