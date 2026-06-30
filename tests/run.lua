@@ -49,6 +49,16 @@ do
   t.eq(ch.recentFail, 1, "monitor.craft: 1 recent fail")
   t.eq(ch.ratePerMin, 12, "monitor.craft: passes through crafts/min")
 
+  local paceOk = monitor.pace({ loopMs = 1200, refreshMs = 5000, dataAgeMs = 0 }, NOW)
+  t.eq(paceOk.status, "OK", "monitor.pace: low loop load is OK")
+  t.eq(paceOk.loadPct, 24, "monitor.pace: computes scan load percentage")
+  local paceSlow = monitor.pace({ loopMs = 9000, refreshMs = 5000, dataAgeMs = 0 }, NOW)
+  t.eq(paceSlow.status, "SLOW", "monitor.pace: slow scan is SLOW")
+  local paceStale = monitor.pace({ loopMs = 1000, refreshMs = 5000, dataAgeMs = 45000 }, NOW)
+  t.eq(paceStale.status, "STALE", "monitor.pace: stale data outranks normal scan time")
+  local paceErr = monitor.pace({ loopMs = 1000, refreshMs = 5000, dataAgeMs = 0, lastError = "scan failed" }, NOW)
+  t.eq(paceErr.status, "ERROR", "monitor.pace: explicit error is ERROR")
+
   local trends = {
     ["ma:silver_dust"] = { label = "Silver Dust", t0 = NOW - 1200000, tN = NOW, a0 = 5000, aN = 1000, n = 6 }, -- -200/min, raw
     ["mc:inferium"]    = { label = "Inferium",    t0 = NOW - 1200000, tN = NOW, a0 = 9000, aN = 5000, n = 6 }, -- -200/min, craftable

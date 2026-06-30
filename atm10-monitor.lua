@@ -5,6 +5,7 @@
 -- two answers the operator actually wants:
 --   (1) "is everything FUNCTIONING?"  -> monitor.craft()
 --   (2) "is it KEEPING UP, and what should I go SOURCE?" -> monitor.demand()
+--   (3) "is the manager loop itself keeping pace?" -> monitor.pace()
 --
 -- Mirror pair: lib/atm10-monitor.lua == atm10-monitor.lua (byte-identical).
 
@@ -50,6 +51,57 @@ function monitor.craft(queueEntries, craftResults, firedCount, nowMs, opts)
 
   table.sort(out.stuck, function(a, b) return a.ageMin > b.ageMin end)
   return out
+end
+
+-- LOOP PACE: health of the manager's own scan/render loop.
+--   state : {
+--     loopMs, loopGapMs, dataAgeMs, refreshMs, lastError, errors
+--   }
+-- returns {
+--   status = "OK"|"SLOW"|"STALE"|"ERROR", reason, loopSec, gapSec, ageSec,
+--   refreshSec, loadPct, errors
+-- }
+-- A slow loop means scans are eating most/all of the requested refresh window. A
+-- stale loop means no successful inventory frame has landed recently. This catches
+-- "the program is alive but not keeping up" before it turns into a hard watchdog
+-- restart.
+function monitor.pace(state, nowMs, opts)
+  opts = opts or {}
+  state = type(state) == "table" and state or {}
+  local refreshMs = tonumber(state.refreshMs) or tonumber(opts.refreshMs) or 5000
+  if refreshMs <= 0 then refreshMs = 5000 end
+  local loopMs = tonumber(state.loopMs) or 0
+  local gapMs = tonumber(state.loopGapMs) or 0
+  local ageMs = tonumber(state.dataAgeMs)
+  if not ageMs and state.lastOkAt then
+    ageMs = math.max(0, (tonumber(nowMs) or 0) - (tonumber(state.lastOkAt) or 0))
+  end
+  ageMs = ageMs or 0
+
+  local slowMs = tonumber(opts.slowMs) or math.max(refreshMs, 8000)
+  local staleMs = tonumber(opts.staleMs) or math.max(refreshMs * 4, 30000)
+  local warnLoad = tonumber(opts.warnLoadPct) or 100
+  local loadPct = math.floor((loopMs / refreshMs) * 100 + 0.5)
+  local status, reason = "OK", "on pace"
+
+  if state.lastError then
+    status, reason = "ERROR", tostring(state.lastError)
+  elseif ageMs >= staleMs then
+    status, reason = "STALE", "no fresh data"
+  elseif loopMs >= slowMs or loadPct >= warnLoad then
+    status, reason = "SLOW", "scan slow"
+  end
+
+  return {
+    status = status,
+    reason = reason,
+    loopSec = loopMs / 1000,
+    gapSec = gapMs / 1000,
+    ageSec = ageMs / 1000,
+    refreshSec = refreshMs / 1000,
+    loadPct = loadPct,
+    errors = tonumber(state.errors) or 0,
+  }
 end
 
 -- KEEPING UP + SOURCE MORE, from the persisted trend windows.

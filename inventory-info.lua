@@ -26,6 +26,7 @@ local FILES = {
   trends = ".atm10-trends",         -- smart-mode consumption history (survives reboot)
   dismissed = ".atm10-dismissed",   -- smart suggestions the operator cleared
   craftstate = ".atm10-craftstate", -- drain snapshot read by safereboot (avoids the AP detach-crash)
+  loopstate = ".atm10-loopstate",   -- manager scan/render pace metric (is it keeping up?)
   heartbeat = ".atm10-heartbeat",   -- liveness ping; startup watchdog restarts a hung manager
 }
 -- Cycleable +/- step sizes in the quota editor: by count AND by stacks (a stack
@@ -1158,6 +1159,12 @@ local function processCraftQueue(now, plans)
     wouldCraftCount = wouldCount,
     wouldCraftAmount = wouldAmount,
     craftsPerMin = #firedTimes,
+    loopMs = craftingCache.__loop and craftingCache.__loop.loopMs,
+    loopGapMs = craftingCache.__loop and craftingCache.__loop.loopGapMs,
+    loopRefreshMs = craftingCache.__loop and craftingCache.__loop.refreshMs,
+    loopLoadPct = craftingCache.__loop and craftingCache.__loop.loadPct,
+    dataAgeMs = craftingCache.__loop and craftingCache.__loop.dataAgeMs,
+    loopErrors = craftingCache.__loop and craftingCache.__loop.errors,
   })
 end
 
@@ -2059,6 +2066,19 @@ local function drawHealthPage(data)
     #ch.stuck > 0 and colors.orange or colors.white)
   line(9, "Recent: " .. ch.recentOk .. " ok   " .. ch.recentFail .. " failed (30m)",
     ch.recentFail > 0 and colors.orange or colors.gray)
+  local ph = monlib.pace(data.loop or craftingCache.__loop, now, {
+    refreshMs = ((config and config.refreshSeconds) or REFRESH_SECONDS) * 1000,
+  })
+  local function sec(v)
+    v = tonumber(v) or 0
+    if v >= 10 then return tostring(math.floor(v)) .. "s" end
+    return string.format("%.1fs", v)
+  end
+  local pcol = colors.lime
+  if ph.status == "SLOW" then pcol = colors.orange end
+  if ph.status == "STALE" or ph.status == "ERROR" then pcol = colors.red end
+  line(10, "Loop: " .. ph.status .. " scan " .. sec(ph.loopSec) .. "/" .. sec(ph.refreshSec) ..
+    " load " .. ph.loadPct .. "% age " .. sec(ph.ageSec), pcol)
 
   local function eta(m)
     if not m or m <= 0 then return "" end
@@ -2069,7 +2089,7 @@ local function drawHealthPage(data)
     return "  " .. uiDraw.fit(tostring(r.label), 16) .. " v" .. fmt(math.floor(r.perMin)) .. "/min" .. eta(r.etaMin)
   end
 
-  local y = 11
+  local y = 12
   if #ch.stuck > 0 then
     line(y, "STUCK JOBS (" .. #ch.stuck .. "):", colors.red); y = y + 1
     for i = 1, math.min(#ch.stuck, 3) do
@@ -2650,15 +2670,47 @@ local function ensurePeripherals()
 end
 
 local function refreshAndDraw()
+  local loopStart = nowMs()
+  local loop = craftingCache.__loop
+  if not loop then
+    loop = { cycles = 0, errors = 0 }
+    craftingCache.__loop = loop
+  end
+  if loop.startedAt then loop.loopGapMs = loopStart - loop.startedAt end
+  loop.startedAt = loopStart
+  loop.refreshMs = ((config and config.refreshSeconds) or REFRESH_SECONDS) * 1000
+
+  local freshData = false
+  local loopError = nil
+  local function finishLoop()
+    local done = nowMs()
+    loop.finishedAt = done
+    loop.loopMs = math.max(0, done - loopStart)
+    loop.loadPct = math.floor((loop.loopMs / math.max(1, loop.refreshMs)) * 100 + 0.5)
+    loop.cycles = (tonumber(loop.cycles) or 0) + 1
+    if loopError then
+      loop.errors = (tonumber(loop.errors) or 0) + 1
+      loop.lastError = tostring(loopError)
+    elseif freshData then
+      loop.lastOkAt = done
+      loop.lastError = nil
+    end
+    loop.dataAgeMs = loop.lastOkAt and math.max(0, done - loop.lastOkAt) or nil
+    pcall(atomicWrite, FILES.loopstate, loop)
+  end
+
   ensurePeripherals()
   if not monitor then
     print("No monitor found. Retrying...")
+    loopError = "no monitor"
+    finishLoop()
     return
   end
 
   local ok, data, reason = pcall(scan)
   if ok then
     if data then
+      freshData = true
       lastData = data
       -- A3 bridge-degraded back-off: when consecutive bridge-read failures have
       -- crossed the threshold, SKIP the whole craft phase this cycle. A flaky
@@ -2681,27 +2733,35 @@ local function refreshAndDraw()
       end
       data.craftQueue = cqueue.list(craftQueue)
       data.craftTasks = craftingCache.__tasks
+      data.loop = loop
       broadcast(data)
     elseif reason == "stale" then
       -- keep the last good plan, but mark it stale so draw() shows a banner
       -- (otherwise a held plan looks live and a real bridge loss reads ONLINE)
-      if lastData then lastData.stale = status end
+      if lastData then
+        lastData.stale = status
+        lastData.loop = loop
+      end
     else
+      loopError = reason or "no scan data"
       lastData = nil -- hard failure (e.g. no bridge): show the waiting screen
     end
   else
     status = tostring(data)
+    loopError = status
     if craftingCache.__health and craftingCache.__bridge then
       craftingCache.__bridge.allowFire = craftingCache.__health.gateCrafts(craftingCache.__bridge, false)
     end
     if lastData then
       lastData.stale = "Scan error - holding last plan: " .. status
       lastData.bridgeDegraded = true
+      lastData.loop = loop
     else
       lastData = nil
     end
   end
   renderCurrent()
+  finishLoop()
 end
 
 -- Every loop step is guarded: an event/control error must NOT freeze the console.
@@ -2733,7 +2793,10 @@ end
 do
   local ok, hmod = pcall(require, "atm10-health")
   if ok and hmod and hmod.sweepTmps then
-    hmod.sweepTmps(fs, { FILES.queue, FILES.managed, FILES.trends, FILES.dismissed, FILES.ledger, CRAFT_RESULTS.file })
+    hmod.sweepTmps(fs, {
+      FILES.queue, FILES.managed, FILES.trends, FILES.dismissed, FILES.ledger,
+      FILES.loopstate, CRAFT_RESULTS.file,
+    })
   end
 end
 
