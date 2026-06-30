@@ -1594,9 +1594,12 @@ local function drawBrowsePage(data)
   local w, h = monitor.getSize()
   local store = managedStore or managed.new()
   local sourceItems = type(data.items) == "table" and data.items or nil
-  if ui.browseItemsSource ~= sourceItems or type(ui.browseSortedItems) ~= "table" then
+  local sortMode = ui.browseSortMode or "qty"
+  if ui.browseItemsSource ~= sourceItems or ui.browseItemsSort ~= sortMode
+    or type(ui.browseSortedItems) ~= "table" then
     ui.browseItemsSource = sourceItems
-    ui.browseSortedItems = console.sortedItems(sourceItems or {}, "qty",
+    ui.browseItemsSort = sortMode
+    ui.browseSortedItems = console.sortedItems(sourceItems or {}, sortMode,
       { name = itemName, amount = itemAmount, id = function(it) return it.name end })
   end
   local items = ui.browseSortedItems
@@ -1677,8 +1680,17 @@ local function drawBrowsePage(data)
   -- ALL <-> MANAGED filter toggle (cuts the ~5.9k haystack to your quota'd items).
   -- Hidden while picking a compress target, where tapping it would be a dead no-op.
   if not (editing and editing.pickingInto) then
+    local sortChip = "[" .. string.upper(console.sortLabel(sortMode)) .. "]"
+    local sortX = nextX + #next + 2
+    if sortX + #sortChip - 1 <= w then
+      mwrite(sortX, navY, sortChip, colors.black, colors.cyan)
+      ui.browseSortBtn = { x1 = sortX, x2 = sortX + #sortChip - 1, y = navY }
+    else
+      ui.browseSortBtn = nil
+    end
+
     local toggle = browseFilter and "[MANAGED]" or "[ALL]"
-    local toggleX = nextX + #next + 2
+    local toggleX = sortX + #sortChip + 1
     if toggleX + #toggle - 1 <= w then
       mwrite(toggleX, navY, toggle, colors.black, browseFilter and colors.lime or colors.cyan)
       browseFilterBtn = { x1 = toggleX, x2 = toggleX + #toggle - 1, y = navY }
@@ -2018,6 +2030,7 @@ local function draw(data)
   browseRowRegions = {}
   browseNavRegions = {}
   browseFilterBtn = nil
+  ui.browseSortBtn = nil
   presetRowRegions = {}
   smartRowRegions = {}
   smartButtons = nil
@@ -2467,7 +2480,16 @@ local function handleTouch(x, y)
     return
   end
 
-  -- Browse page: ALL/MANAGED filter toggle, [< PREV]/[NEXT >] paging, tap a row
+  -- Browse page: sort chip, ALL/MANAGED filter toggle, [< PREV]/[NEXT >] paging, tap a row
+  if ui.browseSortBtn and y == ui.browseSortBtn.y
+    and x >= ui.browseSortBtn.x1 and x <= ui.browseSortBtn.x2 then
+    ui.browseSortMode = console.nextSort(ui.browseSortMode or "qty")
+    browsePage = 1
+    ui.pageShownAt = nowMs()
+    renderCurrent()
+    return
+  end
+
   if browseFilterBtn and y == browseFilterBtn.y and x >= browseFilterBtn.x1 and x <= browseFilterBtn.x2 then
     browseFilter = not browseFilter
     browsePage = 1

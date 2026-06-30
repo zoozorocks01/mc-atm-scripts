@@ -423,7 +423,7 @@ do
   events = {
     { "timer", 1 },
     { "monitor_touch", "r", 25, 2 }, -- BROWSE tab
-    { "monitor_touch", "r", 24, 24 }, -- [ALL] -> [MANAGED], which is empty here
+    { "monitor_touch", "r", 30, 24 }, -- [ALL] -> [MANAGED], which is empty here
   }
   _G.os.pullEvent = scriptPull
   _G.rednet = { open = function() end, broadcast = function() end }
@@ -437,6 +437,28 @@ do
     "Browse page actually rendered in smoke")
   check(blob7:find("[MANAGED]", 1, true) ~= nil,
     "empty managed Browse still renders the MANAGED footer toggle")
+end
+
+-- ---- browse: sort chip cycles the rendered order mode ------------------------
+do
+  screen = {}
+  files = {}
+  ei = 0
+  events = {
+    { "timer", 1 },
+    { "monitor_touch", "r", 25, 2 }, -- BROWSE tab
+    { "monitor_touch", "r", 24, 24 }, -- [QTY] -> [A-Z]
+  }
+  _G.os.pullEvent = scriptPull
+  _G.rednet = { open = function() end, broadcast = function() end }
+  BR = fakeBridge()
+
+  local ok8, err8 = pcall(function() dofile("inventory/manager.lua") end)
+  check(ok8 == false and tostring(err8):find(SENTINEL, 1, true) ~= nil,
+    "Browse sort run still hit the sentinel (loop survived)")
+  local blob8 = table.concat(screen, "\n")
+  check(blob8:find("[A-Z]", 1, true) ~= nil,
+    "Browse sort chip cycles from QTY to A-Z")
 end
 
 print((failures == 0) and "SMOKE OK" or ("SMOKE FAILED (" .. failures .. ")"))

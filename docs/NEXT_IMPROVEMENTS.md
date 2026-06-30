@@ -22,6 +22,19 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-30 (Browse sort controls shipped)
+
+Browse sort/filter controls shipped. The BROWSE footer now has a `[QTY]` /
+`[A-Z]` / `[MOD]` sort chip using the existing console sort helpers, while
+ALL/MANAGED remains a separate toggle. Repeated renders of the same scan reuse the
+sorted list until the source table or selected sort mode changes, and smoke now
+covers real BROWSE tab entry plus sort cycling and empty MANAGED footer rendering.
+
+- **Gate:** 784 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK; mirror diff empty; `git diff --check` clean.
+- **in-game-verify: pending** — off-CC smoke covers the touch path; Zach should
+  verify the footer spacing and sort cycling on the live monitor.
+
 ## Session log — 2026-06-29 (Browse glitch fix shipped)
 
 Browse glitch fix shipped after an in-world report. The smoke test was corrected to
