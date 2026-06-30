@@ -510,5 +510,56 @@ do
     "tapping retry failed clears the queued entry error/backoff")
 end
 
+-- ---- queue: active AP task snapshot surfaces live progress ------------------
+do
+  screen = {}
+  files = { [".atm10-craft-queue"] = "ACTIVE_QUEUE" }
+  _G.textutils = {
+    serialize = function() return "{}" end,
+    unserialize = function(text)
+      if text == "ACTIVE_QUEUE" then
+        return { entries = {
+          live = {
+            key = "live",
+            name = "alltheores:zinc_block",
+            label = "Zinc Block",
+            request = 64,
+            state = "APPROVED",
+            approvedAt = 50,
+          },
+        } }
+      end
+      return {}
+    end,
+  }
+  ei = 0
+  events = {
+    { "timer", 1 },
+    { "monitor_touch", "r", 10, 2 }, -- QUEUE tab
+  }
+  _G.os.pullEvent = scriptPull
+  _G.rednet = { open = function() end, broadcast = function() end }
+  BR = fakeBridge()
+  BR.getCraftingTasks = function()
+    return {
+      {
+        bridge_id = 77,
+        id = "live-zinc",
+        crafted = 12,
+        quantity = 64,
+        completion = 0.25,
+        resource = { name = "alltheores:zinc_block", displayName = "Zinc Block" },
+      },
+    }
+  end
+
+  local ok10, err10 = pcall(function() dofile("inventory/manager.lua") end)
+  check(ok10 == false and tostring(err10):find(SENTINEL, 1, true) ~= nil,
+    "Queue active-task run still hit the sentinel (loop survived)")
+  local blob10 = table.concat(screen, "\n")
+  check(blob10:find("Zinc Block", 1, true) ~= nil and blob10:find("25%%") ~= nil,
+    "Queue row surfaces live active-task progress")
+end
+
 print((failures == 0) and "SMOKE OK" or ("SMOKE FAILED (" .. failures .. ")"))
 os.exit(failures == 0 and 0 or 1)

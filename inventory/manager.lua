@@ -746,10 +746,22 @@ local function isItemCrafting(registryName)
   local cached = craftingCache[registryName]
   if cached and (nowMs() - cached.at) < TTL.crafting then return cached.v end
 
+  local now = nowMs()
+  local tasks = craftingCache.__tasks
+  if not tasks or (now - (tasks.at or 0)) >= TTL.crafting then
+    tasks = control.activeCraftSnapshot(bridge)
+    tasks.at = now
+    craftingCache.__tasks = tasks
+  end
+  if tasks.byName and tasks.byName[registryName] then
+    craftingCache[registryName] = { v = true, at = now }
+    return true
+  end
+
   local result = call(bridge, "isItemCrafting", { name = registryName })
   if result == nil then result = call(bridge, "isCrafting", { name = registryName }) end
   local v = result == true
-  craftingCache[registryName] = { v = v, at = nowMs() }
+  craftingCache[registryName] = { v = v, at = now }
   return v
 end
 
@@ -1329,6 +1341,7 @@ local function scan()
     stockTally = stockTally,
     categorySummaries = summarizeCategories(stockPlans),
     craftQueue = cqueue.list(craftQueue),
+    craftTasks = craftingCache.__tasks,
     smartMode = smartOn,
     suggestions = suggestions,
     -- CRAFT-3: count quotas missing from the live grid ONCE here (inputs only
@@ -1511,10 +1524,12 @@ local function drawQueuePage(data)
   local q = data.craftQueue or {}
   local policy = buildPolicy()
   local retryCooldownMs = (tonumber((config.stockKeeper or {}).cooldownSeconds) or 300) * 1000
+  local taskMap = (type(data.craftTasks) == "table" and type(data.craftTasks.byName) == "table")
+    and data.craftTasks.byName or {}
 
   local crafting, failed = 0, 0
   for _, e in ipairs(q) do
-    if e.state == cqueue.CRAFTING then crafting = crafting + 1 end
+    if e.state == cqueue.CRAFTING or taskMap[e.name] then crafting = crafting + 1 end
     if e.error then failed = failed + 1 end
   end
   line(6, "Craft Queue   " .. #q .. " approved   " .. crafting .. " crafting" ..
@@ -1538,13 +1553,14 @@ local function drawQueuePage(data)
   local now = nowMs()
   for i = 1, rows do
     local e = q[i]
+    local liveTask = taskMap[e.name]
     -- show how long a job has been CRAFTING (craftingAt), else how long it's waited
     local ageBase = (e.state == cqueue.CRAFTING and e.craftingAt) or e.approvedAt or now
     local ageS = math.max(0, math.floor((now - ageBase) / 1000))
     -- In-flight and failed entries show their lifecycle state; entries still
     -- awaiting a request show the live safety-gate verdict (would it craft now?).
     local gateState
-    if e.state == cqueue.CRAFTING then
+    if e.state == cqueue.CRAFTING or liveTask then
       gateState = uiStatus.CRAFTING
     elseif e.error then
       gateState = uiStatus.BLOCKED -- bridge rejected; retries after backoff
@@ -1559,7 +1575,19 @@ local function drawQueuePage(data)
     else
       reqCol = "+" .. fmt(e.request)
     end
-    local resultCol = e.error and cqueue.retryLabel(e, now, retryCooldownMs) or craftResultShort(e.name, now)
+    local liveCol = nil
+    if liveTask then
+      local pct = tonumber(liveTask.progressPct)
+      if pct then
+        liveCol = tostring(pct) .. "%"
+      elseif liveTask.crafted and liveTask.quantity then
+        liveCol = fmt(liveTask.crafted) .. "/" .. fmt(liveTask.quantity)
+      else
+        liveCol = "active"
+      end
+    end
+    local resultCol = e.error and cqueue.retryLabel(e, now, retryCooldownMs)
+      or liveCol or craftResultShort(e.name, now)
     local text
     if wide then
       text = uiDraw.fit(tostring(e.label or e.name), math.max(16, w - 40)) ..
@@ -2599,6 +2627,7 @@ local function refreshAndDraw()
         processCraftQueue(nowMs())
       end
       data.craftQueue = cqueue.list(craftQueue)
+      data.craftTasks = craftingCache.__tasks
       broadcast(data)
     elseif reason == "stale" then
       -- keep the last good plan, but mark it stale so draw() shows a banner

@@ -79,6 +79,30 @@ do
   local c4, m4 = control.activeCraftCount(nil)
   t.eq(c4, 0, "activeCraftCount: nil bridge -> 0")
   t.eq(m4, "no-bridge", "activeCraftCount: nil bridge -> 'no-bridge'")
+  local snap = control.activeCraftSnapshot({
+    getCraftingTasks = function()
+      return {
+        {
+          bridge_id = 77,
+          id = "live-task",
+          crafted = 12,
+          quantity = 64,
+          completion = 0.25,
+          resource = { name = "alltheores:zinc_block", displayName = "Zinc Block" },
+        },
+      }
+    end,
+  })
+  t.eq(snap.count, 1, "activeCraftSnapshot: counts live AP task rows")
+  t.eq(snap.method, "getCraftingTasks", "activeCraftSnapshot: records task-list method")
+  t.eq(snap.byName["alltheores:zinc_block"].bridgeId, 77,
+    "activeCraftSnapshot: indexes live AP bridge_id/resource shape")
+  t.eq(snap.byName["alltheores:zinc_block"].progressPct, 25,
+    "activeCraftSnapshot: converts fractional completion to percent")
+  local snap2 = control.activeCraftSnapshot({ isItemCrafting = function(a) return a.name == "x" end }, { "x", "y" })
+  t.eq(snap2.count, 1, "activeCraftSnapshot: fallback counts crafting names")
+  t.check(snap2.byName.x ~= nil and snap2.byName.y == nil,
+    "activeCraftSnapshot: fallback indexes only true isItemCrafting names")
 end
 
 -- ---------------------------------------------------------------------------

@@ -312,30 +312,90 @@ function control.rebootSafety(state)
   return { safe = true, crafting = 0, secondsLeft = 0, reason = "no crafts in flight" }
 end
 
--- Authoritative live craft count straight from the rs_bridge -- independent of the
--- manager's craftstate file (which goes STALE the moment you Ctrl+T the manager, the
--- exact situation in which the old safereboot rebooted too early and crashed). Tries
--- the task-list methods first (AP-version-dependent), then falls back to per-item
--- isItemCrafting over the supplied names. This is what makes a safe-reboot truly safe:
--- it asks RS "are you still crafting anything RIGHT NOW?" rather than trusting a snapshot.
--- Returns: count (number), method (string: the source used / "no-bridge" / "none").
-function control.activeCraftCount(bridge, fallbackNames)
-  if not bridge then return 0, "no-bridge" end
+local function taskResource(task)
+  if type(task) ~= "table" then return nil end
+  if type(task.resource) == "table" then return task.resource end
+  if type(task.item) == "table" then return task.item end
+  if type(task.output) == "table" then return task.output end
+  return nil
+end
+
+local function pctFromTask(task, crafted, quantity)
+  local p = tonumber(type(task) == "table" and task.completion or nil)
+  if p then
+    if p >= 0 and p <= 1 then return math.floor((p * 100) + 0.5) end
+    if p > 1 and p <= 100 then return math.floor(p + 0.5) end
+  end
+  if crafted and quantity and quantity > 0 then
+    return math.max(0, math.min(100, math.floor((crafted / quantity) * 100 + 0.5)))
+  end
+  return nil
+end
+
+function control.normalizeCraftTask(task)
+  if type(task) ~= "table" then return nil end
+  local res = taskResource(task)
+  local name = task.name or task.target or (type(res) == "table" and res.name)
+  local label = task.label or task.displayName or (type(res) == "table" and res.displayName) or name
+  local crafted = tonumber(task.crafted or task.done or task.completed)
+  local quantity = tonumber(task.quantity or task.requested or task.count or task.amount
+    or (type(res) == "table" and (res.count or res.amount)))
+  return {
+    name = name,
+    label = label,
+    id = task.id or task.taskId or task.uuid,
+    bridgeId = task.bridge_id or task.bridgeId,
+    crafted = crafted,
+    quantity = quantity,
+    completion = tonumber(task.completion),
+    progressPct = pctFromTask(task, crafted, quantity),
+  }
+end
+
+-- Authoritative live craft snapshot straight from the rs_bridge -- independent of
+-- the manager's craftstate file (which goes STALE the moment you Ctrl+T the manager).
+-- Tries task-list methods first (AP-version-dependent), then falls back to per-item
+-- isItemCrafting over the supplied names. Returns:
+--   { count=n, method=str, tasks={...}, byName={ [registry]=task } }
+function control.activeCraftSnapshot(bridge, fallbackNames)
+  local snap = { count = 0, method = "none", tasks = {}, byName = {} }
+  if not bridge then snap.method = "no-bridge"; return snap end
   for _, m in ipairs({ "getCraftingTasks", "getTasks", "listCraftingTasks" }) do
     if type(bridge[m]) == "function" then
       local ok, res = pcall(bridge[m])
-      if ok and type(res) == "table" then return #res, m end
+      if ok and type(res) == "table" then
+        snap.count = #res
+        snap.method = m
+        for _, raw in ipairs(res) do
+          local task = control.normalizeCraftTask(raw) or {}
+          snap.tasks[#snap.tasks + 1] = task
+          if task.name then snap.byName[task.name] = task end
+        end
+        return snap
+      end
     end
   end
   if type(bridge.isItemCrafting) == "function" and type(fallbackNames) == "table" then
-    local n = 0
     for _, name in ipairs(fallbackNames) do
       local ok, res = pcall(bridge.isItemCrafting, { name = name })
-      if ok and res == true then n = n + 1 end
+      if ok and res == true then
+        local task = { name = name, label = name }
+        snap.tasks[#snap.tasks + 1] = task
+        snap.byName[name] = task
+      end
     end
-    return n, "isItemCrafting"
+    snap.count = #snap.tasks
+    snap.method = "isItemCrafting"
+    return snap
   end
-  return 0, "none"
+  return snap
+end
+
+-- Count wrapper kept for safereboot and old callers.
+-- Returns: count (number), method (string: the source used / "no-bridge" / "none").
+function control.activeCraftCount(bridge, fallbackNames)
+  local snap = control.activeCraftSnapshot(bridge, fallbackNames)
+  return snap.count, snap.method
 end
 
 -- ===========================================================================

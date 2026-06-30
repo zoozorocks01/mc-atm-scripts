@@ -22,6 +22,22 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-30 (CRAFT-2 active task snapshot local)
+
+Control-truth groundwork is local. `atm10-control` now normalizes the live
+Advanced Peripherals craft-task rows into an active craft snapshot keyed by
+registry name, including `bridge_id`, `resource.name`, `crafted`, `quantity`, and
+percent progress. The manager caches that snapshot for the existing crafting TTL,
+uses it before falling back to per-item craft checks, threads it into the scan
+payload, and shows live task progress in the Queue page's result column when a
+queued item is present in RS's active task list.
+
+- **Gate:** 804 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK; SMOKE-REMOTE OK; SMOKE-BRIDGE-PROBE OK; manager/control mirror
+  diffs empty; git diff --check clean.
+- **in-game-verify: pending** — after publishing, run/update the manager, start a
+  visible RS craft from the queue, and confirm the Queue row shows active progress.
+
 ## Session log — 2026-06-30 (CRAFT-1 bridge probe hardening local)
 
 CRAFT-1 probe hardening is ready for live use. `atm10-bridge-probe` now records
