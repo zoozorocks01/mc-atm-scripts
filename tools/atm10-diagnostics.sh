@@ -4,6 +4,7 @@ set -euo pipefail
 HOST="${ATM10_HOST:-zjn-home-two}"
 COMPUTER_DIR="${ATM10_COMPUTER_DIR:-/Users/zacharynielsen/LocalServers/ATM10-server-7.0-intel-test/Chem E boys Server - 7.0 test/computercraft/computer/6}"
 INTERVAL="${ATM10_DIAG_INTERVAL:-5}"
+OUT_DIR="${ATM10_DIAG_OUT_DIR:-/tmp/atm10-diagnostics}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1)
 if [ -n "${ATM10_SSH_OPTS:-}" ]; then
   read -r -a SSH_OPTS <<< "$ATM10_SSH_OPTS"
@@ -13,13 +14,16 @@ usage() {
   cat <<'USAGE'
 Usage:
   tools/atm10-diagnostics.sh snapshot
+  tools/atm10-diagnostics.sh save
   tools/atm10-diagnostics.sh watch
+  tools/atm10-diagnostics.sh watch-log
   tools/atm10-diagnostics.sh files
 
 Environment overrides:
   ATM10_HOST              SSH host alias (default: zjn-home-two)
   ATM10_COMPUTER_DIR      ComputerCraft computer directory on the host
   ATM10_DIAG_INTERVAL     watch interval seconds (default: 5)
+  ATM10_DIAG_OUT_DIR      save/watch-log output dir (default: /tmp/atm10-diagnostics)
   ATM10_SSH_OPTS          extra ssh options (default: batch mode, 8s connect timeout)
 USAGE
 }
@@ -110,6 +114,7 @@ show_file .atm10-heartbeat 20
 show_file .atm10-loopstate 120
 show_file .atm10-craftstate 180
 show_file .atm10-craft-results 180
+show_file .atm10-craft-audit 220
 
 echo
 echo "## queue compact"
@@ -126,14 +131,32 @@ run_remote() {
   ssh "${SSH_OPTS[@]}" "$HOST" "cd $remote_dir && $1"
 }
 
+save_snapshot() {
+  mkdir -p "$OUT_DIR"
+  local stamp out
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  out="$OUT_DIR/atm10-$stamp.txt"
+  run_remote "$remote_snapshot" | tee "$out"
+  printf "\nSaved snapshot: %s\n" "$out"
+}
+
 case "${1:-snapshot}" in
   snapshot)
     run_remote "$remote_snapshot"
+    ;;
+  save)
+    save_snapshot
     ;;
   watch)
     while true; do
       clear 2>/dev/null || true
       run_remote "$remote_snapshot"
+      sleep "$INTERVAL"
+    done
+    ;;
+  watch-log)
+    while true; do
+      save_snapshot
       sleep "$INTERVAL"
     done
     ;;

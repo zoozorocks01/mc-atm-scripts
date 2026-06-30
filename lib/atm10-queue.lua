@@ -375,4 +375,44 @@ function queue.pruneResults(results, max)
   return results, removed
 end
 
+-- Chronological craft audit for live debugging. Unlike recordResult() this keeps
+-- recent events in order so a test session can answer "what happened first?".
+-- Shape is an array of compact event tables; the manager owns persistence.
+function queue.recordAudit(audit, event)
+  if type(audit) ~= "table" then audit = {} end
+  if type(event) ~= "table" then return audit end
+  local e = {
+    at = tonumber(event.at) or 0,
+    kind = event.kind and tostring(event.kind) or "event",
+    name = event.name and tostring(event.name) or nil,
+    key = event.key and tostring(event.key) or nil,
+    amount = tonumber(event.amount or event.request),
+    ok = event.ok == nil and nil or event.ok == true,
+    reason = event.reason and tostring(event.reason) or nil,
+    stockAtScan = tonumber(event.stockAtScan),
+    activeCraftMethod = event.activeCraftMethod and tostring(event.activeCraftMethod) or nil,
+    activeCraftCount = tonumber(event.activeCraftCount),
+    activeNow = event.activeNow == nil and nil or event.activeNow == true,
+    queueDepth = tonumber(event.queueDepth),
+  }
+  audit[#audit + 1] = e
+  return audit
+end
+
+-- Keep newest audit entries by timestamp, preserving chronological order in the
+-- retained tail. max <= 0 disables the cap.
+function queue.pruneAudit(audit, max)
+  if type(audit) ~= "table" then return {}, 0 end
+  max = tonumber(max) or 0
+  if max <= 0 or #audit <= max then return audit, 0 end
+  table.sort(audit, function(a, b)
+    local aa, bb = tonumber(a and a.at) or 0, tonumber(b and b.at) or 0
+    if aa ~= bb then return aa < bb end
+    return tostring(a and a.name or "") < tostring(b and b.name or "")
+  end)
+  local drop = #audit - max
+  for _ = 1, drop do table.remove(audit, 1) end
+  return audit, drop
+end
+
 return queue

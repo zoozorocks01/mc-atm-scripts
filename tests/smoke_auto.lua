@@ -92,7 +92,7 @@ _G.fs = {
                close = function() end }
     end
     return { write = function(s) files[p .. ".__pending"] = s end, close = function()
-      files[p:gsub("%.tmp$", "")] = files[p .. ".__pending"]; files[p .. ".__pending"] = nil
+      files[p] = files[p .. ".__pending"]; files[p .. ".__pending"] = nil
     end }
   end,
   delete = function(p) files[p] = nil end,
@@ -196,6 +196,8 @@ for _, c in ipairs(crafted) do
   end
 end
 check(hit, "auto mode crafted the deficit item (zinc_ingot) with a positive count")
+check(files[".atm10-craft-audit"] ~= nil,
+  "auto mode writes the bounded craft audit file for live diagnostics")
 
 -- ---- STAB-2: craft-path attachment recheck ---------------------------------
 -- Race the #1 server-crash trigger: the bridge is CONNECTED when scan reads it
@@ -465,7 +467,7 @@ _G.fs.open = function(p, mode)
              close = function() end }
   end
   return { write = function(s) a1files[p .. ".__pending"] = s end, close = function()
-    a1files[p:gsub("%.tmp$", "")] = a1files[p .. ".__pending"]; a1files[p .. ".__pending"] = nil
+    a1files[p] = a1files[p .. ".__pending"]; a1files[p .. ".__pending"] = nil
   end }
 end
 _G.textutils.unserialize = function(text)

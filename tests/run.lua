@@ -681,6 +681,27 @@ local loadedN = 0; for _ in pairs(loaded) do loadedN = loadedN + 1 end
 t.eq(loadedN, 150, "prune-on-load bounds an oversized craft-results map (300 -> 150)")
 t.check(loaded.x300 ~= nil and loaded.x1 == nil, "prune-on-load keeps newest, drops oldest")
 
+-- chronological craft audit: append compact events, cap to the newest tail
+do
+  local audit = {}
+  cqueue.recordAudit(audit, {
+    at = 100, kind = "requested", key = "compress:iron", name = "iron_ingot",
+    request = 64, ok = true, stockAtScan = 12, activeCraftMethod = "getCraftingTasks",
+    activeCraftCount = 1, activeNow = false, queueDepth = 3,
+  })
+  t.eq(#audit, 1, "recordAudit appends one event")
+  t.eq(audit[1].amount, 64, "recordAudit normalizes request/amount")
+  t.eq(audit[1].stockAtScan, 12, "recordAudit keeps stockAtScan for live debugging")
+  t.eq(audit[1].activeCraftMethod, "getCraftingTasks", "recordAudit keeps active-task method")
+  local auditMany = {}
+  for i = 1, 10 do cqueue.recordAudit(auditMany, { at = i, kind = "failed", name = "item" .. i }) end
+  local _, auditRemoved = cqueue.pruneAudit(auditMany, 4)
+  t.eq(#auditMany, 4, "pruneAudit caps to max (10 -> 4)")
+  t.eq(auditRemoved, 6, "pruneAudit reports dropped count")
+  t.eq(auditMany[1].name, "item7", "pruneAudit preserves chronological order of retained tail")
+  t.eq(select(2, cqueue.pruneAudit({ { at = 1 } }, 0)), 0, "pruneAudit max<=0 disables the cap")
+end
+
 -- ---------------------------------------------------------------------------
 print("manual jobs (queue): enqueue/recordMade/jobComplete/field-roundtrip")
 do

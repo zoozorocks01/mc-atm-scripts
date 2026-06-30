@@ -16,7 +16,10 @@ local BROADCAST_ITEMS = { top = 8, view = 150 }
 local BROADCAST_ENABLED = true
 local BROADCAST_MODEM_SIDE = "auto"
 local BROADCAST_PROTOCOL = "atm10-inventory-v1"
-local CRAFT_RESULTS = { file = ".atm10-craft-results", max = 150 } -- last-craft outcome (QUICK-5); bounded
+local CRAFT_RESULTS = {
+  file = ".atm10-craft-results", max = 150, -- last-craft outcome (QUICK-5); bounded
+  auditFile = ".atm10-craft-audit", auditMax = 200, -- chronological request/stale audit for live tests
+}
 -- On-disk filenames bundled into one table (same locals-cap reason as TTL above).
 local FILES = {
   config = "inventory-config",
@@ -1029,6 +1032,34 @@ end
 local function processCraftQueue(now, plans)
   if not craftQueue then return end
   local stock = config.stockKeeper or {}
+  local tasks = nil
+  local auditLog, auditDirty = nil, false
+  local function appendAudit(event)
+    event = event or {}
+    event.at = event.at or now
+    event.queueDepth = event.queueDepth or cqueue.count(craftQueue)
+    if event.name and itemsByName[event.name] then event.stockAtScan = itemAmount(itemsByName[event.name]) end
+    if tasks then
+      event.activeCraftMethod = tasks.method
+      event.activeCraftCount = tasks.count
+      if event.name and type(tasks.byName) == "table" then event.activeNow = tasks.byName[event.name] ~= nil end
+    end
+    if auditLog == nil then
+      auditLog = {}
+      if fs.exists(CRAFT_RESULTS.auditFile) then
+        local f = fs.open(CRAFT_RESULTS.auditFile, "r")
+        if f then
+          local text = f.readAll()
+          f.close()
+          local ok, data = pcall(textutils.unserialize, text)
+          if ok and type(data) == "table" then auditLog = data end
+        end
+      end
+    end
+    cqueue.recordAudit(auditLog, event)
+    cqueue.pruneAudit(auditLog, CRAFT_RESULTS.auditMax)
+    auditDirty = true
+  end
   -- A1: recompute each manual job's per-fire batch = remaining (requested - made) so a
   -- job split across cycles by a craftFrom clamp sends only the remainder next pass.
   for _, e in ipairs(cqueue.list(craftQueue)) do
@@ -1063,7 +1094,7 @@ local function processCraftQueue(now, plans)
   if #(summary.completed or {}) > 0 then saveQueue(craftQueue) end
   if summary.changed then saveQueue(craftQueue) end
 
-  local tasks = craftingCache.__tasks
+  tasks = craftingCache.__tasks
   if not tasks or (now - (tasks.at or 0)) >= TTL.crafting then
     tasks = control.activeCraftSnapshot(bridge)
     tasks.at = now
@@ -1080,6 +1111,7 @@ local function processCraftQueue(now, plans)
     for _, e in ipairs(cqueue.list(craftQueue)) do
       if e.error == "no active RS task" and e.triedAt == now then
         cqueue.recordResult(craftResults, e.name, false, e.error, now)
+        appendAudit({ kind = "stale", key = e.key, name = e.name, request = e.request, ok = false, reason = e.error })
         print("Craft stale (" .. e.error .. "): " .. tostring(e.name))
       end
     end
@@ -1111,11 +1143,18 @@ local function processCraftQueue(now, plans)
   -- real craft debuggable from the screen. Bounded + atomicWrite.
   if #summary.requested > 0 or #summary.failed > 0 then
     ensureCraftResults()
-    for _, r in ipairs(summary.requested) do cqueue.recordResult(craftResults, r.name, true, nil, now) end
-    for _, f in ipairs(summary.failed) do cqueue.recordResult(craftResults, f.name, false, f.reason, now) end
+    for _, r in ipairs(summary.requested) do
+      cqueue.recordResult(craftResults, r.name, true, nil, now)
+      appendAudit({ kind = "requested", key = r.key, name = r.name, amount = r.amount, ok = true })
+    end
+    for _, f in ipairs(summary.failed) do
+      cqueue.recordResult(craftResults, f.name, false, f.reason, now)
+      appendAudit({ kind = "failed", key = f.key, name = f.name, amount = f.amount, ok = false, reason = f.reason })
+    end
     cqueue.pruneResults(craftResults, CRAFT_RESULTS.max)
     saveCraftResults(craftResults)
   end
+  if auditDirty then pcall(atomicWrite, CRAFT_RESULTS.auditFile, auditLog or {}) end
 
   for _, r in ipairs(summary.requested) do
     firedTimes[#firedTimes + 1] = now
@@ -2795,7 +2834,7 @@ do
   if ok and hmod and hmod.sweepTmps then
     hmod.sweepTmps(fs, {
       FILES.queue, FILES.managed, FILES.trends, FILES.dismissed, FILES.ledger,
-      FILES.loopstate, CRAFT_RESULTS.file,
+      FILES.loopstate, CRAFT_RESULTS.file, CRAFT_RESULTS.auditFile,
     })
   end
 end

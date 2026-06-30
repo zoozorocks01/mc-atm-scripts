@@ -229,7 +229,9 @@ function runner.run(q, deps)
           if ok then
             if recordRequest then recordRequest(e.name, fireAmount, now) end
             requestedThisRun[e.name] = true
-            summary.requested[#summary.requested + 1] = { name = e.name, amount = fireAmount }
+            summary.requested[#summary.requested + 1] = {
+              key = ekey, name = e.name, label = e.label, kind = e.kind, amount = fireAmount,
+            }
             summary.changed = true
             fired = fired + 1
             if manualJob then
@@ -247,7 +249,9 @@ function runner.run(q, deps)
             end
           else
             cqueue.markError(q, ekey, now, reason)
-            summary.failed[#summary.failed + 1] = { name = e.name, reason = reason }
+            summary.failed[#summary.failed + 1] = {
+              key = ekey, name = e.name, label = e.label, kind = e.kind, amount = fireAmount, reason = reason,
+            }
             summary.changed = true
           end
         end

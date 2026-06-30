@@ -37,6 +37,18 @@ For live monitoring while Zach plays:
 tools/atm10-diagnostics.sh watch
 ```
 
+For a timestamped evidence file:
+
+```bash
+tools/atm10-diagnostics.sh save
+```
+
+For a play-test log that keeps one snapshot every interval:
+
+```bash
+tools/atm10-diagnostics.sh watch-log
+```
+
 The command reads the live computer 6 directory on `zjn-home-two` and reports:
 
 - script file versions
@@ -57,7 +69,7 @@ tools/atm10-diagnostics.sh snapshot
 
 ## Live Work Loop
 
-1. Codex starts `tools/atm10-diagnostics.sh watch`.
+1. Codex starts `tools/atm10-diagnostics.sh watch-log`.
 2. Zach plays normally.
 3. Codex asks only for specific in-game actions when live evidence is needed.
 4. Codex patches/tests/commits fixes locally.
