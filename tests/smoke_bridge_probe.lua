@@ -57,11 +57,12 @@ local bridge = {
   getCraftingTasks = function()
     return {
       {
-        id = 42,
-        name = "minecraft:iron_ingot",
-        requested = 64,
+        bridge_id = 42,
+        id = "task-42",
+        quantity = 64,
+        completion = 0.25,
         crafted = 12,
-        item = { name = "minecraft:iron_ingot", count = 64 },
+        resource = { name = "alltheores:zinc_block", count = 64 },
       },
     }
   end,
@@ -74,7 +75,7 @@ local bridge = {
     return type(arg) == "table" and arg.name == "minecraft:iron_ingot"
   end,
   isCrafting = function(arg)
-    return type(arg) == "string" and arg == "minecraft:iron_ingot"
+    return type(arg) == "string" and (arg == "minecraft:iron_ingot" or arg == "alltheores:zinc_block")
   end,
   getStoredEnergy = function() return 1000 end,
   craftItem = function() error("mutating method must not be called", 0) end,
@@ -104,8 +105,10 @@ check(report:find("getCraftingTasks() -> table with 1 entries", 1, true) ~= nil,
   "probe reports task-list entry count")
 check(report:find("raw sample:", 1, true) ~= nil,
   "probe writes a bounded raw task sample")
-check(report:find("getCraftingTask(.id=42) -> table", 1, true) ~= nil,
-  "probe retries getCraftingTask with sampled id")
+check(report:find("getCraftingTask(.bridge_id=42) -> table", 1, true) ~= nil,
+  "probe retries getCraftingTask with sampled bridge_id")
+check(report:find('isCrafting("alltheores:zinc_block") -> boolean true', 1, true) ~= nil,
+  "probe checks task resource name in isCrafting")
 check(report:find('isItemCrafting({name="minecraft:iron_ingot",count=1})', 1, true) ~= nil,
   "probe checks table+count isItemCrafting argument form")
 check(report:find('isCrafting("minecraft:iron_ingot") -> boolean true', 1, true) ~= nil,

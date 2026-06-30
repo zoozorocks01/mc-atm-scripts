@@ -213,9 +213,12 @@ if type(bridge.getCraftingTask) == "function" then
     candidates[#candidates + 1] = { label = label, value = value }
   end
   if type(taskSample) == "table" then
-    for _, key in ipairs({ "id", "taskId", "uuid", "name" }) do addCandidate("." .. key, taskSample[key]) end
+    for _, key in ipairs({ "bridge_id", "bridgeId", "id", "taskId", "uuid", "name" }) do
+      addCandidate("." .. key, taskSample[key])
+    end
     if type(taskSample.item) == "table" then addCandidate(".item.name", taskSample.item.name) end
     if type(taskSample.output) == "table" then addCandidate(".output.name", taskSample.output.name) end
+    if type(taskSample.resource) == "table" then addCandidate(".resource.name", taskSample.resource.name) end
   end
   if #candidates == 0 then
     out("getCraftingTask(arg) -> skipped (no active task sample id/name to try)")
@@ -240,6 +243,9 @@ local function addProbeName(name)
   probeNames[#probeNames + 1] = name
 end
 addProbeName(probeName)
+if type(taskSample) == "table" and type(taskSample.resource) == "table" then addProbeName(taskSample.resource.name) end
+if type(taskSample) == "table" and type(taskSample.item) == "table" then addProbeName(taskSample.item.name) end
+if type(taskSample) == "table" and type(taskSample.output) == "table" then addProbeName(taskSample.output.name) end
 addProbeName("enderio:vibrant_alloy_ingot")
 for _, name in ipairs(queuedNames()) do addProbeName(name) end
 for _, m in ipairs({ "isItemCrafting", "isCrafting" }) do

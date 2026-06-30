@@ -28,8 +28,11 @@ CRAFT-1 probe hardening is ready for live use. `atm10-bridge-probe` now records
 bounded raw samples for task-list methods, retries `getCraftingTask` with sampled
 task IDs/names when available, probes `isItemCrafting` / `isCrafting` with table,
 table+count, and string argument forms, and includes queued item names from the
-manager queue as extra probe candidates. A new off-CC smoke runs the bridge probe
-against a fake RS Bridge and verifies the report is written.
+manager queue as extra probe candidates. The first live active-craft report from
+computer `6` showed Advanced Peripherals task rows shaped as `bridge_id` +
+`resource`, so the local probe now retries that numeric ID and probes the task
+resource name too. A new off-CC smoke runs the bridge probe against a fake RS
+Bridge and verifies the report is written.
 
 - **Gate:** 798 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
   SMOKE-REQUEST OK; SMOKE-REMOTE OK; SMOKE-BRIDGE-PROBE OK; git diff --check clean.
