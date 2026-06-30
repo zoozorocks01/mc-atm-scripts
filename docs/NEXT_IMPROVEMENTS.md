@@ -22,6 +22,20 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-30 (Request panel filter UX shipped)
+
+Request-panel UX polish shipped. The craft request browser now renders preset
+filter chips (`ALL`/`ZINC`/`IRON`/`DUST`/`ESS`) above the item list, applies the
+existing case-insensitive `filterItems()` helper before sorting, and keeps the
+source snapshot order untouched. Request-panel buttons now paint through the
+active frame buffer instead of writing directly to the monitor during a buffered
+render, so first-render controls cannot be overwritten by the diff buffer pass.
+
+- **Gate:** 784 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK; request mirror diff empty; `git diff --check` clean.
+- **in-game-verify: pending** — off-CC smoke proves the filter/submit path and
+  buffered button rendering; live monitor spacing/readability still needs a look.
+
 ## Session log — 2026-06-30 (Browse sort controls shipped)
 
 Browse sort/filter controls shipped. The BROWSE footer now has a `[QTY]` /

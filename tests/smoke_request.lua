@@ -51,18 +51,24 @@ _G.rednet = {
   send = function(id, msg, protocol) sent[#sent + 1] = { id = id, msg = msg, protocol = protocol } end,
 }
 
--- fake monitor: 60x24, records nothing meaningful but answers the buffer API
--- (setCursorPos/blit) so renderBuffer works.
+-- fake monitor: 60x24. It records rendered rows so this smoke can prove the
+-- request panel's buttons are written through the frame buffer instead of being
+-- painted and immediately overwritten by renderBuffer.
+local rendered = {}
 local function fakeMonitor()
   local m, noop = {}, function() end
+  local cx, cy = 1, 1
   m.setBackgroundColor, m.setTextColor, m.setTextScale = noop, noop, noop
   m.setPaletteColour, m.setPaletteColor = noop, noop
   m.clear, m.clearLine = noop, noop
-  m.setCursorPos = noop
+  m.setCursorPos = function(x, y) cx, cy = x, y end
   m.isColor = function() return true end
   m.getSize = function() return 60, 24 end
-  m.write = noop
-  m.blit = noop
+  m.write = function(text) rendered[#rendered + 1] = tostring(text or "") end
+  m.blit = function(text)
+    rendered[#rendered + 1] = tostring(text or "")
+    cx = cx + #(text or "")
+  end
   return m
 end
 
@@ -94,15 +100,19 @@ local viewItems = {
   { name = "minecraft:iron_ingot", id = "minecraft:iron_ingot", amount = 5000 },
 }
 
--- Browse: drawBrowse sorts viewItems by "qty" (iron 5000 > zinc 1000), so after
--- the sort the FIRST row is iron, the SECOND is zinc. listStart = headerY+1 = 7.
--- We want zinc -> tap the second row (y = 8). x anywhere in the row (x = 5).
-local SORTED = { table.unpack(viewItems) }
-console.sortItems(SORTED, "qty")
-local zincRow
-for i, it in ipairs(SORTED) do if it.name == SELECTED_NAME then zincRow = i end end
-local listStart = 7
-local ZINC_Y = listStart + (zincRow - 1)
+-- Browse: tap the [ZINC] preset filter, then zinc is the first visible row.
+local filterRow = console.buttonRow({
+  { label = "ALL", key = "" },
+  { label = "ZINC", key = "zinc" },
+  { label = "IRON", key = "iron" },
+  { label = "DUST", key = "dust" },
+  { label = "ESS", key = "essence" },
+}, 5, 1)
+local ZINC_FILTER_X
+for _, b in ipairs(filterRow.buttons) do
+  if b.key == "zinc" then ZINC_FILTER_X = b.x1 end
+end
+local ZINC_Y = 8 -- listStart = headerY + 1 = 8
 
 -- Detail: quantityButtonRow(qty, 9, 1). Find inc:8 and submit x.
 local qrow = console.quantityButtonRow(1, 9, 1)
@@ -115,10 +125,11 @@ end
 -- ---- scripted event sequence -----------------------------------------------
 -- 1) a timer (acquires monitor/modem on the first loop pass, first render)
 -- 2) the inventory_snapshot (viewItems + source id) -> learn managerId
--- 3) monitor_touch on the zinc row -> selects it, mode=detail
--- 4) monitor_touch on [+8] -> qty 1 -> 9
--- 5) monitor_touch on [SUBMIT] -> rednet.send craft_request
--- 6) sentinel -> break the while-true loop
+-- 3) monitor_touch on [ZINC] -> filters browse list
+-- 4) monitor_touch on the zinc row -> selects it, mode=detail
+-- 5) monitor_touch on [+8] -> qty 1 -> 9
+-- 6) monitor_touch on [SUBMIT] -> rednet.send craft_request
+-- 7) sentinel -> break the while-true loop
 local SENTINEL = "__SMOKE_REQUEST_DONE__"
 local snapshot = {
   kind = "inventory_snapshot",
@@ -129,6 +140,7 @@ local snapshot = {
 local events = {
   { "timer", 1 },
   { "rednet_message", 6, snapshot, "atm10-inventory-v1" },
+  { "monitor_touch", "monitor_0", ZINC_FILTER_X, 5 },
   { "monitor_touch", "monitor_0", 5, ZINC_Y },
   { "monitor_touch", "monitor_0", INC8_X, 9 },
   { "monitor_touch", "monitor_0", SUBMIT_X, 9 },
@@ -147,6 +159,13 @@ print("smoke-request: running inventory/request.lua, selecting " .. SELECTED_NAM
 local ok, err = pcall(function() dofile("inventory/request.lua") end)
 check(ok == false and tostring(err):find(SENTINEL, 1, true) ~= nil,
   "panel loaded, rendered, and ran the scripted cycle to the sentinel: " .. tostring(err))
+local renderedBlob = table.concat(rendered, "\n")
+check(renderedBlob:find("[ZINC]", 1, true) ~= nil,
+  "filter preset buttons rendered through the buffered frame")
+check(renderedBlob:find("1/2 shown", 1, true) ~= nil,
+  "filter tap narrowed the request browse list to one zinc match")
+check(viewItems[1] and viewItems[1].name == SELECTED_NAME,
+  "request Browse sorting/filtering leaves the snapshot order untouched")
 
 -- exactly one control-protocol craft_request from the SUBMIT touch
 local control = require("atm10-control")

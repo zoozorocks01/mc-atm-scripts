@@ -26,12 +26,21 @@ local ui = {
   qty = 1,
   jobs = {},         -- name -> { name, label, request, requested, made, state, error, seenAt, sentAt }
   navRow = nil,      -- browse [< PREV][NEXT >][SORT] row
+  filterRow = nil,   -- browse preset filter chips
   detailRow = nil,   -- detail [BACK] row
   qtyRow = nil,      -- detail quantity picker row
   listRows = nil,    -- browse actionable item rows {{y, entry}}
   jobRows = nil,     -- jobs-strip [CANCEL] buttons keyed by name
   flash = nil,
   flashAt = 0,
+}
+
+local FILTER_PRESETS = {
+  { label = "ALL", key = "" },
+  { label = "ZINC", key = "zinc" },
+  { label = "IRON", key = "iron" },
+  { label = "DUST", key = "dust" },
+  { label = "ESS", key = "essence" },
 }
 
 local monitor = nil
@@ -139,6 +148,10 @@ local function line(y, text, color)
   end
 end
 
+local function writeAt(x, y, text, color, bg)
+  uiDraw.write(frame or monitor, x, y, text, color or colors.white, bg or colors.black)
+end
+
 local function present(renderFn)
   if not monitor then return end
   local w, h = monitor.getSize()
@@ -193,7 +206,7 @@ local function drawJobsStrip(w, h)
     local cb = cancel.buttons[1]
     local rowInfo = console.jobRowFormat(job, math.max(1, cb.x1 - 2))
     line(y, rowInfo.text, jobColor(rowInfo.colorKey))
-    uiDraw.write(monitor, cb.x1, y, cb.text, colors.red, colors.black)
+    writeAt(cb.x1, y, cb.text, colors.red, colors.black)
     ui.jobRows[#ui.jobRows + 1] = { row = cancel, name = job.name }
   end
   return stripTop
@@ -207,30 +220,42 @@ end
 
 local function drawBrowse()
   local w, h = monitor.getSize()
-  local items = (last and last.viewItems) or {}
+  local sourceItems = (last and last.viewItems) or {}
+  local items = console.filterItems(sourceItems, ui.query)
   console.sortItems(items, ui.sort)
 
-  line(4, "Tap an item to request a craft.  (any item; no-recipe surfaces as a job error)", colors.gray)
+  line(4, "Tap an item to request a craft. No-recipe surfaces as a job error.", colors.gray)
+  ui.filterRow = console.buttonRow(FILTER_PRESETS, 5, 1)
+  for _, b in ipairs(ui.filterRow.buttons) do
+    local active = b.key == (ui.query or "")
+    writeAt(b.x1, b.y, b.text, active and colors.black or colors.cyan, active and colors.cyan or colors.black)
+  end
 
   local stripTop = drawJobsStrip(w, h)
-  local headerY = 6
+  local headerY = 7
   local navY = stripTop - 1
   local listStart = headerY + 1
   local perPage = math.max(1, navY - listStart)
   local pg = console.paginate(#items, perPage, ui.page)
   ui.page = pg.page
 
-  line(headerY, "Craftable Items   " .. #items .. " shown   page " .. pg.page .. "/" .. pg.pages ..
-    "   sort:" .. console.sortLabel(ui.sort), colors.cyan)
+  local filterLabel = (ui.query and ui.query ~= "") and ui.query or "all"
+  line(headerY, "Craftable Items   " .. #items .. "/" .. #sourceItems .. " shown   page " ..
+    pg.page .. "/" .. pg.pages .. "   sort:" .. console.sortLabel(ui.sort) ..
+    "   filter:" .. filterLabel, colors.cyan)
 
   ui.listRows = {}
-  for i = pg.from, pg.to do
-    local item = items[i]
-    if item then
-      local y = listStart + (i - pg.from)
-      line(y, rjust(i, 4) .. ". " .. uiDraw.fit(tostring(item.name), math.max(8, w - 18)) ..
-        "  " .. rjust(fmt(item.amount), 10), colors.white)
-      ui.listRows[#ui.listRows + 1] = { y = y, entry = item }
+  if #items == 0 then
+    line(listStart, "No items match filter: " .. filterLabel, colors.yellow)
+  else
+    for i = pg.from, pg.to do
+      local item = items[i]
+      if item then
+        local y = listStart + (i - pg.from)
+        line(y, rjust(i, 4) .. ". " .. uiDraw.fit(tostring(item.name), math.max(8, w - 18)) ..
+          "  " .. rjust(fmt(item.amount), 10), colors.white)
+        ui.listRows[#ui.listRows + 1] = { y = y, entry = item }
+      end
     end
   end
 
@@ -241,7 +266,7 @@ local function drawBrowse()
   }, navY, 1)
   for _, b in ipairs(ui.navRow.buttons) do
     local enabled = (b.key == "prev" and pg.page > 1) or (b.key == "next" and pg.page < pg.pages) or (b.key == "sort")
-    uiDraw.write(monitor, b.x1, navY, b.text, enabled and colors.cyan or colors.gray, colors.black)
+    writeAt(b.x1, navY, b.text, enabled and colors.cyan or colors.gray, colors.black)
   end
 
   drawFlash(h)
@@ -260,13 +285,13 @@ local function drawDetail()
     local color = colors.cyan
     if b.key == "qty" then color = colors.white
     elseif b.key == "submit" then color = colors.lime end
-    uiDraw.write(monitor, b.x1, b.y, b.text, color, colors.black)
+    writeAt(b.x1, b.y, b.text, color, colors.black)
   end
 
   local stripTop = drawJobsStrip(w, h)
   ui.detailRow = console.buttonRow({ { label = "< BACK", key = "back" } }, math.min(11, stripTop - 1), 1)
   local bb = ui.detailRow.buttons[1]
-  uiDraw.write(monitor, bb.x1, bb.y, bb.text, colors.orange, colors.black)
+  writeAt(bb.x1, bb.y, bb.text, colors.orange, colors.black)
 
   drawFlash(h)
 end
@@ -392,6 +417,9 @@ local function handleTouch(x, y)
   end
 
   -- browse
+  local filterKey = ui.filterRow and console.buttonHit(ui.filterRow, x, y)
+  if filterKey ~= nil then ui.query = filterKey; ui.page = 1; return end
+
   local navKey = ui.navRow and console.buttonHit(ui.navRow, x, y)
   if navKey == "prev" then ui.page = math.max(1, ui.page - 1); return
   elseif navKey == "next" then ui.page = ui.page + 1; return
