@@ -22,11 +22,24 @@ local paletteApplied = false
 local viewPage = 1     -- VIEW-2: current page of the paginated stored-items list
 local viewNavRow = nil -- VIEW-2: [< PREV]/[NEXT >]/[SORT] button row, rebuilt each draw
 local viewSort = "qty" -- VIEW-3: current sort mode (qty / az / mod)
+local viewFilter = ""   -- VIEW-4: keyboard-free filter chip state
+local viewFilterRow = nil
+local viewRowRegions = {}
+local viewSelected = nil -- VIEW-6: read-only detail card selection
 local frame = nil      -- UI-1: current render buffer (set during present())
 local prevFrame = nil  -- UI-1: last rendered buffer, for diff (flicker-free redraw)
 
 local MIN_WIDTH = 42
 local MIN_HEIGHT = 18
+local VIEW_FILTERS = {
+  { label = "ALL", key = "" },
+  { label = "A-F", key = "range:a:f" },
+  { label = "G-L", key = "range:g:l" },
+  { label = "M-R", key = "range:m:r" },
+  { label = "S-Z", key = "range:s:z" },
+  { label = "DUST", key = "dust" },
+  { label = "ESS", key = "essence" },
+}
 
 local function peripheralTypeMatches(actual, expected)
   if actual == expected then return true end
@@ -227,6 +240,44 @@ local function drawGauge(x, y, width, used, total)
   writeAt(x + gaugeWidth + 1, y, string.format("%3.0f%%", p), colors.white, colors.black)
 end
 
+local function itemFilterKey(item)
+  local text = tostring((item and (item.name or item.id)) or ""):lower()
+  return text:match("^[^:]+:(.+)$") or text
+end
+
+local function filterLabel()
+  if not viewFilter or viewFilter == "" then return "all" end
+  if viewFilter:match("^range:") then return viewFilter:sub(7):upper():gsub(":", "-") end
+  return viewFilter
+end
+
+local function filteredViewItems(items)
+  if not viewFilter or viewFilter == "" then return console.filterItems(items, "") end
+  local first, last = viewFilter:match("^range:([a-z]):([a-z])$")
+  if not first then return console.filterItems(items, viewFilter) end
+  local out = {}
+  for _, item in ipairs(items or {}) do
+    local ch = itemFilterKey(item):sub(1, 1)
+    if ch >= first and ch <= last then out[#out + 1] = item end
+  end
+  return out
+end
+
+local function drawItemDetail(item, y, w)
+  if not item or y < 1 then return end
+  uiDraw.box(frame or monitor, 1, y, w, 4, "Item Detail", colors.cyan, colors.black)
+  local label = tostring(item.name or item.id or "?")
+  local amount = "count " .. fmt(item.amount)
+  writeAt(3, y + 1, uiDraw.fit(label, math.max(8, w - #amount - 7)), colors.white, colors.black)
+  writeAt(math.max(3, w - #amount - 2), y + 1, amount, colors.lime, colors.black)
+  local trend = ""
+  if type(item.trend) == "table" then
+    local arrow = (item.trend.dir == "up" and "^") or (item.trend.dir == "down" and "v") or "-"
+    trend = "   trend " .. arrow .. fmt(math.abs(item.trend.perMin or 0)) .. "/m"
+  end
+  writeAt(3, y + 2, uiDraw.fit("id " .. tostring(item.id or item.name or "?") .. trend, w - 4), colors.gray, colors.black)
+end
+
 -- UI-1: render a frame through the diff double-buffer. The renderFn draws via
 -- line()/writeAt() into `frame`; renderBuffer rewrites only the rows that changed
 -- (blit), so there is no whole-screen monitor.clear flash between frames.
@@ -300,24 +351,35 @@ local function drawView(data)
 
   -- VIEW-2: paginated, touch-scrollable stored-items list (consumes VIEW-1's bounded
   -- viewItems; falls back to the 8-item summary if an older source is broadcasting).
-  local items = data.viewItems or data.topItems or {}
+  local sourceItems = data.viewItems or data.topItems or {}
+  local items = filteredViewItems(sourceItems)
   console.sortItems(items, viewSort) -- VIEW-3: re-sort per the tappable sort chip
   local navY = h
-  local listStart = headerY + 1
-  local perPage = math.max(1, navY - listStart)
+  local filterY = headerY + 1
+  local listStart = filterY + 1
+  local detailTop = viewSelected and math.max(listStart + 1, h - 4) or nil
+  local listEnd = detailTop and (detailTop - 1) or (navY - 1)
+  local perPage = math.max(1, listEnd - listStart + 1)
   local pg = console.paginate(#items, perPage, viewPage)
   viewPage = pg.page
-  line(headerY, "Stored Items   " .. #items .. " shown   page " .. pg.page .. "/" .. pg.pages ..
-    "   sort:" .. console.sortLabel(viewSort), colors.cyan)
+  line(headerY, "Stored Items   " .. #items .. "/" .. #sourceItems .. " shown   page " ..
+    pg.page .. "/" .. pg.pages .. "   sort:" .. console.sortLabel(viewSort) ..
+    "   filter:" .. filterLabel(), colors.cyan)
+  viewFilterRow = console.buttonRow(VIEW_FILTERS, filterY, 1)
+  for _, b in ipairs(viewFilterRow.buttons) do
+    local active = b.key == (viewFilter or "")
+    writeAt(b.x1, b.y, b.text, active and colors.black or colors.cyan, active and colors.cyan or colors.black)
+  end
   -- QUICK-6: magnitude bar per row, scaled to the largest amount in the list (the #1), so
   -- quantities are scannable at a glance. Monochrome uiDraw.barText fits the single-color
   -- line(); shown only when the monitor is wide enough, else the row degrades to name+amount.
   local maxAmt = 0
   for _, it in ipairs(items) do local a = tonumber(it.amount) or 0; if a > maxAmt then maxAmt = a end end
+  viewRowRegions = {}
   if #items == 0 then
     drawPanel("No Items", {
-      "No stored items in this snapshot.",
-      "Waiting for the next inventory broadcast.",
+      "No items match filter: " .. filterLabel(),
+      "Tap ALL or another filter chip.",
     }, listStart + 1, math.min(5, math.max(3, navY - listStart - 1)), colors.gray)
   else
     for i = pg.from, pg.to do
@@ -338,9 +400,11 @@ local function drawView(data)
         local bg = ((i - pg.from) % 2 == 1) and colors.gray or colors.black
         line(y, rjust(i, 4) .. ". " .. uiDraw.fit(tostring(item.name), nameW) ..
           mag .. "  " .. rjust(fmt(item.amount), 10) .. trend, colors.white, bg)
+        viewRowRegions[#viewRowRegions + 1] = { y = y, entry = item }
       end
     end
   end
+  if viewSelected and detailTop then drawItemDetail(viewSelected, detailTop, w) end
   -- nav row (reuses the tested console.buttonRow / buttonHit)
   viewNavRow = console.buttonRow({
     { label = "< PREV", key = "prev" },
@@ -501,10 +565,22 @@ end
 
 local function handleViewTouch(x, y)
   if PROFILE ~= "view" then return end -- only the inventory list paginates
+  local filterKey = viewFilterRow and console.buttonHit(viewFilterRow, x, y)
+  if filterKey ~= nil then
+    viewFilter = filterKey
+    viewPage = 1
+    viewSelected = nil
+    return
+  end
+
   local key = viewNavRow and console.buttonHit(viewNavRow, x, y)
   if key == "prev" then viewPage = math.max(1, viewPage - 1)
   elseif key == "next" then viewPage = viewPage + 1 -- paginate() clamps to the last page
   elseif key == "sort" then viewSort = console.nextSort(viewSort); viewPage = 1 end
+  if key ~= nil then return end
+
+  local entry = console.rowHit(viewRowRegions, y)
+  if entry then viewSelected = entry end
 end
 
 -- Event-driven loop: touch paging (monitor_touch) works alongside rednet updates;

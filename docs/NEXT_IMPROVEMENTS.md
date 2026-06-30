@@ -22,6 +22,20 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-30 (Viewer filter/detail shipped)
+
+Read-only viewer filter/detail shipped. The inventory viewer now has keyboard-free
+filter chips (`ALL`, alpha ranges, `DUST`, `ESS`), filters a copied snapshot before
+sorting, and lets a row tap open a read-only item detail card with registry ID,
+count, and trend when present. The existing paging/sort controls remain read-only;
+the new smoke proves the viewer sends no rednet control messages.
+
+- **Gate:** 798 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK; SMOKE-REMOTE OK; remote mirror diff empty; `git diff --check`
+  clean.
+- **in-game-verify: pending** — off-CC smoke covers the touch paths; live viewer
+  monitor spacing/readability still needs a look.
+
 ## Session log — 2026-06-30 (Pattern checklist hints shipped)
 
 Pattern checklist groundwork shipped. `atm10-patterns` now writes an IDs-only copy
