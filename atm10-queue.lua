@@ -172,6 +172,31 @@ function queue.markError(q, name, now, reason)
   return q
 end
 
+-- If a row has been marked CRAFTING but RS no longer reports an active task for
+-- it and stock still has not reconciled it away, return it to APPROVED with a
+-- retryable error. This covers AP accepting craftItem but not actually sustaining
+-- a visible RS task. `activeByName` is an authoritative live-task map.
+function queue.failInactiveCrafting(q, activeByName, now, graceMs, reason)
+  q = queue.normalize(q)
+  if type(activeByName) ~= "table" then return q, 0 end
+  now = tonumber(now) or 0
+  graceMs = math.max(0, tonumber(graceMs) or 0)
+  local n = 0
+  for key, e in pairs(q.entries) do
+    if type(e) == "table" and e.state == queue.CRAFTING then
+      local active = activeByName[e.name] or activeByName[key]
+      local started = tonumber(e.craftingAt or e.approvedAt) or 0
+      if not active and (now - started) >= graceMs then
+        e.state = queue.APPROVED
+        e.triedAt = now
+        e.error = reason and tostring(reason) or "no active RS task"
+        n = n + 1
+      end
+    end
+  end
+  return q, n
+end
+
 -- How long a failed entry still has to wait before the runner's failed-craft
 -- backoff will try it again. Non-failed entries are ready (0).
 function queue.retryRemainingMs(entry, now, cooldownMs)

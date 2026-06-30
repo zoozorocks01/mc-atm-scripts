@@ -22,6 +22,22 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-30 (stale CRAFTING recovery + craft metrics local)
+
+Live monitoring caught a real control-truth bug: `craftItem` could return success
+and move a row to `CRAFTING`, while RS reported zero active tasks. If stock did not
+recover, that row stayed stuck forever. The queue now marks stale inactive
+`CRAFTING` rows back to `APPROVED` with a retryable `no active RS task` error after
+a grace period. `.atm10-craftstate` also now persists operational metrics for
+server-side monitoring: active task source/count, queue approved/crafting/failed/
+stale counts, queue depth, would-craft backlog count/amount, and crafts/min.
+
+- **Gate:** 813 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK; SMOKE-REMOTE OK; SMOKE-BRIDGE-PROBE OK; git diff --check clean.
+- **in-game-verify: pending** — update computer `6`, let the manager loop run for
+  one cycle, then confirm stale `CRAFTING` rows report as retryable and craftstate
+  includes the new metric fields.
+
 ## Session log — 2026-06-30 (Pattern bucketed setup lists local)
 
 Pattern/setup workflow improved locally. `atm10-patterns` still writes the flat

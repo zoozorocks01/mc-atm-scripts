@@ -624,6 +624,25 @@ t.eq(sq.entries.s.error, "boom", "markError records the reason")
 t.eq(sq.entries.s.triedAt, 30, "markError stamps triedAt for backoff")
 cqueue.markCrafting(sq, "absent", 40) -- no-op on a missing entry
 t.check(cqueue.has(sq, "absent") == false, "markCrafting on a missing entry is a no-op")
+_G.__staleQ = cqueue.new()
+cqueue.approve(_G.__staleQ, { name = "stuck", request = 8 }, 1)
+cqueue.markCrafting(_G.__staleQ, "stuck", 10)
+t.eq(select(2, cqueue.failInactiveCrafting(_G.__staleQ, {}, 20, 20, "no active RS task")), 0,
+  "failInactiveCrafting: grace period keeps fresh CRAFTING rows")
+t.eq(select(2, cqueue.failInactiveCrafting(_G.__staleQ, {}, 31, 20, "no active RS task")), 1,
+  "failInactiveCrafting: stale inactive CRAFTING row is marked")
+t.eq(_G.__staleQ.entries.stuck.state, cqueue.APPROVED,
+  "failInactiveCrafting: stale inactive row returns to APPROVED")
+t.eq(_G.__staleQ.entries.stuck.error, "no active RS task",
+  "failInactiveCrafting: stale inactive row records retryable reason")
+_G.__activeQ = cqueue.new()
+cqueue.approve(_G.__activeQ, { name = "active", request = 8 }, 1)
+cqueue.markCrafting(_G.__activeQ, "active", 10)
+t.eq(select(2, cqueue.failInactiveCrafting(_G.__activeQ, { active = true }, 100, 20, "no active RS task")), 0,
+  "failInactiveCrafting: active RS task stays CRAFTING")
+t.eq(_G.__activeQ.entries.active.state, cqueue.CRAFTING,
+  "failInactiveCrafting: active task entry is unchanged")
+_G.__staleQ, _G.__activeQ = nil, nil
 
 -- per-item last-craft results (QUICK-5): record ok/reason/timestamp, bounded
 local res = {}

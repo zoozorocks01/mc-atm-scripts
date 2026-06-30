@@ -9,7 +9,7 @@ local REFRESH_SECONDS = 5
 -- Bundled into one table to stay well under Lua's 200-local-per-function cap: CC's
 -- Lua (Cobalt) counts main-chunk locals stricter than Lua 5.4, so a packed table
 -- (one local) is the safe way to hold many constants.
-local TTL = { craftableTrue = 60000, craftableFalse = 10000, crafting = 6000 } -- ms
+local TTL = { craftableTrue = 60000, craftableFalse = 10000, crafting = 6000, craftingStale = 20000 } -- ms
 -- Broadcast slice sizes: an 8-item header summary (topItems) + a larger BOUNDED
 -- list (viewItems) the read-only viewer paginates (VIEW-1). Capped, never thousands.
 local BROADCAST_ITEMS = { top = 8, view = 150 }
@@ -395,13 +395,17 @@ end
 -- Persist a tiny drain snapshot so `safereboot` can decide whether detaching this
 -- computer is safe even after the manager is terminated (the file outlives the
 -- process). Fixed-size; overwrites in place (no growth). Fail-safe: best effort.
-local function writeCraftState(now, crafting, craftingNames)
-  pcall(atomicWrite, FILES.craftstate, {
+local function writeCraftState(now, crafting, craftingNames, metrics)
+  local state = {
     at = now,
     lastCraftAt = lastCraftAt,
     crafting = tonumber(crafting) or 0,
     craftingNames = craftingNames or {},
-  })
+  }
+  if type(metrics) == "table" then
+    for k, v in pairs(metrics) do state[k] = v end
+  end
+  pcall(atomicWrite, FILES.craftstate, state)
 end
 
 -- Smart-mode trend history is wall-clock based (os.epoch), so persisting it lets
@@ -1021,7 +1025,7 @@ end
 -- Run the approved craft queue through the gated runner. The runner performs at
 -- most one bridge request per approval; nothing crafts unless mode + capability
 -- + approval all pass. Returns nothing; prints a short line per request/failure.
-local function processCraftQueue(now)
+local function processCraftQueue(now, plans)
   if not craftQueue then return end
   local stock = config.stockKeeper or {}
   -- A1: recompute each manual job's per-fire batch = remaining (requested - made) so a
@@ -1057,6 +1061,30 @@ local function processCraftQueue(now)
   end
   if #(summary.completed or {}) > 0 then saveQueue(craftQueue) end
   if summary.changed then saveQueue(craftQueue) end
+
+  local tasks = craftingCache.__tasks
+  if not tasks or (now - (tasks.at or 0)) >= TTL.crafting then
+    tasks = control.activeCraftSnapshot(bridge)
+    tasks.at = now
+    craftingCache.__tasks = tasks
+  end
+  local failedInactive = 0
+  if tasks.method ~= "none" and tasks.method ~= "no-bridge" then
+    failedInactive = select(2, cqueue.failInactiveCrafting(craftQueue, tasks.byName, now,
+      TTL.craftingStale, "no active RS task"))
+  end
+  if failedInactive > 0 then
+    saveQueue(craftQueue)
+    ensureCraftResults()
+    for _, e in ipairs(cqueue.list(craftQueue)) do
+      if e.error == "no active RS task" and e.triedAt == now then
+        cqueue.recordResult(craftResults, e.name, false, e.error, now)
+        print("Craft stale (" .. e.error .. "): " .. tostring(e.name))
+      end
+    end
+    cqueue.pruneResults(craftResults, CRAFT_RESULTS.max)
+    saveCraftResults(craftResults)
+  end
 
   -- Keep the cooldown ALIVE for in-flight crafts: while RS still reports an item
   -- crafting, slide its ledger timestamp so a batch that outlives cooldownSeconds
@@ -1105,7 +1133,32 @@ local function processCraftQueue(now)
   -- manager is terminated) can tell whether detaching now would crash the server.
   local craftingNames = {}
   for _, e in ipairs(inflight) do craftingNames[#craftingNames + 1] = e.name end
-  writeCraftState(now, #inflight, craftingNames)
+  local qApproved, qCrafting, qFailed, qStale = 0, 0, 0, 0
+  for _, e in ipairs(cqueue.list(craftQueue)) do
+    if e.state == cqueue.APPROVED then qApproved = qApproved + 1 end
+    if e.state == cqueue.CRAFTING then qCrafting = qCrafting + 1 end
+    if e.error then qFailed = qFailed + 1 end
+    if e.error == "no active RS task" then qStale = qStale + 1 end
+  end
+  local wouldCount, wouldAmount = 0, 0
+  for _, p in ipairs(plans or {}) do
+    if p and p.action == "WOULD CRAFT" then
+      wouldCount = wouldCount + 1
+      wouldAmount = wouldAmount + (tonumber(p.request) or 0)
+    end
+  end
+  writeCraftState(now, #inflight, craftingNames, {
+    activeCraftMethod = tasks and tasks.method,
+    activeCraftCount = tasks and tasks.count or #inflight,
+    queueApproved = qApproved,
+    queueCrafting = qCrafting,
+    queueFailed = qFailed,
+    queueStale = qStale,
+    queueDepth = cqueue.count(craftQueue),
+    wouldCraftCount = wouldCount,
+    wouldCraftAmount = wouldAmount,
+    craftsPerMin = #firedTimes,
+  })
 end
 
 -- AUTO MODE: maintain quotas hands-free. Auto-approve every craftable deficit
@@ -2624,7 +2677,7 @@ local function refreshAndDraw()
         autoApprovePlans(data.stockPlans)
         -- drive the gated craft runner, then refresh the queue snapshot so the page
         -- reflects this cycle's state transitions (APPROVED -> CRAFTING) immediately
-        processCraftQueue(nowMs())
+        processCraftQueue(nowMs(), data.stockPlans)
       end
       data.craftQueue = cqueue.list(craftQueue)
       data.craftTasks = craftingCache.__tasks
