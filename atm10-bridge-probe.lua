@@ -51,9 +51,47 @@ local function shape(rec)
   return "{ " .. table.concat(keys, ", ") .. " }"
 end
 
+local function rawdesc(v, limit)
+  limit = tonumber(limit) or 500
+  local text
+  if type(v) == "table" and textutils and textutils.serialize then
+    local ok, encoded = pcall(textutils.serialize, v)
+    text = ok and encoded or nil
+  end
+  text = text or tostring(v)
+  text = text:gsub("\n", " ")
+  if #text > limit then text = text:sub(1, limit - 3) .. "..." end
+  return text
+end
+
+local function resultdesc(ok, v)
+  if ok then return typedesc(v) end
+  return "ERROR " .. typedesc(v)
+end
+
 local function tryCall(bridge, method, ...)
   if type(bridge[method]) ~= "function" then return false, "(absent)" end
   return pcall(bridge[method], ...)
+end
+
+local function queuedNames()
+  local names, seen = {}, {}
+  if not (fs.exists and fs.exists(".atm10-craft-queue")) then return names end
+  local f = fs.open(".atm10-craft-queue", "r")
+  if not f then return names end
+  local text = f.readAll()
+  f.close()
+  local ok, data = pcall(textutils.unserialize, text or "")
+  if not ok or type(data) ~= "table" or type(data.entries) ~= "table" then return names end
+  for _, entry in pairs(data.entries) do
+    local name = type(entry) == "table" and entry.name or nil
+    if name and not seen[name] then
+      seen[name] = true
+      names[#names + 1] = name
+    end
+  end
+  table.sort(names)
+  return names
 end
 
 local function save()
@@ -141,12 +179,15 @@ do
   local okItems, items = tryCall(bridge, "getItems")
   if okItems and type(items) == "table" and items[1] then probeName = items[1].name end
 end
-for _, m in ipairs({ "getCraftingTasks", "getTasks", "listCraftingTasks", "getCraftingTask" }) do
+local taskSample = nil
+for _, m in ipairs({ "getCraftingTasks", "getTasks", "listCraftingTasks" }) do
   if type(bridge[m]) == "function" then
     ok, v = tryCall(bridge, m)
     if ok and type(v) == "table" then
-      out(m .. " -> table with " .. #v .. " entries")
+      out(m .. "() -> table with " .. #v .. " entries")
+      out("  raw sample: " .. rawdesc(v))
       if v[1] then
+        taskSample = taskSample or v[1]
         out("  [1] shape:  " .. shape(v[1]))
         -- a task usually nests the item + amounts; dump one level deeper
         for k, val in pairs(v[1]) do
@@ -154,25 +195,74 @@ for _, m in ipairs({ "getCraftingTasks", "getTasks", "listCraftingTasks", "getCr
         end
       end
     else
-      out(m .. " -> " .. typedesc(v))
+      out(m .. "() -> " .. resultdesc(ok, v))
     end
   else
     out(m .. " -> (method absent)")
   end
 end
+if type(bridge.getCraftingTask) == "function" then
+  ok, v = tryCall(bridge, "getCraftingTask")
+  out("getCraftingTask() -> " .. resultdesc(ok, v))
+  local candidates, seen = {}, {}
+  local function addCandidate(label, value)
+    if value == nil then return end
+    local key = type(value) .. ":" .. tostring(value)
+    if seen[key] then return end
+    seen[key] = true
+    candidates[#candidates + 1] = { label = label, value = value }
+  end
+  if type(taskSample) == "table" then
+    for _, key in ipairs({ "id", "taskId", "uuid", "name" }) do addCandidate("." .. key, taskSample[key]) end
+    if type(taskSample.item) == "table" then addCandidate(".item.name", taskSample.item.name) end
+    if type(taskSample.output) == "table" then addCandidate(".output.name", taskSample.output.name) end
+  end
+  if #candidates == 0 then
+    out("getCraftingTask(arg) -> skipped (no active task sample id/name to try)")
+  else
+    for _, c in ipairs(candidates) do
+      ok, v = tryCall(bridge, "getCraftingTask", c.value)
+      out("getCraftingTask(" .. c.label .. "=" .. tostring(c.value) .. ") -> " .. resultdesc(ok, v))
+      if ok and type(v) == "table" then out("  raw: " .. rawdesc(v)) end
+    end
+  end
+else
+  out("getCraftingTask -> (method absent)")
+end
 
 -- isItemCrafting(name): probe with a live grid item + a known-pattern id (per base
--- recon vibrant alloy crafts), so we capture the arg form + the true/false returns.
+-- recon vibrant alloy crafts), plus queued names if the manager has any. Try the
+-- common arg forms so CRAFT-2 can use the one this bridge accepts.
+local probeNames, seenProbe = {}, {}
+local function addProbeName(name)
+  if type(name) ~= "string" or name == "" or seenProbe[name] then return end
+  seenProbe[name] = true
+  probeNames[#probeNames + 1] = name
+end
+addProbeName(probeName)
+addProbeName("enderio:vibrant_alloy_ingot")
+for _, name in ipairs(queuedNames()) do addProbeName(name) end
 for _, m in ipairs({ "isItemCrafting", "isCrafting" }) do
   if type(bridge[m]) == "function" then
-    if probeName then
-      ok, v = tryCall(bridge, m, { name = probeName })
-      out(m .. '({name="' .. tostring(probeName) .. '"}) -> ' .. typedesc(v))
+    for _, name in ipairs(probeNames) do
+      ok, v = tryCall(bridge, m, { name = name })
+      out(m .. '({name="' .. name .. '"}) -> ' .. resultdesc(ok, v))
+      ok, v = tryCall(bridge, m, { name = name, count = 1 })
+      out(m .. '({name="' .. name .. '",count=1}) -> ' .. resultdesc(ok, v))
+      ok, v = tryCall(bridge, m, name)
+      out(m .. '("' .. name .. '") -> ' .. resultdesc(ok, v))
     end
-    ok, v = tryCall(bridge, m, { name = "enderio:vibrant_alloy_ingot" })
-    out(m .. '({name="enderio:vibrant_alloy_ingot"}) -> ' .. typedesc(v))
   else
     out(m .. " -> (method absent)")
+  end
+end
+do
+  local okControl, control = pcall(require, "atm10-control")
+  if okControl and control and control.activeCraftCount then
+    local count, method = control.activeCraftCount(bridge, probeNames)
+    out("activeCraftCount(probeNames=" .. #probeNames .. ") -> " .. tostring(count) .. " via " .. tostring(method))
+  else
+    out("activeCraftCount -> unavailable (atm10-control missing)")
   end
 end
 

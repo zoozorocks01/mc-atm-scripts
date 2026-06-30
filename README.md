@@ -165,7 +165,10 @@ setup task (Crafters + Patterns), not a script error.
 To see exactly what your RS Bridge exposes (method names, the item-table shape,
 how many items it reports craftable), run the read-only diagnostic on the manager
 computer: `atm10-bridge-probe`. It never crafts or moves anything — it just prints
-the bridge's API and saves it to `.atm10-bridge-probe.txt` for sharing.
+the bridge's API and saves it to `.atm10-bridge-probe.txt` for sharing. For craft
+task progress, run it once while idle and once while RS is actively crafting; the
+second report captures the live `getCraftingTasks` / `isItemCrafting` shapes that
+the Queue ETA work needs.
 
 ### Setting quotas from the console (tap-to-manage)
 

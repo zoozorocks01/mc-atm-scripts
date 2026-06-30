@@ -22,6 +22,20 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-06-30 (CRAFT-1 bridge probe hardening local)
+
+CRAFT-1 probe hardening is ready for live use. `atm10-bridge-probe` now records
+bounded raw samples for task-list methods, retries `getCraftingTask` with sampled
+task IDs/names when available, probes `isItemCrafting` / `isCrafting` with table,
+table+count, and string argument forms, and includes queued item names from the
+manager queue as extra probe candidates. A new off-CC smoke runs the bridge probe
+against a fake RS Bridge and verifies the report is written.
+
+- **Gate:** 798 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PROBE OK;
+  SMOKE-REQUEST OK; SMOKE-REMOTE OK; SMOKE-BRIDGE-PROBE OK; git diff --check clean.
+- **in-game-verify: pending** — run `atm10-bridge-probe` once idle and once while
+  RS is actively crafting, then inspect/share `.atm10-bridge-probe.txt`.
+
 ## Session log — 2026-06-30 (Viewer filter/detail shipped)
 
 Read-only viewer filter/detail shipped. The inventory viewer now has keyboard-free
