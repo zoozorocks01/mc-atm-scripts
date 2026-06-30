@@ -28,7 +28,7 @@ After that, future updates are just:
 
 ```lua
 update
-reboot
+safereboot
 ```
 
 ## Shared Baseline
@@ -75,8 +75,8 @@ To change the theme on a computer, edit its `atm10-theme` file:
 edit atm10-theme
 ```
 
-Put one theme name (`controlRoom`, `amber`, or `green`) on a line and reboot.
-The updater installs `atm10-theme` only if it is missing, so your choice
+Put one theme name (`controlRoom`, `amber`, or `green`) on a line and run
+`safereboot`. The updater installs `atm10-theme` only if it is missing, so your choice
 survives future updates; an unknown or missing value falls back to the default.
 
 ## Power Dashboard
@@ -96,7 +96,7 @@ empty/full, status, and history graphs.
 ```lua
 wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/atm10-update.lua update
 update power-display
-reboot
+safereboot
 ```
 
 ### Install on power computer
@@ -104,7 +104,7 @@ reboot
 ```lua
 wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/atm10-update.lua update
 update power-probe
-reboot
+safereboot
 ```
 
 ## Notes
@@ -345,7 +345,7 @@ modem network/band as the inventory source computer.
 ```lua
 wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/atm10-update.lua update
 update inventory-remote
-reboot
+safereboot
 ```
 
 Pick which screen a viewer shows with the one-line `atm10-display` file

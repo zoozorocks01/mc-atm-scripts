@@ -9,7 +9,7 @@ ComputerCraft/CC:Tweaked scripts for an ATM10 base:
   manager (different role / computer).
 - **Power dashboard** — a Mekanism induction-matrix monitor.
 
-One updater installs each computer; after that it's `update` + `reboot`.
+One updater installs each computer; after that it's `update` + `safereboot`.
 
 ## What this system can and cannot control
 
@@ -90,14 +90,14 @@ Then the role for that computer:
 
 | Role | Command |
 | --- | --- |
-| Inventory manager | `update inventory-source` then `reboot` |
-| Inventory remote | `update inventory-remote` then `reboot` |
-| Power display | `update power-display` then `reboot` |
-| Power probe | `update power-probe` then `reboot` |
+| Inventory manager | `update inventory-source` then `safereboot` |
+| Inventory remote | `update inventory-remote` then `safereboot` |
+| Power display | `update power-display` then `safereboot` |
+| Power probe | `update power-probe` then `safereboot` |
 
 The role is saved in `.atm10-role`. Future updates on any computer are just
-`update` then `reboot`. `inventory-config` is only installed if missing, so your
-edits survive updates.
+`update` then `safereboot`. `inventory-config` is only installed if missing, so
+your edits survive updates.
 
 ## The console (touchscreen tabs)
 
@@ -242,7 +242,8 @@ These are the read-only **inventory viewers** — a different role/computer from
 manager. They have no RS Bridge and no controls; they wait for the manager's
 `atm10-inventory-v1` broadcasts and
 draw the latest snapshot. If one waits forever: confirm the manager is running with
-a modem, both modems share a band/network, the remote has a monitor, and reboot it.
+a modem, both modems share a band/network, the remote has a monitor, and run
+`safereboot`.
 
 ### Display profiles (pick what each viewer shows)
 
@@ -258,17 +259,17 @@ Each viewer renders one of three screens, set per computer in a one-line
 edit atm10-display
 ```
 
-Put one profile name on a line (`view`, `autocraft`, or `alerts`) and reboot;
-an unknown/missing value falls back to `view`. So one manager can feed a storage
-viewer, a crafting-status board, and an alerts board — each its own computer +
-monitor.
+Put one profile name on a line (`view`, `autocraft`, or `alerts`) and run
+`safereboot`; an unknown/missing value falls back to `view`. So one manager can
+feed a storage viewer, a crafting-status board, and an alerts board — each its
+own computer + monitor.
 
 ## Troubleshooting
 
 - **`No such program`** — install the updater and run the role's `update`, then
-  `reboot`.
-- **Blank monitor** — `reboot`; if needed `update` then `reboot`; confirm the
-  monitor/bridge chunks are loaded and the monitor is advanced.
+  `safereboot`.
+- **Blank monitor** — run `startup`; if needed `update` then `safereboot`;
+  confirm the monitor/bridge chunks are loaded and the monitor is advanced.
 - **Can't find RS Bridge** — confirm it's connected to the computer/network and
   typed `rs_bridge`/`rsBridge` (peripheral listing command above).
 - **Everything reads `NOT CRAFTABLE` / `craftable_rows=0`** — RS has no patterns;
@@ -282,8 +283,8 @@ monitor.
 
 ```lua
 startup          -- rerun this computer's role
-update; reboot   -- force a fresh update
-update <role>; reboot   -- change role (inventory-source/-remote/power-*)
+update; safereboot   -- force a fresh update
+update <role>; safereboot   -- change role (inventory-source/-remote/power-*)
 ```
 
 ## Development
