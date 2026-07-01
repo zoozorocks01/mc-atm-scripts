@@ -561,5 +561,66 @@ do
     "Queue row surfaces live active-task progress")
 end
 
+-- ---- queue safety: empty task list still verifies locally CRAFTING rows -------
+-- The broad planner may trust an empty getCraftingTasks() snapshot for speed, but
+-- queue/drain safety must be more conservative: if a row is already CRAFTING and
+-- the per-item method says it is still active, an empty task list must not stale it.
+do
+  screen = {}
+  files = { [".atm10-craft-queue"] = "LYING_EMPTY_TASKS" }
+  clock = 100000
+  _G.textutils = {
+    serialize = function() return "{}" end,
+    unserialize = function(text)
+      if text == "LYING_EMPTY_TASKS" then
+        return { entries = {
+          live = {
+            key = "live",
+            name = "alltheores:zinc_block",
+            label = "Zinc Block",
+            request = 64,
+            state = "CRAFTING",
+            approvedAt = 1,
+            craftingAt = 1,
+          },
+        } }
+      end
+      return {}
+    end,
+  }
+  local queueWrites = 0
+  local realOpen = _G.fs.open
+  _G.fs.open = function(p, mode)
+    if mode == "w" and tostring(p):find(".atm10-craft-queue", 1, true) then
+      queueWrites = queueWrites + 1
+    end
+    return realOpen(p, mode)
+  end
+  ei = 0
+  events = {
+    { "timer", 1 },
+    { "monitor_touch", "r", 10, 2 }, -- QUEUE tab
+  }
+  _G.os.pullEvent = scriptPull
+  _G.rednet = { open = function() end, broadcast = function() end }
+  BR = fakeBridge()
+  local perItemChecks = 0
+  BR.getCraftingTasks = function() return {} end
+  BR.isItemCrafting = nil
+  BR.isCrafting = function(arg)
+    perItemChecks = perItemChecks + 1
+    return type(arg) == "table" and arg.name == "alltheores:zinc_block"
+  end
+
+  local ok11, err11 = pcall(function() dofile("inventory/manager.lua") end)
+  _G.fs.open = realOpen
+  check(ok11 == false and tostring(err11):find(SENTINEL, 1, true) ~= nil,
+    "empty-task queue-safety run still hit the sentinel (loop survived)")
+  check(perItemChecks > 0,
+    "empty getCraftingTasks snapshot still verifies existing CRAFTING rows per item")
+  check(queueWrites == 0,
+    "per-item active CRAFTING row is not marked stale after an empty task-list snapshot")
+end
+
 print((failures == 0) and "SMOKE OK" or ("SMOKE FAILED (" .. failures .. ")"))
 os.exit(failures == 0 and 0 or 1)

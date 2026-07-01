@@ -752,7 +752,8 @@ local function collectListedItems(items)
   return listed
 end
 
-local function isItemCrafting(registryName)
+local function isItemCrafting(registryName, opts)
+  opts = opts or {}
   local cached = craftingCache[registryName]
   if cached and (nowMs() - cached.at) < TTL.crafting then return cached.v end
 
@@ -767,7 +768,9 @@ local function isItemCrafting(registryName)
     craftingCache[registryName] = { v = true, at = now }
     return true
   end
-  if tasks.method ~= "none" and tasks.method ~= "no-bridge" and (tonumber(tasks.count) or 0) == 0 then
+  if opts.verifyEmpty ~= true
+      and tasks.method ~= "none" and tasks.method ~= "no-bridge"
+      and (tonumber(tasks.count) or 0) == 0 then
     craftingCache[registryName] = { v = false, at = now }
     return false
   end
@@ -1089,7 +1092,7 @@ local function processCraftQueue(now, plans)
     manualReserve = tonumber(stock.manualReserve) or 1,
     -- A1: live source amount for a job's craftFrom reserve (getItems is TTL-cached, cheap)
     resolve = function(name) local it = findStoredItem(getItems(), name); return it and itemAmount(it) or 0 end,
-    isCrafting = function(name) return isItemCrafting(name) end,
+    isCrafting = function(name) return isItemCrafting(name, { verifyEmpty = true }) end,
     craft = function(name, amount) return requestCraft(name, amount) end,
     recordRequest = recordCraftRequest,
   })
@@ -1112,9 +1115,19 @@ local function processCraftQueue(now, plans)
   local amountsByName = {}
   for name, item in pairs(itemsByName or {}) do amountsByName[name] = itemAmount(item) end
   local failedInactive, progressedInactive = 0, 0
+  local activeByName = tasks.byName
+  if tasks.method ~= "none" and tasks.method ~= "no-bridge" and (tonumber(tasks.count) or 0) == 0 then
+    activeByName = {}
+    for _, e in ipairs(cqueue.list(craftQueue)) do
+      if e.state == cqueue.CRAFTING and isItemCrafting(e.name, { verifyEmpty = true }) then
+        activeByName[e.name] = { name = e.name, label = e.label or e.name }
+        if e.key then activeByName[e.key] = activeByName[e.name] end
+      end
+    end
+  end
   if tasks.method ~= "none" and tasks.method ~= "no-bridge" then
     local _
-    _, failedInactive, progressedInactive = cqueue.reconcileInactiveCrafting(craftQueue, tasks.byName,
+    _, failedInactive, progressedInactive = cqueue.reconcileInactiveCrafting(craftQueue, activeByName,
       amountsByName, now, TTL.craftingStale, "no active RS task")
   end
   if progressedInactive > 0 then saveQueue(craftQueue) end
@@ -1139,7 +1152,7 @@ local function processCraftQueue(now, plans)
   -- ledger guard no longer expires mid-flight. Batched into one ledger write.
   local inflight = {}
   for _, e in ipairs(cqueue.list(craftQueue)) do
-    if e.state == cqueue.CRAFTING and isItemCrafting(e.name) then inflight[#inflight + 1] = e end
+    if e.state == cqueue.CRAFTING and isItemCrafting(e.name, { verifyEmpty = true }) then inflight[#inflight + 1] = e end
   end
   if #inflight > 0 then
     local ledger = readLedger() or { requests = {} }
