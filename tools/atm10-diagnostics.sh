@@ -6,6 +6,8 @@ SERVER_DIR="${ATM10_SERVER_DIR:-/Users/zacharynielsen/LocalServers/ATM10-server-
 COMPUTER_DIR="${ATM10_COMPUTER_DIR:-$SERVER_DIR/Chem E boys Server - 7.0 test/computercraft/computer/6}"
 SCREEN_SESSION="${ATM10_SCREEN_SESSION:-atm10-intel-main-25566}"
 CC_RESTART_DRAIN_MS="${ATM10_CC_RESTART_DRAIN_MS:-120000}"
+CC_RESTART_MAX_STALE_MS="${ATM10_CC_RESTART_MAX_STALE_MS:-90000}"
+CC_RESTART_ALLOW_STALE="${ATM10_CC_RESTART_ALLOW_STALE:-false}"
 INTERVAL="${ATM10_DIAG_INTERVAL:-5}"
 OUT_DIR="${ATM10_DIAG_OUT_DIR:-/tmp/atm10-diagnostics}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1)
@@ -32,6 +34,8 @@ Environment overrides:
   ATM10_COMPUTER_DIR      ComputerCraft computer directory on the host
   ATM10_SCREEN_SESSION    screen session name for the running server console
   ATM10_CC_RESTART_DRAIN_MS  recent-craft drain window before cc-restart (default: 120000)
+  ATM10_CC_RESTART_MAX_STALE_MS  max trusted heartbeat/craftstate age (default: 90000)
+  ATM10_CC_RESTART_ALLOW_STALE=true  bypass freshness refusal for explicit emergency use
   ATM10_DIAG_INTERVAL     watch interval seconds (default: 5)
   ATM10_DIAG_OUT_DIR      save/watch-log output dir (default: /tmp/atm10-diagnostics)
   ATM10_SSH_OPTS          extra ssh options (default: batch mode, 8s connect timeout)
@@ -169,9 +173,11 @@ screen_stuff() {
 }
 
 cc_restart_safety() {
-  local drain
+  local drain max_stale allow_stale
   drain="$(quote_remote "$CC_RESTART_DRAIN_MS")"
-  run_remote "DRAIN_MS=$drain"'
+  max_stale="$(quote_remote "$CC_RESTART_MAX_STALE_MS")"
+  allow_stale="$(quote_remote "$CC_RESTART_ALLOW_STALE")"
+  run_remote "DRAIN_MS=$drain MAX_STALE_MS=$max_stale ALLOW_STALE=$allow_stale"'
 field_from() {
   file="$1"
   key="$2"
@@ -182,16 +188,40 @@ as_int() {
   v="${1:-0}"
   case "$v" in ""|*[!0-9-]*) echo 0 ;; *) echo "$v" ;; esac
 }
+fresh_or_refuse() {
+  label="$1"
+  value="$2"
+  if [ -z "$value" ]; then
+    reasons="$reasons missing${label}"
+    return
+  fi
+  value="$(as_int "$value")"
+  age=$((now_ms - value))
+  if [ "$age" -lt 0 ]; then age=0; fi
+  if [ "$age" -gt "$MAX_STALE_MS" ]; then
+    reasons="$reasons ${label}AgeMs=$age"
+  fi
+}
 if [ ! -f .atm10-craftstate ]; then
   echo "cc-restart safety: REFUSE missing .atm10-craftstate"
+  exit 10
+fi
+if [ ! -f .atm10-heartbeat ]; then
+  echo "cc-restart safety: REFUSE missing .atm10-heartbeat"
   exit 10
 fi
 active="$(as_int "$(field_from .atm10-craftstate activeCraftCount)")"
 queue_crafting="$(as_int "$(field_from .atm10-craftstate queueCrafting)")"
 crafting="$(as_int "$(field_from .atm10-craftstate crafting)")"
 last_craft="$(field_from .atm10-craftstate lastCraftAt)"
+craftstate_at="$(field_from .atm10-craftstate at)"
+heartbeat_at="$(grep -Eo -- "-?[0-9]+" .atm10-heartbeat 2>/dev/null | head -1 || true)"
 now_ms=$(($(date +%s) * 1000))
 reasons=""
+if [ "$ALLOW_STALE" != "true" ]; then
+  fresh_or_refuse heartbeat "$heartbeat_at"
+  fresh_or_refuse craftstate "$craftstate_at"
+fi
 if [ "$active" -gt 0 ]; then reasons="$reasons activeCraftCount=$active"; fi
 if [ "$queue_crafting" -gt 0 ]; then reasons="$reasons queueCrafting=$queue_crafting"; fi
 if [ "$crafting" -gt 0 ]; then reasons="$reasons crafting=$crafting"; fi
