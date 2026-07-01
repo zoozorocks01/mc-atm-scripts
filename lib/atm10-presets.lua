@@ -241,4 +241,29 @@ function presets.apply(store, id, now)
   return store, count
 end
 
+-- Backfill only route metadata from a preset onto existing managed rows. This is
+-- for stores created before craftMode/blockReason existed: keep user-tuned
+-- quotas intact, but let the planner explain machine/watch rows correctly.
+function presets.backfillMetadata(store, id)
+  store = managed.normalize(store)
+  local p = presets.get(id)
+  if not p then return store, 0 end
+
+  local count = 0
+  for _, item in ipairs(p.items) do
+    local current = item.name and managed.get(store, item.name) or nil
+    if current and (item.craftMode ~= nil or item.blockReason ~= nil) then
+      local update = { name = item.name }
+      if current.craftMode == nil and item.craftMode ~= nil then update.craftMode = item.craftMode end
+      if current.blockReason == nil and item.blockReason ~= nil then update.blockReason = item.blockReason end
+      if update.craftMode ~= nil or update.blockReason ~= nil then
+        managed.set(store, update)
+        count = count + 1
+      end
+    end
+  end
+
+  return store, count
+end
+
 return presets

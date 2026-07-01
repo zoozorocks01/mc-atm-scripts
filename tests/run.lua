@@ -1922,6 +1922,31 @@ t.check(zincDust ~= nil and zincDust.ceiling ~= nil, "applying the profile sets 
 t.eq(zincDust.into.name, "alltheores:zinc_ingot", "compress chain flows through apply into the store")
 t.check(#managed.overflowItems(zstore) >= 1, "profile produces overflow-managed items")
 
+-- metadata backfill updates old managed stores without clobbering tuned quotas
+do
+  local old = managed.new()
+  managed.set(old, {
+    name = "modern_industrialization:advanced_motor",
+    label = "Advanced Motor",
+    target = 777,
+    craftTo = 888,
+  }, 1)
+  local _, filled = presets.backfillMetadata(old, "zoozo-late-game")
+  local motor = managed.get(old, "modern_industrialization:advanced_motor")
+  t.eq(filled, 1, "metadata backfill updates matching old rows")
+  t.eq(motor.target, 777, "metadata backfill preserves target")
+  t.eq(motor.craftTo, 888, "metadata backfill preserves craftTo")
+  t.eq(motor.craftMode, "watch", "metadata backfill adds craftMode")
+  t.eq(motor.blockReason, "machine/assembler route; do not RS autocraft",
+    "metadata backfill adds blockReason")
+  local _, filledAgain = presets.backfillMetadata(old, "zoozo-late-game")
+  t.eq(filledAgain, 0, "metadata backfill is idempotent")
+  local countBefore = managed.count(old)
+  local _, missingFill = presets.backfillMetadata(old, "missing")
+  t.eq(missingFill, 0, "metadata backfill unknown preset writes nothing")
+  t.eq(managed.count(old), countBefore, "metadata backfill unknown preset leaves store unchanged")
+end
+
 -- ---------------------------------------------------------------------------
 print("console hit-testing")
 local strip = console.tabs({ "PLAN", "QUEUE" }, 2)
