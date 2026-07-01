@@ -35,7 +35,7 @@ Environment overrides:
   ATM10_SCREEN_SESSION    screen session name for the running server console
   ATM10_CC_RESTART_DRAIN_MS  recent-craft drain window before cc-restart (default: 120000)
   ATM10_CC_RESTART_MAX_STALE_MS  max trusted heartbeat/craftstate age (default: 90000)
-  ATM10_CC_RESTART_ALLOW_STALE=true  bypass freshness refusal for explicit emergency use
+  ATM10_CC_RESTART_ALLOW_STALE=true  emergency only: bypass stale refusal after independently confirming no crafts
   ATM10_DIAG_INTERVAL     watch interval seconds (default: 5)
   ATM10_DIAG_OUT_DIR      save/watch-log output dir (default: /tmp/atm10-diagnostics)
   ATM10_SSH_OPTS          extra ssh options (default: batch mode, 8s connect timeout)
