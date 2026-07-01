@@ -70,7 +70,14 @@ local function gatherItems()
     for _, cat in ipairs(cfg.stockKeeper.categories or {}) do
       for _, it in ipairs(cat.items or {}) do
         if it.name then
-          items[#items + 1] = { name = it.name, label = it.label or it.name, category = cat.label or "Config" }
+          items[#items + 1] = {
+            name = it.name,
+            label = it.label or it.name,
+            category = cat.label or "Config",
+            craftMode = it.craftMode,
+            blockReason = it.blockReason,
+            autocraft = it.autocraft,
+          }
         end
       end
     end
@@ -82,11 +89,34 @@ local function gatherItems()
     local okm, store = pcall(textutils.unserialize, text or "")
     if okm and type(store) == "table" then
       for _, e in ipairs(managed.list(store)) do
-        items[#items + 1] = { name = e.name, label = e.label or e.name, category = "Tapped" }
+        items[#items + 1] = {
+          name = e.name,
+          label = e.label or e.name,
+          category = "Tapped",
+          craftMode = e.craftMode,
+          blockReason = e.blockReason,
+          autocraft = e.autocraft,
+        }
       end
     end
   end
   return items
+end
+
+local function watchOnlyItems(items)
+  local outList, seen = {}, {}
+  for _, it in ipairs(items or {}) do
+    if it and it.name and not seen[it.name] and managed.isWatchOnly and managed.isWatchOnly(it) then
+      seen[it.name] = true
+      outList[#outList + 1] = it
+    end
+  end
+  table.sort(outList, function(a, b)
+    local ac, bc = tostring(a.category or ""), tostring(b.category or "")
+    if ac ~= bc then return ac < bc end
+    return tostring(a.label or a.name):lower() < tostring(b.label or b.name):lower()
+  end)
+  return outList
 end
 
 local function save()
@@ -118,7 +148,11 @@ end
 local set, have = craftableInfo(bridge)
 local items = gatherItems()
 local need = managed.patternsNeeded(items, function(name) return set[name] == true end)
+local watchOnly = watchOnlyItems(items)
 out("RS HAS " .. #have .. " patterns. Quotas still needing one: " .. #need .. ".")
+if #watchOnly > 0 then
+  out("Watch/manual targets excluded from RS pattern worklist: " .. #watchOnly .. ".")
+end
 out("")
 
 out("-- PATTERNS RS HAS (" .. #have .. ") --")
@@ -137,6 +171,18 @@ for _, it in ipairs(need) do
     local bucket, hint = pgive.bucketForItem(it.name)
     bucketIdLines[bucket][#bucketIdLines[bucket] + 1] = it.name
     if hint and hint.text then out("    hint: " .. hint.text) end
+  end
+end
+
+if #watchOnly > 0 then
+  out("")
+  out("== WATCH / MACHINE ROUTES (" .. #watchOnly .. ", not RS pattern targets) ==")
+  local watchCat = nil
+  for _, it in ipairs(watchOnly) do
+    if it.category ~= watchCat then watchCat = it.category; out("-- " .. tostring(watchCat)) end
+    local reason = it.blockReason or "watch-only target; no RS craft request"
+    out("  " .. tostring(it.label or it.name) .. "   (" .. it.name .. ")")
+    out("    route: " .. tostring(reason))
   end
 end
 

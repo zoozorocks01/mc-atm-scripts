@@ -185,6 +185,12 @@ function managed.toCategory(store, label)
   return { label = label or "Tapped", items = categoryItems }
 end
 
+function managed.isWatchOnly(entry)
+  entry = entry or {}
+  local mode = tostring(entry.craftMode or ""):lower()
+  return mode == "watch" or mode == "manual" or mode == "machine" or entry.autocraft == false
+end
+
 -- CRAFT-4: from a combined quota list (config categories + the tapped store), which
 -- items RS cannot craft yet -- i.e. patterns you still need to build. Pure:
 --   items       = { { name, label, category } ... }
@@ -197,7 +203,7 @@ function managed.patternsNeeded(items, isCraftable)
   for _, it in ipairs(items or {}) do
     -- dedup by registry name; FIRST occurrence wins, so callers that list config
     -- categories before the tapped store keep the categorized (overflow-aware) entry.
-    if it and it.name and not seen[it.name] and not isCraftable(it.name) then
+    if it and it.name and not seen[it.name] and not managed.isWatchOnly(it) and not isCraftable(it.name) then
       seen[it.name] = true
       out[#out + 1] = { name = it.name, label = it.label or it.name, category = it.category or "Uncategorized" }
     end

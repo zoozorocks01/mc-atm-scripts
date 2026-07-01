@@ -1307,6 +1307,16 @@ do
   t.eq(need[1].category, "Base", "sorted by category first (Base before Mekanism)")
   t.eq(need[1].label, "Steel", "Base/Steel listed (glass is craftable, excluded)")
   t.eq(need[2].name, "mekanism:alloy_infused", "Mekanism item sorts last")
+  pItems[#pItems + 1] = {
+    name = "modern_industrialization:motor",
+    label = "Motor",
+    category = "Modern Industrialization",
+    craftMode = "watch",
+    blockReason = "MI assembler route; do not RS autocraft",
+  }
+  need = managed.patternsNeeded(pItems, function(n) return craftable[n] == true end)
+  t.eq(#need, 2, "patternsNeeded excludes watch-only/manual-route quotas")
+  t.check(managed.isWatchOnly(pItems[#pItems]) == true, "isWatchOnly detects craftMode watch")
   t.eq(#managed.patternsNeeded(pItems, function() return true end), 0, "all craftable -> empty worklist")
   t.eq(#managed.patternsNeeded(nil, nil), 0, "nil-safe")
   -- dedup: same item from config + tapped appears once, keeping the FIRST (config) entry
