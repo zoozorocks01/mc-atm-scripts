@@ -436,6 +436,16 @@ local ncP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100 } }),
   resolve = function() return 0, false, false end })
 t.eq(ncP[1].action, "NOT CRAFTABLE", "no recipe -> NOT CRAFTABLE")
 
+-- below target, watch/manual route -> explicit BLOCKED reason, never a craft request
+do
+  local watchP = stockplan.plan({ stockKeeper = SK({
+      { name = "mi:plate", label = "MI Plate", target = 100, craftTo = 200,
+        craftMode = "watch", blockReason = "MI assembler route; do not RS autocraft" },
+    }), ledger = emptyLedger, resolve = function() return 0, true, false end })
+  t.eq(watchP[1].action, "BLOCKED", "watch-only target -> BLOCKED")
+  t.eq(watchP[1].reason, "MI assembler route; do not RS autocraft", "watch-only target explains the route")
+end
+
 -- below target, craftable, already crafting -> ALREADY CRAFTING
 local acP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100 } }), ledger = emptyLedger,
   resolve = function() return 0, true, true end })
@@ -1269,6 +1279,20 @@ local merged = stockplan.plan({ stockKeeper = { enabled = true, categories = { c
   ledger = { requests = {} }, resolve = function() return 0, true, false end })
 t.check(#merged >= 1, "managed quotas produce plan rows")
 t.eq(merged[1].action, "WOULD CRAFT", "a below-target managed quota plans a craft")
+
+-- managed store preserves watch-only route metadata for presets/tapped entries.
+do
+  local wm = managed.new()
+  managed.set(wm, { name = "mi:plate", label = "MI Plate", target = 10, craftTo = 20,
+    craftMode = "watch", blockReason = "MI assembler route; do not RS autocraft" }, 123)
+  local wcat = managed.toCategory(wm)
+  t.eq(wcat.items[1].craftMode, "watch", "managed.toCategory preserves craftMode")
+  t.eq(wcat.items[1].blockReason, "MI assembler route; do not RS autocraft", "managed.toCategory preserves blockReason")
+  local wplan = stockplan.plan({ stockKeeper = { enabled = true, categories = { wcat } },
+    ledger = { requests = {} }, resolve = function() return 0, true, false end })
+  t.eq(wplan[1].action, "BLOCKED", "managed watch-only quota blocks instead of crafting")
+  t.eq(wplan[1].reason, "MI assembler route; do not RS autocraft", "managed watch-only row carries reason")
+end
 
 -- patternsNeeded (CRAFT-4): non-craftable quotas, grouped/sorted into a worklist
 do

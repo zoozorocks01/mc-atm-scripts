@@ -679,7 +679,12 @@ local function planDelta(plan)
   end
 
   if plan.action == "BLOCKED" and plan.reason then
-    return "band!"
+    local reason = tostring(plan.reason):lower()
+    if string.find(reason, "compression pair", 1, true) then return "pair!" end
+    if string.find(reason, "machine", 1, true) or string.find(reason, "assembler", 1, true) then return "machine" end
+    if string.find(reason, "ceiling", 1, true) or string.find(reason, "craftto", 1, true) then return "band!" end
+    if string.find(reason, "reserve", 1, true) then return "reserve" end
+    return "block!"
   end
 
   return "-"

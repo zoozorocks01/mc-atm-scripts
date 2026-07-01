@@ -219,14 +219,26 @@ Key fields:
 - `allowAutocraft` — `true`/`false`; master craft capability (default `true`).
 - `listedItems` — display-only watched items.
 - `lowStock` — warning-only thresholds (never craft).
-- `stockKeeper.enabled`, `cooldownSeconds`, `maxCraftsPerCycle`, `maxRequest`,
-  `categories[].items[] = { name, label, target, craftTo, maxRequest }`.
+- `stockKeeper.enabled`, `cooldownSeconds`, `maxCraftsPerCycle`,
+  `maxBridgeRequest`, `maxRequest`, `overflowReserve`, `manualReserve`,
+  `categories[].items[] = { name, label, target, craftTo, maxRequest, craftFrom,
+  ceiling, into, ratio, craftMode, blockReason }`.
 
 Machine-written state files (do not hand-edit): `.atm10-managed` (console quotas +
-settings), `.atm10-craft-queue`, `.atm10-stock-ledger`.
+settings), `.atm10-craft-queue`, `.atm10-craft-results`, `.atm10-craftstate`,
+`.atm10-stock-ledger`, `.atm10-planstate`.
 
-At large quotas, raise `maxRequest` (per-craft cap) and lower `cooldownSeconds` so
-the planner refills faster — the real bottleneck is your RS crafting throughput.
+At large quotas, keep the conservative throttle defaults until the read-only
+`tools/atm10-diagnostics.sh doctor` check is clean and live queue/craft evidence
+stays stable while a backlog drains. `maxRequest` can describe a large desired
+deficit, but `maxBridgeRequest` still bounds each RS Bridge call (default `32`) and
+`maxCraftsPerCycle` bounds how many new calls start per cycle (default `2`).
+
+Use `craftMode = "watch"` on a stock-keeper item when the buffer should be
+tracked but RS should not craft it. This is the right default for Modern
+Industrialization assembler/machine outputs and any recipe where a dedicated
+machine route is better than an RS crafting pattern. Add `blockReason` so the
+PLAN page and `.atm10-planstate` explain the route.
 
 ## Power dashboard
 

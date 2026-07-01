@@ -293,15 +293,21 @@ stockKeeper = {
 }
 ```
 
-`target` is the low line. `craftTo` is the planned refill line. When `craftTo`
-is not above `target`, the refill-margin defaults above create an effective batch
-above the floor without rewriting the quota. `maxRequest` caps a single planned
-craft request (default `65536`) and `maxCraftsPerCycle` caps how many new craft
-requests fire per cycle (default `8`); under that cap, the most-deficient approved
-quotas fire first. Existing installs keep their `inventory-config` on update, so
-`edit inventory-config` to adopt new defaults. `inventory-config-example` contains
-a larger Mekanism, Modern Industrialization, Mystical Agriculture, and RS starter
-list to copy from.
+`target` is the low line. `craftTo` is the planned refill line. Refill uses the
+exact configured numbers: `craftTo == target` maintains that floor, while
+`craftTo > target` creates a min-to-max buffer. `maxRequest` caps one planned row,
+`maxBridgeRequest` caps each RS Bridge `craftItem` call (default `32`), and
+`maxCraftsPerCycle` caps how many new bridge calls fire per cycle (default `2`);
+under that cap, the most-deficient approved quotas fire first. Existing installs
+keep their `inventory-config` on update, so `edit inventory-config` to adopt new
+defaults. `inventory-config-example` contains a larger Mekanism, Modern
+Industrialization, Mystical Agriculture, and RS starter list to copy from.
+
+For items that should be tracked but **not** RS-crafted, set
+`craftMode = "watch"` and a `blockReason`. Use this for Modern Industrialization
+assembler/machine outputs, or for any item where a non-RS machine route is the
+right recipe. The PLAN page keeps the buffer visible but blocks craft requests
+with that reason instead of showing a generic missing-pattern row.
 
 ### Server TPS / performance
 
@@ -319,10 +325,11 @@ bridge (remote viewers are push-driven — they read broadcasts, never call it).
 - **`refreshSeconds`** (config, default 5, floored at 2) — a tuning knob, *not* a
   TPS fix. Raise it only if you ever profile the bridge as an actual cost on a very
   large network; otherwise leave it. Touch input stays responsive regardless.
-- **`maxCraftsPerCycle` / `maxRequest`** — in `auto` each cycle can kick off up to
-  `maxCraftsPerCycle` RS craft-tree calculations of up to `maxRequest` each (real
-  RS work). If a healthy server dips only while auto grinds a big backlog, lower
-  these (e.g. `3` / `16384`).
+- **Craft throttle knobs** — in `auto`, `maxCraftsPerCycle` controls how many new
+  bridge calls can start per cycle, `maxBridgeRequest` controls each bridge-call
+  size, and `maxRequest` caps one planned row's requested deficit. Start with the
+  conservative defaults (`2` / `32`) and raise them only after `doctor`, heartbeat,
+  queue state, and RS evidence stay clean while the backlog drains.
 
 ### Avoiding the AdvancedPeripherals craft-job crash
 

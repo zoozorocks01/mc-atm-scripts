@@ -93,6 +93,10 @@ do
   local items = {}
   local function add(x) items[#items + 1] = x end
   local function buf(name, label, target) add({ name = name, label = label, target = target, craftTo = target }) end
+  local function watch(name, label, target, reason)
+    add({ name = name, label = label, target = target, craftTo = target,
+      craftMode = "watch", blockReason = reason or "machine/assembler route; do not RS autocraft" })
+  end
   -- METAL DUST TIERS (operator's late-game ore-balancer, 2026-06-27). DORMANT until
   -- the autocrafter + dust->ingot PROCESSING patterns exist (rows read NOT CRAFTABLE,
   -- fail-inert, until then). Strip these dusts from the smelter exporter filters so the
@@ -147,10 +151,14 @@ do
   buf("alltheores:invar_ingot", "Invar", 35000)
   buf("alltheores:electrum_ingot", "Electrum", 35000)
   buf("alltheores:enderium_ingot", "Enderium", 10000)
-  buf("modern_industrialization:stainless_steel_ingot", "Stainless Steel", 10000)
-  buf("modern_industrialization:battery_alloy_ingot", "Battery Alloy", 35000)
-  buf("modern_industrialization:cupronickel_ingot", "Cupronickel", 35000)
-  buf("modern_industrialization:kanthal_ingot", "Kanthal", 35000)
+  watch("modern_industrialization:stainless_steel_ingot", "Stainless Steel", 10000,
+    "MI/alloy machine route; do not RS autocraft")
+  watch("modern_industrialization:battery_alloy_ingot", "Battery Alloy", 35000,
+    "MI/alloy machine route; do not RS autocraft")
+  watch("modern_industrialization:cupronickel_ingot", "Cupronickel", 35000,
+    "MI/alloy machine route; do not RS autocraft")
+  watch("modern_industrialization:kanthal_ingot", "Kanthal", 35000,
+    "MI/alloy machine route; do not RS autocraft")
   buf("enderio:conductive_alloy_ingot", "Conductive Alloy", 35000)
   buf("enderio:redstone_alloy_ingot", "Redstone Alloy", 35000)
   buf("enderio:pulsating_alloy_ingot", "Pulsating Alloy", 35000)
@@ -160,15 +168,15 @@ do
   -- Modern Industrialization components + metals. ~5k late-game baseline (the two
   -- highest-volume ones a bit higher). MI multiblock recipes generally are NOT
   -- RS-autocraftable, so these are buffers/targets, not autocraft.
-  buf("modern_industrialization:rubber_sheet", "Rubber Sheet", 10000)
-  buf("modern_industrialization:motor", "Motor", 10000)
-  buf("modern_industrialization:advanced_motor", "Advanced Motor", 5000)
-  buf("modern_industrialization:analog_circuit", "Analog Circuit", 5000)
-  buf("modern_industrialization:electronic_circuit", "Electronic Circuit", 5000)
-  buf("modern_industrialization:digital_circuit", "Digital Circuit", 5000)
-  buf("modern_industrialization:antimony_ingot", "Antimony", 5000)
-  buf("modern_industrialization:tungsten_ingot", "Tungsten", 5000)
-  buf("modern_industrialization:titanium_ingot", "Titanium", 5000)
+  watch("modern_industrialization:rubber_sheet", "Rubber Sheet", 10000)
+  watch("modern_industrialization:motor", "Motor", 10000)
+  watch("modern_industrialization:advanced_motor", "Advanced Motor", 5000)
+  watch("modern_industrialization:analog_circuit", "Analog Circuit", 5000)
+  watch("modern_industrialization:electronic_circuit", "Electronic Circuit", 5000)
+  watch("modern_industrialization:digital_circuit", "Digital Circuit", 5000)
+  watch("modern_industrialization:antimony_ingot", "Antimony", 5000)
+  watch("modern_industrialization:tungsten_ingot", "Tungsten", 5000)
+  watch("modern_industrialization:titanium_ingot", "Titanium", 5000)
 
   -- Mekanism alloys + casing (~5k baseline).
   buf("mekanism:alloy_infused", "Infused Alloy", 5000)

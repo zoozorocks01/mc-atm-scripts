@@ -4,32 +4,35 @@ The complete classification of resources: **automated** (on the autocrafter) or
 **manual** (left off by design), with the specific registry id(s) and the reason,
 grouped by category, plus dependencies and rollout order.
 
-> ⚠️ **DEPLOYED ≠ DOCUMENTED — read this first (round-2 recon, 2026-06-26).**
+> ⚠️ **DEPLOYED != DOCUMENTED — read this first (round-2 recon, 2026-06-26;
+> throttle spot-check updated 2026-07-01).**
 > This doc describes the **INTENDED late-game end-state** (the banded balancer). It
 > is **NOT what is running on computer 6 today.** The deployed `inventory-config.lua`
 > (computer 6's real file) is a **small hand-written set**: ~13 quota items across
-> Base / Mekanism / MystAgri / MI, `mode = "manual"`, `stockKeeper` on,
-> `cooldownSeconds = 300`, `maxCraftsPerCycle = 8`, `overflowReserve = 0`,
-> `maxRequest = 65536`. It has **NO compress chains, NO 264k dust bands, NO
-> ceiling/into/ratio overflow rules, and no metals beyond iron/gold/quartz/redstone.**
+> Base / Mekanism / MystAgri / MI. A 2026-07-01 read-only spot check found
+> `mode = "dry-run"`, `stockKeeper` on, `cooldownSeconds = 300`,
+> `maxCraftsPerCycle = 2`, and `maxRequest = 4096`; no explicit
+> `maxBridgeRequest` is present, so the code default of `32` applies. It has **NO
+> compress chains, NO 264k dust bands, NO ceiling/into/ratio overflow rules, and no
+> metals beyond iron/gold/quartz/redstone.**
 > The banded balancer below lives ONLY in the **`zoozo-late-game` preset**
 > (`lib/atm10-presets.lua`), which must be **explicitly applied from the console**
 > (applying it also flips `smartMode` on). It has **not** been applied. So: late-game
 > banding is **DESIGNED + preset-ready but NOT deployed**. Deploying = apply
 > `zoozo-late-game`. (Round-2 finding #1.)
 
-> ⚠️ **Recon freshness — this pass could NOT read the live base (SSH locked).** The
-> round-2 recon attempted SSH to `zjn-home-two` and **failed: the 1Password ED25519
-> agent was locked** ("communication with agent failed; Permission denied"). Per the
-> hard rules SSH is best-effort, so this pass fell back to **repo files** (which mirror
-> computer 6's deployed scripts) cross-checked against the `base-recon-findings`
-> memory (point-in-time 2026-06-24/25) and the K2 inbox. **Every live-state claim
-> below — `.atm10-managed` quota counts, what's mid-craft, craft-results rows — is
-> from that earlier snapshot, NOT a fresh read.** When 1Password is unlocked, one
-> read-only pass (cat the five `.atm10-*` files under `computercraft/computer/6/` +
-> tail the latest server log) confirms which preset/quotas are actually loaded,
-> current mode, and what's mid-craft. **Items needing the live grid/ledger are flagged
-> `in-game-pending`.**
+> ⚠️ **Recon freshness.** The round-2 recon attempted SSH to `zjn-home-two` and
+> **failed: the 1Password ED25519 agent was locked** ("communication with agent
+> failed; Permission denied"). Per the hard rules SSH is best-effort, so that pass
+> fell back to **repo files** (which mirror computer 6's deployed scripts)
+> cross-checked against the `base-recon-findings` memory (point-in-time
+> 2026-06-24/25) and the K2 inbox. The 2026-07-01 read-only spot check updated only
+> the live config throttle/mode values above. Other live-state claims below —
+> `.atm10-managed` quota counts, what's mid-craft, craft-results rows — are still
+> from the earlier snapshot, NOT a fresh read. A fresh read-only pass (cat the
+> `.atm10-*` files under `computercraft/computer/6/` plus tail the latest server
+> log) should confirm which preset/quotas are actually loaded and what's mid-craft.
+> **Items needing the live grid/ledger are flagged `in-game-pending`.**
 
 > **Three disagreeing quota sources of truth** (round-2 finding #2). Quotas are
 > specified in three places that disagree — name the precedence before editing any:
@@ -224,11 +227,10 @@ Treated as buffers/targets pending machine integration, or left manual.
 | MI metals (antimony/titanium/tungsten ingot) | `modern_industrialization:{antimony,titanium,tungsten}_ingot` | BLOCKED | machine processing; else manual. |
 | Other MI metals (battery_alloy/cupronickel/kanthal/stainless_steel ingot) | `modern_industrialization:{battery_alloy,cupronickel,kanthal,stainless_steel}_ingot` | BLOCKED | alloy/machine processing. |
 
-> **Preset note (cleanup item):** `lib/atm10-presets.lua` ships these MI components +
-> several alloys as `buf()` targets. After CRAFT-3 lands they will correctly read
-> NOT CRAFTABLE / appear on the worklist rather than silently planning. The preset
-> comments should state these are buffers pending machine integration, not
-> autocraftable today (low-priority doc fix, flagged in NEXT_IMPROVEMENTS).
+> **Preset behavior:** `lib/atm10-presets.lua` marks these MI components and
+> MI-route alloys as `craftMode = "watch"` with an explicit machine/assembler
+> reason. They remain visible as buffer targets but the planner blocks RS craft
+> requests for them, so they do not look like generic missing-pattern failures.
 
 ---
 

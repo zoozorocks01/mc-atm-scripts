@@ -57,9 +57,20 @@ local function copyMeta(row, meta)
   row.configuredCraftTo = meta.configuredCraftTo
   row.banded = meta.banded == true
   row.adjusted = meta.adjusted == true
-  row.reason = meta.reason
+  if meta.reason ~= nil then row.reason = meta.reason end
   row.ceiling = meta.ceiling
   return row
+end
+
+local function isWatchOnly(target)
+  target = target or {}
+  local mode = tostring(target.craftMode or ""):lower()
+  return mode == "watch" or mode == "manual" or mode == "machine" or target.autocraft == false
+end
+
+local function watchReason(target)
+  target = target or {}
+  return target.blockReason or target.reason or "watch-only target; no RS craft request"
 end
 
 local function compressionPairSpecs(stock)
@@ -223,7 +234,8 @@ end
 --   resolve     : function(name) -> amount (number), craftable (bool), crafting (bool)
 --
 -- Returns an array of plan rows. Each row has an `action`, one of:
---   OK, NOT CRAFTABLE, ALREADY CRAFTING, ON COOLDOWN, CYCLE CAP, WOULD CRAFT, BLOCKED.
+--   OK, NOT CRAFTABLE, ALREADY CRAFTING, ON COOLDOWN, CYCLE CAP, WOULD CRAFT,
+--   BLOCKED, RESERVED.
 -- Deficit rows carry `priority` (larger = farther below the floor), so the
 -- queue/runner can fire the most-deficient items first under a per-cycle cap.
 function stockplan.plan(ctx)
@@ -273,6 +285,10 @@ function stockplan.plan(ctx)
       elseif craftMeta.blocked then
         plans[#plans + 1] = copyMeta({ action = "BLOCKED", name = target.name, category = categoryLabel,
           label = label, amount = amount, target = trigger, craftTo = craftTo, priority = priority }, craftMeta)
+      elseif isWatchOnly(target) then
+        plans[#plans + 1] = copyMeta({ action = "BLOCKED", name = target.name, category = categoryLabel,
+          label = label, amount = amount, target = trigger, craftTo = craftTo, priority = priority,
+          reason = watchReason(target), craftMode = target.craftMode or "watch" }, craftMeta)
       elseif not craftable then
         plans[#plans + 1] = copyMeta({ action = "NOT CRAFTABLE", name = target.name, category = categoryLabel,
           label = label, amount = amount, target = trigger, craftTo = craftTo, priority = priority }, craftMeta)

@@ -62,8 +62,12 @@ return {
         label = "Modern Industrialization",
         items = {
           -- Replace these IDs with the exact item IDs from JEI if your pack differs.
-          { label = "Steel Plate", name = "modern_industrialization:steel_plate", target = 128, craftTo = 256 },
-          { label = "Copper Wire", name = "modern_industrialization:copper_wire", target = 128, craftTo = 256 },
+          -- Watch-only buffers: many MI recipes need machines/assemblers or have
+          -- better non-RS routes, so the manager must not request RS crafts for them.
+          { label = "Steel Plate", name = "modern_industrialization:steel_plate", target = 128, craftTo = 256,
+            craftMode = "watch", blockReason = "MI machine route; do not RS autocraft" },
+          { label = "Copper Wire", name = "modern_industrialization:copper_wire", target = 128, craftTo = 256,
+            craftMode = "watch", blockReason = "MI machine route; do not RS autocraft" },
         },
       },
     },

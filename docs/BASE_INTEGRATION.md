@@ -14,14 +14,13 @@ dedicated control screen, and eventually one converged control room.
 
 ## 1. Base layout — what's actually on the network
 
-> ⚠️ **Recon freshness (round-2, 2026-06-26): this pass did NOT read the live base.**
-> SSH to `zjn-home-two` failed — the 1Password ED25519 agent was locked
-> ("communication with agent failed; Permission denied"). Per the hard rules SSH is
-> best-effort, so this section is **from repo files + the `base-recon-findings` memory
-> (point-in-time 2026-06-24/25)**, NOT a fresh live read. RS-network figures, mid-craft
-> state, and "control proven" claims are from that earlier snapshot. Re-verify on the
-> next unlocked pass (read-only: the five `.atm10-*` files under
-> `computercraft/computer/6/` + the latest server log tail).
+> ⚠️ **Recon freshness:** round-2 recon on 2026-06-26 could not read the live base
+> because SSH auth was locked, so the broader RS-network figures, mid-craft state,
+> and "control proven" claims below still come from repo files plus the
+> `base-recon-findings` memory (point-in-time 2026-06-24/25). A later read-only spot
+> check on 2026-07-01 did verify the current computer 6 `inventory-config` throttle
+> values listed below. Re-verify the rest with the five `.atm10-*` files under
+> `computercraft/computer/6/` plus the latest server log tail.
 
 Inferred from the 2026-06-24/25 live recon (read-only SSH; computer disks + RS probe)
 and the repo mirror of computer 6's deployed scripts.
@@ -58,15 +57,17 @@ and the repo mirror of computer 6's deployed scripts.
 
 ### Deployed config reality (round-2 finding — the single biggest gap)
 
-- **The deployed `inventory-config.lua` on computer 6 is a small hand-written set, NOT
-  the late-game spec.** ~13 quota items (Base / Mekanism / MystAgri / MI),
-  `mode = "manual"`, `stockKeeper` on, `cooldownSeconds = 300`,
-  `maxCraftsPerCycle = 8`, `overflowReserve = 0`, `maxRequest = 65536`. **NO compress
-  chains, NO 264k dust bands, NO ceiling/into/ratio overflow rules, no metals beyond
-  iron/gold/quartz/redstone.** The banded balancer the docs + `late-game-spec` memory
-  describe is the **`zoozo-late-game` preset** (`lib/atm10-presets.lua`), which must be
-  **explicitly applied on the console** and **has not been**. See `AUTOMATION_PLAN.md`
-  for the deployed-vs-documented and three-source-of-truth detail.
+- **The deployed `inventory-config.lua` on computer 6 is a small hand-written set,
+  NOT the late-game spec.** ~13 quota items (Base / Mekanism / MystAgri / MI). A
+  2026-07-01 read-only spot check found `mode = "dry-run"`, `stockKeeper` on,
+  `cooldownSeconds = 300`, `maxCraftsPerCycle = 2`, and `maxRequest = 4096`; no
+  explicit `maxBridgeRequest` is present, so the code default of `32` applies.
+  There are still **NO compress chains, NO 264k dust bands, NO ceiling/into/ratio
+  overflow rules, and no metals beyond iron/gold/quartz/redstone.** The banded
+  balancer the docs + `late-game-spec` memory describe is the **`zoozo-late-game`
+  preset** (`lib/atm10-presets.lua`), which must be **explicitly applied on the
+  console** and **has not been**. See `AUTOMATION_PLAN.md` for the
+  deployed-vs-documented and three-source-of-truth detail.
 
 ### Crafting state at recon (2026-06-24/25 snapshot — `in-game-pending`)
 

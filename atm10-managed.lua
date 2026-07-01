@@ -55,6 +55,19 @@ function managed.set(store, entry, now)
     item.ratio = math.max(1, math.floor(tonumber(entry.ratio) or prev.ratio or 1))
   end
 
+  local craftMode = entry.craftMode
+  if craftMode == nil then craftMode = prev.craftMode end
+  if craftMode ~= nil then
+    craftMode = tostring(craftMode):lower()
+    if craftMode == "watch" or craftMode == "manual" or craftMode == "machine" then
+      item.craftMode = craftMode
+    end
+  end
+
+  local blockReason = entry.blockReason
+  if blockReason == nil then blockReason = prev.blockReason end
+  if blockReason ~= nil then item.blockReason = tostring(blockReason) end
+
   item.adjusted = nil
   item.invalid = nil
   if item.ceiling and item.ceiling > 0 and item.into and item.into.name then
@@ -165,6 +178,7 @@ function managed.toCategory(store, label)
     categoryItems[#categoryItems + 1] = {
       name = e.name, label = e.label, target = e.target, craftTo = e.craftTo,
       ceiling = e.ceiling, into = e.into, ratio = e.ratio,
+      craftMode = e.craftMode, blockReason = e.blockReason,
       adjusted = e.adjusted, invalid = e.invalid,
     }
   end
