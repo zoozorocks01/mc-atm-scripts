@@ -127,6 +127,7 @@ end
 
 -- bridge: zinc_ingot is a CRAFTABLE deficit (1000 < 5000). craftItem is a SPY.
 local crafted = {}
+local taskListCalls, perItemCraftingCalls = 0, 0
 local function fakeBridge()
   local items = {
     { name = "alltheores:zinc_ingot", amount = 1000, isCraftable = true },
@@ -139,8 +140,9 @@ local function fakeBridge()
     getItem = function() return nil end,
     isCraftable = function() return true end,
     isItemCraftable = function() return true end,
-    isItemCrafting = function() return false end,
-    isCrafting = function() return false end,
+    getCraftingTasks = function() taskListCalls = taskListCalls + 1; return {} end,
+    isItemCrafting = function() perItemCraftingCalls = perItemCraftingCalls + 1; return false end,
+    isCrafting = function() perItemCraftingCalls = perItemCraftingCalls + 1; return false end,
     craftItem = function(arg) crafted[#crafted + 1] = arg; return true end,
     getUsedItemStorage = function() return 1000 end,
     getTotalItemStorage = function() return 100000 end,
@@ -198,6 +200,8 @@ end
 check(hit, "auto mode crafted the deficit item (zinc_ingot) with a positive count")
 check(files[".atm10-craft-audit"] ~= nil,
   "auto mode writes the bounded craft audit file for live diagnostics")
+check(taskListCalls >= 1 and perItemCraftingCalls == 0,
+  "empty getCraftingTasks snapshot skips per-item isCrafting checks during planning")
 
 -- ---- STAB-2: craft-path attachment recheck ---------------------------------
 -- Race the #1 server-crash trigger: the bridge is CONNECTED when scan reads it

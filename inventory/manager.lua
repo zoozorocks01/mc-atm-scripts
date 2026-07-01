@@ -767,6 +767,10 @@ local function isItemCrafting(registryName)
     craftingCache[registryName] = { v = true, at = now }
     return true
   end
+  if tasks.method ~= "none" and tasks.method ~= "no-bridge" and (tonumber(tasks.count) or 0) == 0 then
+    craftingCache[registryName] = { v = false, at = now }
+    return false
+  end
 
   local result = call(bridge, "isItemCrafting", { name = registryName })
   if result == nil then result = call(bridge, "isCrafting", { name = registryName }) end
@@ -1213,6 +1217,11 @@ local function processCraftQueue(now, plans)
     loopLoadPct = craftingCache.__loop and craftingCache.__loop.loadPct,
     dataAgeMs = craftingCache.__loop and craftingCache.__loop.dataAgeMs,
     loopErrors = craftingCache.__loop and craftingCache.__loop.errors,
+    scanProfile = craftingCache.__scanProfile,
+    scanCallMs = craftingCache.__loop and craftingCache.__loop.scanCallMs,
+    craftPhaseMs = craftingCache.__loop and craftingCache.__loop.craftPhaseMs,
+    broadcastMs = craftingCache.__loop and craftingCache.__loop.broadcastMs,
+    renderMs = craftingCache.__loop and craftingCache.__loop.renderMs,
   })
 end
 
@@ -1241,7 +1250,17 @@ local function autoApprovePlans(plans)
 end
 
 local function scan()
+  local profile = { startedAt = nowMs() }
+  craftingCache.__scanProfile = profile
+  local phaseAt = profile.startedAt
+  local function markPhase(name)
+    local t = nowMs()
+    profile[name] = math.max(0, t - phaseAt)
+    phaseAt = t
+  end
+
   loadConfig()
+  markPhase("configMs")
 
   -- A3 bridge-degraded gating: stash the health module + its consecutive-failure
   -- state on craftingCache (a table only ever keyed by exact mod:item registry
@@ -1268,18 +1287,22 @@ local function scan()
   if not bridge then
     bridge, bridgeName = findPeripheral({ "rs_bridge", "rsBridge" }, BRIDGE_NAME)
   end
+  markPhase("peripheralMs")
 
   if not bridge then
     status = "No RS Bridge found"
     -- no bridge to fire at: count it as a degraded cycle.
     craftingCache.__bridge.allowFire = craftingCache.__health.gateCrafts(craftingCache.__bridge, false)
+    profile.totalMs = math.max(0, nowMs() - profile.startedAt)
     return nil
   end
 
   local connected = call(bridge, "isConnected")
   local online = call(bridge, "isOnline")
+  markPhase("bridgeStatusMs")
 
   local items = getItems()
+  markPhase("getItemsMs")
 
   -- Distrust a transient empty/offline read: getItems() returns {} on any bridge
   -- error or laggy/partial tick. If we HAD items last cycle (or the grid reports
@@ -1291,6 +1314,7 @@ local function scan()
       or "Grid read failed - holding last plan"
     -- degraded cycle: a stale/offline read must hold back craft-firing.
     craftingCache.__bridge.allowFire = craftingCache.__health.gateCrafts(craftingCache.__bridge, false)
+    profile.totalMs = math.max(0, nowMs() - profile.startedAt)
     return nil, "stale"
   end
 
@@ -1308,6 +1332,7 @@ local function scan()
     if item.name then itemsByName[item.name] = item end
     scanned[#scanned + 1] = item
   end
+  markPhase("indexItemsMs")
   lastUnique = unique -- remember a good read so the next empty read is caught as stale
 
   -- clean read: feed a success to the gate. With recovery hysteresis this does NOT
@@ -1335,6 +1360,7 @@ local function scan()
   local stockPlans = planStockActions(items)
   -- append overflow/compress plans so they render + approve like refill rows
   for _, r in ipairs(planOverflowActions(items)) do stockPlans[#stockPlans + 1] = r end
+  markPhase("planningMs")
 
   -- smart mode (opt-in): record consumption trends and compute quota suggestions
   local smartOn = managed.getSetting(managedStore, "smartMode") == true
@@ -1382,6 +1408,7 @@ local function scan()
         compressChains = managed.getSetting(managedStore, "compressChains") == true,
         resurfaceFactor = (config.stockKeeper or {}).resurfaceFactor })
   end
+  markPhase("smartMs")
   local stockTally = uiStatus.tally(stockPlans)
 
   -- keep the in-memory queue tidy: drop now-satisfied items, age out stale ones
@@ -1394,6 +1421,7 @@ local function scan()
   cqueue.reconcile(craftQueue, satisfied)
   cqueue.prune(craftQueue, nowMs(), QUEUE_MAX_AGE_MS)
   if cqueue.count(craftQueue) ~= beforeCount then saveQueue(craftQueue) end
+  markPhase("queueMs")
 
   -- Bridge storage/energy stats are display-only and change slowly. Polling them
   -- every cycle is 6 extra RS-bridge calls; throttle to STATS_INTERVAL_MS to cut the
@@ -1422,6 +1450,8 @@ local function scan()
     }
     bridgeStatsAt = statNow
   end
+  markPhase("statsMs")
+  profile.totalMs = math.max(0, nowMs() - profile.startedAt)
 
   return {
     connected = connected,
@@ -2727,6 +2757,7 @@ local function refreshAndDraw()
   if loop.startedAt then loop.loopGapMs = loopStart - loop.startedAt end
   loop.startedAt = loopStart
   loop.refreshMs = ((config and config.refreshSeconds) or REFRESH_SECONDS) * 1000
+  loop.scanCallMs, loop.craftPhaseMs, loop.broadcastMs, loop.renderMs = nil, nil, nil, nil
 
   local freshData = false
   local loopError = nil
@@ -2744,6 +2775,7 @@ local function refreshAndDraw()
       loop.lastError = nil
     end
     loop.dataAgeMs = loop.lastOkAt and math.max(0, done - loop.lastOkAt) or nil
+    loop.scanProfile = craftingCache.__scanProfile
     pcall(atomicWrite, FILES.loopstate, loop)
   end
 
@@ -2755,7 +2787,9 @@ local function refreshAndDraw()
     return
   end
 
+  local scanStart = nowMs()
   local ok, data, reason = pcall(scan)
+  loop.scanCallMs = math.max(0, nowMs() - scanStart)
   if ok then
     if data then
       freshData = true
@@ -2772,17 +2806,21 @@ local function refreshAndDraw()
       if craftingCache.__bridge and craftingCache.__bridge.allowFire == false then
         data.bridgeDegraded = true -- for the (pinned, in-game-visual) header chip
       else
+        local craftStart = nowMs()
         -- in auto mode, enqueue craftable deficits so the runner can maintain quotas
         -- unattended; a no-op in monitor/dry-run/manual (those need a manual tap)
         autoApprovePlans(data.stockPlans)
         -- drive the gated craft runner, then refresh the queue snapshot so the page
         -- reflects this cycle's state transitions (APPROVED -> CRAFTING) immediately
         processCraftQueue(nowMs(), data.stockPlans)
+        loop.craftPhaseMs = math.max(0, nowMs() - craftStart)
       end
       data.craftQueue = cqueue.list(craftQueue)
       data.craftTasks = craftingCache.__tasks
       data.loop = loop
+      local broadcastStart = nowMs()
       broadcast(data)
+      loop.broadcastMs = math.max(0, nowMs() - broadcastStart)
     elseif reason == "stale" then
       -- keep the last good plan, but mark it stale so draw() shows a banner
       -- (otherwise a held plan looks live and a real bridge loss reads ONLINE)
@@ -2808,7 +2846,9 @@ local function refreshAndDraw()
       lastData = nil
     end
   end
+  local renderStart = nowMs()
   renderCurrent()
+  loop.renderMs = math.max(0, nowMs() - renderStart)
   finishLoop()
 end
 

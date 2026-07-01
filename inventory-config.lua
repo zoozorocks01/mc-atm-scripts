@@ -6,10 +6,9 @@ return {
   -- operatingTier = "manual",
   mode = "manual",
 
-  -- Bridge poll interval (seconds). Tuning knob, not a TPS fix -- live profiling
-  -- showed the poll is not a measurable server cost. Lower for snappier refresh,
-  -- raise only if you ever profile the bridge as a real cost on a huge network.
-  refreshSeconds = 5,
+  -- Bridge poll interval (seconds). Live computer 6 uses 15s so the manager stays
+  -- comfortably below its refresh budget while still updating often enough.
+  refreshSeconds = 15,
 
   itemDefaults = {
     handling = "unmanaged",

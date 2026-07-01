@@ -90,6 +90,11 @@ if [ -f .atm10-loopstate ]; then
   data_age=$(field_from .atm10-loopstate dataAgeMs)
   last_error=$(field_from .atm10-loopstate lastError)
   echo "loop: loopMs=${loop_ms:-?} loadPct=${load_pct:-?} dataAgeMs=${data_age:-?} lastError=${last_error:-none}"
+  phase_lines=$(grep -E "scanCallMs|craftPhaseMs|broadcastMs|renderMs|configMs|peripheralMs|bridgeStatusMs|getItemsMs|indexItemsMs|planningMs|smartMs|queueMs|statsMs|totalMs" .atm10-loopstate 2>/dev/null | sed "s/^[[:space:]]*//; s/,$//" || true)
+  if [ -n "$phase_lines" ]; then
+    echo "loopPhases:"
+    echo "$phase_lines" | sed "s/^/  /"
+  fi
 else
   echo "loop: missing .atm10-loopstate (manager has not run the loop-metrics build yet)"
 fi
