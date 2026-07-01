@@ -336,6 +336,11 @@ We can't patch the mod, so we remove the triggers:
 - **Hang watchdog.** The manager emits a heartbeat each cycle; its startup wrapper
   restarts the *program* (never the computer, so the bridge stays attached) if the
   heartbeat stops for 90s — recovering a frozen console without a hard cycle.
+- **Do not hard-restart the manager from the server console.** In particular,
+  never use `computercraft shutdown` on the rs_bridge manager. The diagnostic
+  helper now refuses `tools/atm10-diagnostics.sh cc-restart`; use
+  `tools/atm10-diagnostics.sh cc-dump` to inspect status, `cc-turn-on` if the
+  computer is off, or a full server restart if the computer itself must reset.
 
 ### Install on remote inventory display
 

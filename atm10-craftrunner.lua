@@ -135,6 +135,8 @@ end
 --                   surplus compress can't starve refills. 0/nil = no reserved floor: compress
 --                   then yields to ALL refills (fires only on idle capacity), NOT interleaved
 --                   by priority. Borrowable: either side uses the other's idle slots. See runner.fireOrder.
+--   holdReason    : optional function(entry, q) -> string reason to leave APPROVED
+--                   without firing this cycle (used for compression-pair deadlocks).
 --
 -- Mutates q in place. Returns a summary and the queue:
 --   { requested = { {name, amount} }, failed = { {name, reason} }, changed = bool }
@@ -147,6 +149,7 @@ function runner.run(q, deps)
   local isCrafting = deps.isCrafting or function() return false end
   local craftFn = deps.craft or function() return false, "no executor" end
   local recordRequest = deps.recordRequest
+  local holdReason = deps.holdReason
   local policy = deps.policy
   local maxPerCycle = tonumber(deps.maxPerCycle)
   if maxPerCycle and maxPerCycle <= 0 then maxPerCycle = nil end
@@ -202,9 +205,16 @@ function runner.run(q, deps)
     local ekey = e.key or e.name -- queue identity (refill vs compress can share a name)
     local manualJob = cqueue.isManual(e)
     if e.state == cqueue.APPROVED then
+      local heldByDeps = type(holdReason) == "function" and holdReason(e, q) or nil
       -- A1: a manual job bypasses the runner's failed-craft backoff (the operator asked
       -- for it NOW), so only NON-manual entries respect the cooldown skip.
-      if (not manualJob) and e.triedAt and cooldownMs > 0 and (now - e.triedAt) < cooldownMs then
+      if heldByDeps then
+        if e.error ~= heldByDeps then
+          e.error = heldByDeps
+          summary.changed = true
+        end
+        summary.held[#summary.held + 1] = { name = e.name, reason = heldByDeps }
+      elseif (not manualJob) and e.triedAt and cooldownMs > 0 and (now - e.triedAt) < cooldownMs then
         -- backing off after a recent failed craft; skip this cycle
       elseif isCrafting(e.name) then
         -- RS is already crafting it: adopt CRAFTING, never double-request

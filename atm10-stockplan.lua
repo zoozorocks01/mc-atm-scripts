@@ -62,6 +62,100 @@ local function copyMeta(row, meta)
   return row
 end
 
+local function compressionPairSpecs(stock)
+  stock = stock or {}
+  local categories = stock.categories or {}
+  if #categories == 0 and type(stock.items) == "table" then
+    categories = { { label = "Stock Keeper", items = stock.items } }
+  end
+
+  local byName, order = {}, {}
+  for _, category in ipairs(categories) do
+    for _, target in ipairs(category.items or {}) do
+      if target and target.name and not byName[target.name] then
+        byName[target.name] = target
+        order[#order + 1] = target.name
+      end
+    end
+  end
+
+  local specs = {}
+  for _, name in ipairs(order) do
+    local source = byName[name]
+    local into = source and source.into
+    local dense = into and into.name and byName[into.name] or nil
+    if dense then
+      specs[#specs + 1] = {
+        source = source.name,
+        dense = dense.name,
+        sourceLabel = source.label or source.name,
+        denseLabel = dense.label or dense.name,
+      }
+    end
+  end
+  return specs
+end
+
+local function blockCompressionPair(row, spec)
+  row.action = "BLOCKED"
+  row.request = nil
+  row.capped = nil
+  row.reserveCapped = nil
+  row.reason = "compression pair low: " .. tostring(spec.sourceLabel) .. " and " .. tostring(spec.denseLabel)
+  row.conflictWith = (row.name == spec.source) and spec.dense or spec.source
+  return row
+end
+
+local function applyCompressionPairGuards(plans, specs, amounts, targets)
+  if type(plans) ~= "table" or type(specs) ~= "table" then return plans end
+  for _, spec in ipairs(specs) do
+    local sourceTarget, denseTarget = tonumber(targets[spec.source]), tonumber(targets[spec.dense])
+    if sourceTarget and denseTarget then
+      local sourceAmount = tonumber(amounts[spec.source]) or 0
+      local denseAmount = tonumber(amounts[spec.dense]) or 0
+      if sourceAmount < sourceTarget and denseAmount < denseTarget then
+        for _, row in ipairs(plans) do
+          if row.action == "WOULD CRAFT" and (row.name == spec.source or row.name == spec.dense) then
+            blockCompressionPair(row, spec)
+          end
+        end
+      end
+    end
+  end
+  return plans
+end
+
+function stockplan.compressionPairHold(stockKeeper, resolve, name)
+  if not name then return nil end
+  resolve = resolve or function() return 0 end
+  local targetByName = {}
+  local categories = (stockKeeper or {}).categories or {}
+  if #categories == 0 and type((stockKeeper or {}).items) == "table" then
+    categories = { { items = stockKeeper.items } }
+  end
+  for _, category in ipairs(categories) do
+    for _, target in ipairs(category.items or {}) do
+      if target.name then targetByName[target.name] = tonumber(target.target) or 0 end
+    end
+  end
+
+  for _, spec in ipairs(compressionPairSpecs(stockKeeper)) do
+    if name == spec.source or name == spec.dense then
+      local sourceTarget = targetByName[spec.source]
+      local denseTarget = targetByName[spec.dense]
+      if sourceTarget and denseTarget then
+        local sourceAmount = tonumber((resolve(spec.source))) or 0
+        local denseAmount = tonumber((resolve(spec.dense))) or 0
+        if sourceAmount < sourceTarget and denseAmount < denseTarget then
+          return "compression pair low: " .. tostring(spec.sourceLabel) .. " and " .. tostring(spec.denseLabel),
+            (name == spec.source) and spec.dense or spec.source
+        end
+      end
+    end
+  end
+  return nil
+end
+
 -- ctx fields:
 --   stockKeeper : {
 --     enabled, cooldownSeconds, maxCraftsPerCycle, maxRequest,
@@ -98,11 +192,13 @@ function stockplan.plan(ctx)
   local cooldownMs = (tonumber(stock.cooldownSeconds) or 300) * 1000
   local cycleLimit = tonumber(stock.maxCraftsPerCycle) or 2
   local wouldIndexes = {}
+  local amounts, targets = {}, {}
 
   local categories = stock.categories or {}
   if #categories == 0 and type(stock.items) == "table" then
     categories = { { label = "Stock Keeper", items = stock.items } }
   end
+  local pairSpecs = compressionPairSpecs({ categories = categories })
 
   for _, category in ipairs(categories) do
     local categoryLabel = category.label or "Stock Keeper"
@@ -114,6 +210,8 @@ function stockplan.plan(ctx)
       local craftTo, craftMeta = stockplan.effectiveCraftTo(target, stock)
       local maxRequest = tonumber(target.maxRequest) or tonumber(stock.maxRequest) or 4096
       local priority = stockplan.deficitPriority(amount, trigger)
+      amounts[target.name] = amount
+      targets[target.name] = trigger
 
       if amount >= trigger then
         plans[#plans + 1] = copyMeta({ action = "OK", name = target.name, category = categoryLabel,
@@ -204,6 +302,15 @@ function stockplan.plan(ctx)
     end
   end
 
+  applyCompressionPairGuards(plans, pairSpecs, amounts, targets)
+  do
+    local activeWould = {}
+    for _, idx in ipairs(wouldIndexes) do
+      if plans[idx].action == "WOULD CRAFT" then activeWould[#activeWould + 1] = idx end
+    end
+    wouldIndexes = activeWould
+  end
+
   if cycleLimit ~= math.huge and #wouldIndexes > cycleLimit then
     table.sort(wouldIndexes, function(a, b)
       local pa, pb = plans[a], plans[b]
@@ -216,7 +323,7 @@ function stockplan.plan(ctx)
       if wouldIndexes[i] then allowed[wouldIndexes[i]] = true end
     end
     for _, idx in ipairs(wouldIndexes) do
-      if not allowed[idx] then
+      if plans[idx].action == "WOULD CRAFT" and not allowed[idx] then
         local row = plans[idx]
         row.action = "CYCLE CAP"
         row.request = nil

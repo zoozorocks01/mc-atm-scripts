@@ -1093,6 +1093,11 @@ local function processCraftQueue(now, plans)
     -- A1: live source amount for a job's craftFrom reserve (getItems is TTL-cached, cheap)
     resolve = function(name) local it = findStoredItem(getItems(), name); return it and itemAmount(it) or 0 end,
     isCrafting = function(name) return isItemCrafting(name, { verifyEmpty = true }) end,
+    holdReason = function(entry)
+      return stockplan.compressionPairHold(effectiveStockKeeper(),
+        function(name) local it = itemsByName and itemsByName[name]; return it and itemAmount(it) or 0 end,
+        entry and entry.name)
+    end,
     craft = function(name, amount) return requestCraft(name, amount) end,
     recordRequest = recordCraftRequest,
   })

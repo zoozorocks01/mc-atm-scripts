@@ -518,6 +518,44 @@ t.eq(urgentCap[1].action, "CYCLE CAP", "least-deficient row loses the planner cy
 t.eq(urgentCap[2].action, "WOULD CRAFT", "most-deficient row survives the planner cycle cap")
 t.eq(urgentCap[3].action, "WOULD CRAFT", "next-most-deficient row survives the planner cycle cap")
 
+-- compression-pair floor quotas below target on BOTH sides must not fight by
+-- uncompressing/compressing the same material back and forth.
+do
+  local pairP = stockplan.plan({ stockKeeper = SK({
+      { name = "ore:zinc_ingot", label = "Zinc Ingot", target = 1000, craftTo = 1000,
+        into = { name = "ore:zinc_block", label = "Zinc Block" }, ratio = 9 },
+      { name = "ore:zinc_block", label = "Zinc Block", target = 128, craftTo = 128 },
+    }, { maxCraftsPerCycle = 2 }), ledger = emptyLedger,
+    resolve = function(name)
+      if name == "ore:zinc_ingot" then return 77, true, false end
+      if name == "ore:zinc_block" then return 205, true, false end
+      return 0, true, false
+    end })
+  t.eq(pairP[1].action, "WOULD CRAFT", "compression pair: source may refill from dense surplus")
+  t.eq(pairP[2].action, "OK", "compression pair: dense side above target is still OK")
+  pairP = stockplan.plan({ stockKeeper = SK({
+      { name = "ore:zinc_ingot", label = "Zinc Ingot", target = 1000, craftTo = 1000,
+        into = { name = "ore:zinc_block", label = "Zinc Block" }, ratio = 9 },
+      { name = "ore:zinc_block", label = "Zinc Block", target = 1024, craftTo = 1024 },
+    }, { maxCraftsPerCycle = 2 }), ledger = emptyLedger,
+    resolve = function(name)
+      if name == "ore:zinc_ingot" then return 77, true, false end
+      if name == "ore:zinc_block" then return 205, true, false end
+      return 0, true, false
+    end })
+  t.eq(pairP[1].action, "BLOCKED", "compression pair: source side blocked when both sides are low")
+  t.eq(pairP[2].action, "BLOCKED", "compression pair: dense side blocked when both sides are low")
+  t.check(pairP[1].reason:find("compression pair low", 1, true) ~= nil,
+    "compression pair: blocked reason explains the pair conflict")
+  t.eq(stockplan.compressionPairHold(SK({
+      { name = "ore:zinc_ingot", label = "Zinc Ingot", target = 1000, craftTo = 1000,
+        into = { name = "ore:zinc_block", label = "Zinc Block" }, ratio = 9 },
+      { name = "ore:zinc_block", label = "Zinc Block", target = 1024, craftTo = 1024 },
+    }), function(name) return name == "ore:zinc_ingot" and 77 or 205 end, "ore:zinc_block"),
+    "compression pair low: Zinc Ingot and Zinc Block",
+    "compression pair: runner hold helper returns the same explanatory reason")
+end
+
 -- ---------------------------------------------------------------------------
 print("craft queue (manual mode, inert)")
 local q = cqueue.new()
@@ -869,6 +907,18 @@ t.eq(qf.entries.ra.error, nil, "retryFailed clears the failure reason")
 t.eq(qf.entries.ra.triedAt, nil, "retryFailed clears the backoff timestamp")
 t.eq(qf.entries.ra.approvedAt, 30, "retryFailed refreshes approval age for reset entries")
 t.eq(qf.entries.rb.approvedAt, 2, "retryFailed leaves healthy approvals alone")
+
+do
+  local qh = mkQ({ { name = "ore:zinc_block", request = 32 } })
+  local hSummary = craftrunner.run(qh, { policy = pManualCraft, mode = "manual", now = 1,
+    holdReason = function() return "compression pair low: Zinc Ingot and Zinc Block" end,
+    isCrafting = function() return false end,
+    craft = function() error("held row must not reach craft", 0) end })
+  t.eq(#hSummary.held, 1, "runner: held queue row is surfaced in summary.held")
+  t.eq(qh.entries["ore:zinc_block"].state, cqueue.APPROVED, "runner: held queue row stays approved")
+  t.eq(qh.entries["ore:zinc_block"].error, "compression pair low: Zinc Ingot and Zinc Block",
+    "runner: held queue row records the explanatory reason")
+end
 
 -- maxPerCycle caps NEW bridge requests per run; the rest stay APPROVED
 local fired = {}

@@ -26,16 +26,17 @@ Usage:
   tools/atm10-diagnostics.sh screen-status
   tools/atm10-diagnostics.sh cc-safety
   tools/atm10-diagnostics.sh cc-dump [computer_id]
-  tools/atm10-diagnostics.sh cc-restart [computer_id]
+  tools/atm10-diagnostics.sh cc-turn-on [computer_id]
+  tools/atm10-diagnostics.sh cc-restart [computer_id]  # disabled: unsafe with Advanced Peripherals RS bridge
 
 Environment overrides:
   ATM10_HOST              SSH host alias (default: zjn-home-two)
   ATM10_SERVER_DIR        ATM10 server root on the host
   ATM10_COMPUTER_DIR      ComputerCraft computer directory on the host
   ATM10_SCREEN_SESSION    screen session name for the running server console
-  ATM10_CC_RESTART_DRAIN_MS  recent-craft drain window before cc-restart (default: 120000)
+  ATM10_CC_RESTART_DRAIN_MS  recent-craft drain window for cc-safety diagnostics (default: 120000)
   ATM10_CC_RESTART_MAX_STALE_MS  max trusted heartbeat/craftstate age (default: 90000)
-  ATM10_CC_RESTART_ALLOW_STALE=true  emergency only: bypass stale refusal after independently confirming no crafts
+  ATM10_CC_RESTART_ALLOW_STALE=true  emergency only: bypass stale cc-safety refusal after independently confirming no crafts
   ATM10_DIAG_INTERVAL     watch interval seconds (default: 5)
   ATM10_DIAG_OUT_DIR      save/watch-log output dir (default: /tmp/atm10-diagnostics)
   ATM10_SSH_OPTS          extra ssh options (default: batch mode, 8s connect timeout)
@@ -203,11 +204,11 @@ fresh_or_refuse() {
   fi
 }
 if [ ! -f .atm10-craftstate ]; then
-  echo "cc-restart safety: REFUSE missing .atm10-craftstate"
+  echo "cc-safety: REFUSE missing .atm10-craftstate"
   exit 10
 fi
 if [ ! -f .atm10-heartbeat ]; then
-  echo "cc-restart safety: REFUSE missing .atm10-heartbeat"
+  echo "cc-safety: REFUSE missing .atm10-heartbeat"
   exit 10
 fi
 active="$(as_int "$(field_from .atm10-craftstate activeCraftCount)")"
@@ -233,10 +234,11 @@ if [ -n "$last_craft" ]; then
   fi
 fi
 if [ -n "$reasons" ]; then
-  echo "cc-restart safety: REFUSE$reasons"
+  echo "cc-safety: REFUSE$reasons"
   exit 10
 fi
-echo "cc-restart safety: ok activeCraftCount=$active queueCrafting=$queue_crafting crafting=$crafting"
+echo "cc-safety: no visible RS tasks activeCraftCount=$active queueCrafting=$queue_crafting crafting=$crafting"
+echo "cc-safety: NOTE this does not prove a ComputerCraft detach restart is safe; Advanced Peripherals can retain hidden RS jobs"
 '
 }
 
@@ -284,14 +286,20 @@ case "${1:-snapshot}" in
     screen_stuff "computercraft dump $computer_id"
     printf 'Sent computercraft dump %s to %s\n' "$computer_id" "$SCREEN_SESSION"
     ;;
+  cc-turn-on)
+    computer_id="${2:-6}"
+    validate_computer_id "$computer_id"
+    screen_stuff "computercraft turn-on $computer_id"
+    screen_stuff "computercraft dump $computer_id"
+    printf 'Sent computercraft turn-on %s and dump to %s\n' "$computer_id" "$SCREEN_SESSION"
+    ;;
   cc-restart)
     computer_id="${2:-6}"
     validate_computer_id "$computer_id"
-    cc_restart_safety
-    screen_stuff "computercraft shutdown $computer_id"
-    screen_stuff "computercraft turn-on $computer_id"
-    screen_stuff "computercraft dump $computer_id"
-    printf 'Sent safe restart for ComputerCraft computer %s to %s\n' "$computer_id" "$SCREEN_SESSION"
+    printf 'Refusing cc-restart for ComputerCraft computer %s.\n' "$computer_id" >&2
+    printf 'Reason: computercraft shutdown detaches the computer; Advanced Peripherals RS bridge can still hold hidden craft jobs and crash with NotAttachedException.\n' >&2
+    printf 'Use cc-dump for a non-detaching console refresh, or do a full server restart if the computer itself must be reset.\n' >&2
+    exit 12
     ;;
   -h|--help|help)
     usage
