@@ -156,6 +156,60 @@ function stockplan.compressionPairHold(stockKeeper, resolve, name)
   return nil
 end
 
+local function compactPlanRow(row)
+  return {
+    action = row.action,
+    name = row.name,
+    label = row.label,
+    category = row.category,
+    amount = row.amount,
+    target = row.target,
+    craftTo = row.craftTo,
+    request = row.request,
+    priority = row.priority,
+    reason = row.reason,
+    conflictWith = row.conflictWith,
+  }
+end
+
+-- Compact, bounded snapshot for SSH diagnostics. The full plan is already rendered
+-- on the monitor and broadcast to viewers; this keeps just enough of the non-OK
+-- plan to explain why the manager is waiting, blocked, capped, or about to craft.
+function stockplan.compactState(plans, opts)
+  opts = opts or {}
+  local limit = math.max(0, math.floor(tonumber(opts.limit) or 40))
+  local out = {
+    total = 0,
+    omitted = 0,
+    counts = {},
+    wouldCraftCount = 0,
+    wouldCraftAmount = 0,
+    blockedCount = 0,
+    rows = {},
+  }
+
+  for _, row in ipairs(plans or {}) do
+    local action = tostring(row.action or "?")
+    out.total = out.total + 1
+    out.counts[action] = (out.counts[action] or 0) + 1
+    if action == "WOULD CRAFT" then
+      out.wouldCraftCount = out.wouldCraftCount + 1
+      out.wouldCraftAmount = out.wouldCraftAmount + (tonumber(row.request) or 0)
+    elseif action == "BLOCKED" or action == "NO RECIPE" or action == "RESERVED" then
+      out.blockedCount = out.blockedCount + 1
+    end
+    if action ~= "OK" then
+      if #out.rows < limit then
+        out.rows[#out.rows + 1] = compactPlanRow(row)
+      else
+        out.omitted = out.omitted + 1
+      end
+    end
+  end
+
+  return out
+end
+
 -- ctx fields:
 --   stockKeeper : {
 --     enabled, cooldownSeconds, maxCraftsPerCycle, maxRequest,

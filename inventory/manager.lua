@@ -29,6 +29,7 @@ local FILES = {
   trends = ".atm10-trends",         -- smart-mode consumption history (survives reboot)
   dismissed = ".atm10-dismissed",   -- smart suggestions the operator cleared
   craftstate = ".atm10-craftstate", -- drain snapshot read by safereboot (avoids the AP detach-crash)
+  planstate = ".atm10-planstate",   -- compact stock-plan snapshot for SSH diagnostics
   loopstate = ".atm10-loopstate",   -- manager scan/render pace metric (is it keeping up?)
   heartbeat = ".atm10-heartbeat",   -- liveness ping; startup watchdog restarts a hung manager
 }
@@ -412,6 +413,13 @@ local function writeCraftState(now, crafting, craftingNames, metrics)
     for k, v in pairs(metrics) do state[k] = v end
   end
   pcall(atomicWrite, FILES.craftstate, state)
+end
+
+local function writePlanState(now, plans, tally)
+  local state = stockplan.compactState(plans, { limit = 40 })
+  state.at = now
+  state.tally = tally
+  pcall(atomicWrite, FILES.planstate, state)
 end
 
 -- Smart-mode trend history is wall-clock based (os.epoch), so persisting it lets
@@ -1428,6 +1436,7 @@ local function scan()
   end
   markPhase("smartMs")
   local stockTally = uiStatus.tally(stockPlans)
+  writePlanState(nowMs(), stockPlans, stockTally)
 
   -- keep the in-memory queue tidy: drop now-satisfied items, age out stale ones
   if not craftQueue then craftQueue = loadQueue() end
@@ -2901,7 +2910,7 @@ do
   if ok and hmod and hmod.sweepTmps then
     hmod.sweepTmps(fs, {
       FILES.queue, FILES.managed, FILES.trends, FILES.dismissed, FILES.ledger,
-      FILES.loopstate, CRAFT_RESULTS.file, CRAFT_RESULTS.auditFile,
+      FILES.loopstate, FILES.planstate, CRAFT_RESULTS.file, CRAFT_RESULTS.auditFile,
     })
   end
 end

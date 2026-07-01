@@ -556,6 +556,23 @@ do
     "compression pair: runner hold helper returns the same explanatory reason")
 end
 
+do
+  local planState = stockplan.compactState({
+    { action = "OK", name = "ok", label = "OK", amount = 10, target = 5 },
+    { action = "WOULD CRAFT", name = "craft1", label = "Craft 1", request = 32, priority = 0.9 },
+    { action = "BLOCKED", name = "blocked", label = "Blocked", reason = "missing pattern" },
+    { action = "WOULD CRAFT", name = "craft2", label = "Craft 2", request = 64, priority = 0.2 },
+  }, { limit = 2 })
+  t.eq(planState.total, 4, "compactState counts every plan row")
+  t.eq(planState.counts["WOULD CRAFT"], 2, "compactState counts actions by name")
+  t.eq(planState.wouldCraftCount, 2, "compactState counts WOULD CRAFT rows")
+  t.eq(planState.wouldCraftAmount, 96, "compactState sums WOULD CRAFT request amount")
+  t.eq(planState.blockedCount, 1, "compactState counts blocked/problem rows")
+  t.eq(#planState.rows, 2, "compactState caps persisted non-OK detail rows")
+  t.eq(planState.omitted, 1, "compactState reports omitted non-OK detail rows")
+  t.eq(planState.rows[2].reason, "missing pattern", "compactState preserves blocked reason")
+end
+
 -- ---------------------------------------------------------------------------
 print("craft queue (manual mode, inert)")
 local q = cqueue.new()
