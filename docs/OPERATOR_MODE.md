@@ -28,6 +28,16 @@ Zach is only needed for:
 From the repo root:
 
 ```bash
+tools/atm10-diagnostics.sh doctor
+```
+
+Use `doctor` as the first readiness check. It is read-only and reports a simple
+`OK` / `WARN` / `FAIL` verdict for server reachability, manager heartbeat,
+craft/queue state, recent crash reports, and deployed-file drift.
+
+For the full evidence dump:
+
+```bash
 tools/atm10-diagnostics.sh snapshot
 ```
 
@@ -55,6 +65,7 @@ The command reads the live computer 6 directory on `zjn-home-two` and reports:
 - `.atm10-heartbeat`
 - `.atm10-loopstate`
 - `.atm10-craftstate`
+- `.atm10-planstate`
 - `.atm10-craft-results`
 - compact craft queue fields
 - latest `.atm10-bridge-probe.txt`
@@ -86,3 +97,10 @@ startup
 
 Use `safereboot` before stopping/restarting the manager when autocrafting may have
 recently fired.
+
+Host-side console commands:
+
+- `tools/atm10-diagnostics.sh cc-dump 6` is read-only and safe.
+- `tools/atm10-diagnostics.sh cc-turn-on 6` is safe only when the computer is off.
+- `tools/atm10-diagnostics.sh cc-restart 6` is intentionally disabled; never hard
+  shutdown/restart the running RS-bridge manager from the server console.

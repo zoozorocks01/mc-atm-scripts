@@ -31,6 +31,19 @@ update
 safereboot
 ```
 
+## Readiness Check
+
+From the repo root, run the read-only doctor before trusting a live install:
+
+```bash
+tools/atm10-diagnostics.sh doctor
+```
+
+It checks server reachability, port/process health, recent crash reports, manager
+heartbeat/loop state, queue/craft state, and whether the key ComputerCraft files
+match this repo. Use `tools/atm10-diagnostics.sh snapshot` when you need the full
+evidence dump.
+
 ## Shared Baseline
 
 The repo now includes shared baseline modules for the next dashboard/control
