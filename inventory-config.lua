@@ -32,6 +32,7 @@ return {
     maxCraftsPerCycle = 8,
     overflowReserve = 0,    -- compress slots reserved first within maxCraftsPerCycle (0 = pure priority)
     maxRequest = 65536,
+    maxBridgeRequest = 64,  -- max count sent to one RS Bridge craftItem call
 
     categories = {
       {

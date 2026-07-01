@@ -535,8 +535,8 @@ check(okA1 == false and tostring(errA1):find(SENTINEL, 1, true) ~= nil,
 check(#a1crafted == 1, "A1: exactly one craft fired under maxCraftsPerCycle=1")
 check(#a1crafted >= 1 and a1crafted[1].name == "alltheores:zinc_ingot",
   "A1: the MANUAL job (zinc) fired FIRST, beating the copper quota deficit (reserved manual slot)")
-check(#a1crafted >= 1 and (tonumber(a1crafted[1].count) or 0) == 777,
-  "A1: the manual job fired the requested count (777) via the full control wiring")
+check(#a1crafted >= 1 and (tonumber(a1crafted[1].count) or 0) == 64,
+  "A1: the manual job fired one maxBridgeRequest-capped batch (64) via the full control wiring")
 local a1copperFired = false
 for _, c in ipairs(a1crafted) do if c.name == "alltheores:copper_ingot" then a1copperFired = true end end
 check(a1copperFired == false,

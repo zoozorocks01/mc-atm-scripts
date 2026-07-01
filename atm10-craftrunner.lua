@@ -128,6 +128,8 @@ end
 --   maxPerCycle   : cap on NEW bridge requests issued this run (<=0/nil = unlimited);
 --                   over-cap entries stay APPROVED for a later cycle, so the operator
 --                   can approve many items without flooding a laggy server at once.
+--   maxBridgeRequest : cap on one craftItem call's count (<=0/nil = unlimited);
+--                   lets one large approval drain through smaller AP/RS-safe batches.
 --   overflowReserve : CRAFT-5 floor of slots (carved from maxPerCycle) reserved FIRST for
 --                   kind=="compress" rows, so a refill flood can't starve compression and
 --                   surplus compress can't starve refills. 0/nil = no reserved floor: compress
@@ -148,10 +150,22 @@ function runner.run(q, deps)
   local policy = deps.policy
   local maxPerCycle = tonumber(deps.maxPerCycle)
   if maxPerCycle and maxPerCycle <= 0 then maxPerCycle = nil end
+  local maxBridgeRequest = tonumber(deps.maxBridgeRequest)
+  if maxBridgeRequest and maxBridgeRequest > 0 then
+    maxBridgeRequest = math.floor(maxBridgeRequest)
+  else
+    maxBridgeRequest = nil
+  end
 
   local summary = { requested = {}, failed = {}, completed = {}, held = {}, changed = false }
   local fired = 0
   local requestedThisRun = {} -- item names already requested this run (avoid double-fire)
+
+  local function capBridgeRequest(amount)
+    amount = math.max(0, math.floor(tonumber(amount) or 0))
+    if maxBridgeRequest and amount > maxBridgeRequest then return maxBridgeRequest end
+    return amount
+  end
 
   -- A1: how many units of a manual job may fire THIS time, honoring the craftFrom
   -- input reserve exactly as stockplan.plan does (the planner never runs for a job).
@@ -217,45 +231,50 @@ function runner.run(q, deps)
         if manualJob and (heldReason or (fireAmount or 0) <= 0) then
           -- soft skip: leave APPROVED so it retries when the input recovers
         else
-        local action = control.craftAction({ name = e.name, label = e.label, request = fireAmount }, {
-          mode = deps.mode,
-          execute = function() return craftFn(e.name, fireAmount) end,
-        })
-
-        -- canExecute checks the gate WITHOUT running the executor, so we can tell
-        -- a closed gate (leave APPROVED, quiet) apart from a bridge rejection.
-        if control.canExecute(action, policy) then
-          local ok, reason = control.execute(action, policy) -- only here does the bridge run
-          if ok then
-            if recordRequest then recordRequest(e.name, fireAmount, now) end
-            requestedThisRun[e.name] = true
-            summary.requested[#summary.requested + 1] = {
-              key = ekey, name = e.name, label = e.label, kind = e.kind, amount = fireAmount,
-            }
-            summary.changed = true
-            fired = fired + 1
-            if manualJob then
-              -- A1: track progress; complete (signal the manager to drop) when made>=N.
-              -- A job split across cycles by the craftFrom clamp accumulates here and
-              -- stays APPROVED until done; the manager recomputes request=remaining.
-              cqueue.recordMade(q, ekey, fireAmount, now)
-              if cqueue.jobComplete(q, ekey) then
-                summary.completed[#summary.completed + 1] = { key = ekey, name = e.name, made = e.made }
-              else
-                e.error = nil -- a partial fire is not an error; keep it APPROVED for next cycle
-              end
-            else
-              cqueue.markCrafting(q, ekey, now)
-            end
+          fireAmount = capBridgeRequest(fireAmount)
+          if fireAmount <= 0 then
+            -- malformed/zero request after clamping: leave APPROVED but do not fire
           else
-            cqueue.markError(q, ekey, now, reason)
-            summary.failed[#summary.failed + 1] = {
-              key = ekey, name = e.name, label = e.label, kind = e.kind, amount = fireAmount, reason = reason,
-            }
-            summary.changed = true
+            local action = control.craftAction({ name = e.name, label = e.label, request = fireAmount }, {
+              mode = deps.mode,
+              execute = function() return craftFn(e.name, fireAmount) end,
+            })
+
+            -- canExecute checks the gate WITHOUT running the executor, so we can tell
+            -- a closed gate (leave APPROVED, quiet) apart from a bridge rejection.
+            if control.canExecute(action, policy) then
+              local ok, reason = control.execute(action, policy) -- only here does the bridge run
+              if ok then
+                if recordRequest then recordRequest(e.name, fireAmount, now) end
+                requestedThisRun[e.name] = true
+                summary.requested[#summary.requested + 1] = {
+                  key = ekey, name = e.name, label = e.label, kind = e.kind, amount = fireAmount,
+                }
+                summary.changed = true
+                fired = fired + 1
+                if manualJob then
+                  -- A1: track progress; complete (signal the manager to drop) when made>=N.
+                  -- A job split across cycles by the craftFrom clamp accumulates here and
+                  -- stays APPROVED until done; the manager recomputes request=remaining.
+                  cqueue.recordMade(q, ekey, fireAmount, now)
+                  if cqueue.jobComplete(q, ekey) then
+                    summary.completed[#summary.completed + 1] = { key = ekey, name = e.name, made = e.made }
+                  else
+                    e.error = nil -- a partial fire is not an error; keep it APPROVED for next cycle
+                  end
+                else
+                  cqueue.markCrafting(q, ekey, now, fireAmount)
+                end
+              else
+                cqueue.markError(q, ekey, now, reason)
+                summary.failed[#summary.failed + 1] = {
+                  key = ekey, name = e.name, label = e.label, kind = e.kind, amount = fireAmount, reason = reason,
+                }
+                summary.changed = true
+              end
+            end
+            -- gate closed (dry-run/monitor/awaiting approval/capability off): no-op
           end
-        end
-        -- gate closed (dry-run/monitor/awaiting approval/capability off): no-op
         end
       end
     end

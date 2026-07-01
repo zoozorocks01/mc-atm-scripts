@@ -626,9 +626,10 @@ t.check(cqueue.has(kq, "iron_ingot") == false, "refill entry removed")
 
 -- state transitions used by the craft runner
 local sq = cqueue.approve(cqueue.new(), { name = "s", request = 4 }, 10)
-cqueue.markCrafting(sq, "s", 20)
+cqueue.markCrafting(sq, "s", 20, 2)
 t.eq(sq.entries.s.state, cqueue.CRAFTING, "markCrafting sets CRAFTING state")
 t.eq(sq.entries.s.craftingAt, 20, "markCrafting stamps craftingAt")
+t.eq(sq.entries.s.inflightRequest, 2, "markCrafting stores the in-flight batch amount")
 cqueue.markError(sq, "s", 30, "boom")
 t.eq(sq.entries.s.error, "boom", "markError records the reason")
 t.eq(sq.entries.s.triedAt, 30, "markError stamps triedAt for backoff")
@@ -652,7 +653,32 @@ t.eq(select(2, cqueue.failInactiveCrafting(_G.__activeQ, { active = true }, 100,
   "failInactiveCrafting: active RS task stays CRAFTING")
 t.eq(_G.__activeQ.entries.active.state, cqueue.CRAFTING,
   "failInactiveCrafting: active task entry is unchanged")
-_G.__staleQ, _G.__activeQ = nil, nil
+_G.__partialQ = cqueue.new()
+cqueue.approve(_G.__partialQ, { name = "partial", amount = 0, request = 128 }, 1)
+cqueue.markCrafting(_G.__partialQ, "partial", 10, 64)
+_, _G.__partialStale, _G.__partialProgress = cqueue.reconcileInactiveCrafting(_G.__partialQ, {},
+  { partial = 64 }, 31, 20, "no active RS task")
+t.eq(_G.__partialStale, 0, "reconcileInactiveCrafting: stock progress is not stale")
+t.eq(_G.__partialProgress, 1, "reconcileInactiveCrafting: inactive row with stock progress is counted")
+t.eq(_G.__partialQ.entries.partial.state, cqueue.APPROVED,
+  "reconcileInactiveCrafting: partial progress returns row to APPROVED")
+t.eq(_G.__partialQ.entries.partial.request, 64,
+  "reconcileInactiveCrafting: partial progress reduces the remaining request")
+t.eq(_G.__partialQ.entries.partial.amount, 64,
+  "reconcileInactiveCrafting: partial progress refreshes the stock baseline")
+t.eq(_G.__partialQ.entries.partial.error, nil,
+  "reconcileInactiveCrafting: partial progress clears stale error state")
+_G.__silentQ = cqueue.new()
+cqueue.approve(_G.__silentQ, { name = "silent", amount = 0, request = 128 }, 1)
+cqueue.markCrafting(_G.__silentQ, "silent", 10, 64)
+_, _G.__silentStale, _G.__silentProgress = cqueue.reconcileInactiveCrafting(_G.__silentQ, {},
+  { silent = 0 }, 31, 20, "no active RS task")
+t.eq(_G.__silentStale, 1, "reconcileInactiveCrafting: no active task and no stock progress is stale")
+t.eq(_G.__silentProgress, 0, "reconcileInactiveCrafting: silent reject has no progress")
+t.eq(_G.__silentQ.entries.silent.error, "no active RS task",
+  "reconcileInactiveCrafting: silent reject records retryable reason")
+_G.__staleQ, _G.__activeQ, _G.__partialQ, _G.__silentQ = nil, nil, nil, nil
+_G.__partialStale, _G.__partialProgress, _G.__silentStale, _G.__silentProgress = nil, nil, nil, nil
 
 -- per-item last-craft results (QUICK-5): record ok/reason/timestamp, bounded
 local res = {}
@@ -953,7 +979,10 @@ t.eq(fo({ kq.entries["compress:iron_dust"], { name = "minecraft:gold_ingot", pri
 print("CRAFT-5 runner.run: budgets enforced at fire time without wasting capacity")
 local function runFired(entries, opts)
   local q = cqueue.new()
-  for _, e in ipairs(entries) do q = cqueue.approve(q, e, e.approvedAt or 1) end
+  for _, e in ipairs(entries) do
+    if e.request == nil then e.request = 1 end
+    q = cqueue.approve(q, e, e.approvedAt or 1)
+  end
   local f = {}
   local crafting = opts.crafting or {}
   craftrunner.run(q, { policy = pManualCraft, mode = "manual", now = 1000,
@@ -962,6 +991,28 @@ local function runFired(entries, opts)
     craft = function(name) f[#f + 1] = name; return true end })
   return f, q
 end
+
+local function runFiredAmounts(entries, opts)
+  opts = opts or {}
+  local q = cqueue.new()
+  for _, e in ipairs(entries) do q = cqueue.approve(q, e, e.approvedAt or 1) end
+  local f = {}
+  local summary = craftrunner.run(q, { policy = pManualCraft, mode = "manual", now = 1000,
+    maxPerCycle = opts.maxPerCycle, maxBridgeRequest = opts.maxBridgeRequest,
+    overflowReserve = opts.overflowReserve,
+    isCrafting = function(name) return (opts.crafting or {})[name] == true end,
+    craft = function(name, amount) f[#f + 1] = { name = name, amount = amount }; return true end })
+  return f, summary, q
+end
+
+_G.__batchFired, _G.__batchSummary, _G.__batchQ = runFiredAmounts({
+  { name = "big", request = 1024, priority = 1 },
+}, { maxPerCycle = 8, maxBridgeRequest = 64 })
+t.eq(_G.__batchFired[1].amount, 64, "runner: maxBridgeRequest caps one bridge craftItem call")
+t.eq(_G.__batchSummary.requested[1].amount, 64, "runner: requested summary records the capped bridge amount")
+t.eq(_G.__batchQ.entries.big.state, cqueue.CRAFTING, "runner: capped stock request still transitions to CRAFTING")
+t.eq(_G.__batchQ.entries.big.inflightRequest, 64, "runner: capped stock request records its in-flight batch")
+_G.__batchFired, _G.__batchSummary, _G.__batchQ = nil, nil, nil
 
 -- no idle waste: all-refill uses the whole cap, reserve never blocks a refillable slot
 t.eq(#runFired({ { name = "r1", priority = 0.9 }, { name = "r2", priority = 0.8 }, { name = "r3", priority = 0.7 }, { name = "r4", priority = 0.6 } },

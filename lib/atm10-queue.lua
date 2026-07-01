@@ -151,12 +151,15 @@ end
 
 -- Mark an entry as in-flight (craft request accepted). Clears any prior error.
 -- No-op if the entry is absent.
-function queue.markCrafting(q, name, now)
+function queue.markCrafting(q, name, now, inflightRequest)
   q = queue.normalize(q)
   local e = q.entries[name]
   if not e then return q end
   e.state = queue.CRAFTING
   e.craftingAt = tonumber(now) or 0
+  if inflightRequest ~= nil then
+    e.inflightRequest = math.max(0, math.floor(tonumber(inflightRequest) or 0))
+  end
   e.error = nil
   return q
 end
@@ -195,6 +198,57 @@ function queue.failInactiveCrafting(q, activeByName, now, graceMs, reason)
     end
   end
   return q, n
+end
+
+-- Like failInactiveCrafting, but a completed capped batch is not a stale failure
+-- if stock increased since the entry was approved/last progressed. In that case,
+-- reduce the remaining request, refresh the baseline amount, and return it to
+-- APPROVED so the next batch can fire. Returns q, staleCount, progressedCount.
+function queue.reconcileInactiveCrafting(q, activeByName, amountsByName, now, graceMs, reason)
+  q = queue.normalize(q)
+  if type(activeByName) ~= "table" then return q, 0, 0 end
+  amountsByName = type(amountsByName) == "table" and amountsByName or {}
+  now = tonumber(now) or 0
+  graceMs = math.max(0, tonumber(graceMs) or 0)
+  local stale, progressed = 0, 0
+  for key, e in pairs(q.entries) do
+    if type(e) == "table" and e.state == queue.CRAFTING then
+      local active = activeByName[e.name] or activeByName[key]
+      local started = tonumber(e.craftingAt or e.approvedAt) or 0
+      if not active and (now - started) >= graceMs then
+        local current = tonumber(amountsByName[e.name] or amountsByName[key])
+        local baseline = tonumber(e.amount)
+        local made = 0
+        if current and baseline and current > baseline then
+          made = math.floor(current - baseline)
+          local inflight = math.max(0, math.floor(tonumber(e.inflightRequest or e.request) or 0))
+          if inflight > 0 and made > inflight then made = inflight end
+        end
+
+        if made > 0 then
+          local remaining = math.max(0, math.floor(tonumber(e.request) or 0) - made)
+          if remaining > 0 then
+            e.state = queue.APPROVED
+            e.request = remaining
+            e.amount = current
+            e.approvedAt = now
+            e.craftingAt = nil
+            e.inflightRequest = nil
+            e.error = nil
+          else
+            q.entries[key] = nil
+          end
+          progressed = progressed + 1
+        else
+          e.state = queue.APPROVED
+          e.triedAt = now
+          e.error = reason and tostring(reason) or "no active RS task"
+          stale = stale + 1
+        end
+      end
+    end
+  end
+  return q, stale, progressed
 end
 
 -- How long a failed entry still has to wait before the runner's failed-craft

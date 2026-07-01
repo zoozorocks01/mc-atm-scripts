@@ -87,7 +87,8 @@ local DEFAULT_CONFIG = {
     maxCraftsPerCycle = 8,    -- new craft requests issued per cycle (late-game default)
     overflowReserve = 0,      -- CRAFT-5: compress slots reserved first within the cap (0 = pure priority)
     manualReserve = 1,        -- A1: slots reserved first for manual/oneshot jobs (quotas can't starve them)
-    maxRequest = 65536,       -- cap per single craft request (bigger batches)
+    maxRequest = 65536,       -- cap per plan row
+    maxBridgeRequest = 64,    -- cap per craftItem bridge call (AP/RS-safe batch)
     items = {},
     categories = {},
   },
@@ -272,6 +273,7 @@ local function normalizeConfig(raw)
   -- clamps it to the cap at use time, so a mis-set value can never exceed maxCraftsPerCycle).
   cfg.stockKeeper.manualReserve = math.max(0, math.floor(tonumber(cfg.stockKeeper.manualReserve) or 1))
   cfg.stockKeeper.maxRequest = tonumber(cfg.stockKeeper.maxRequest) or 65536
+  cfg.stockKeeper.maxBridgeRequest = math.max(1, math.floor(tonumber(cfg.stockKeeper.maxBridgeRequest) or 64))
   if type(cfg.stockKeeper.items) ~= "table" then cfg.stockKeeper.items = {} end
   if type(cfg.stockKeeper.categories) ~= "table" then cfg.stockKeeper.categories = {} end
 
@@ -1074,6 +1076,9 @@ local function processCraftQueue(now, plans)
     cooldownMs = (tonumber(stock.cooldownSeconds) or 300) * 1000,
     -- rate-limit ACTUAL bridge requests per cycle (the plan display is uncapped)
     maxPerCycle = tonumber(stock.maxCraftsPerCycle) or 2,
+    -- AP/RS can accept a large craftItem call and then show no active task; cap each
+    -- bridge call so stock rows drain through conservative batches.
+    maxBridgeRequest = tonumber(stock.maxBridgeRequest) or 64,
     -- CRAFT-5: reserve part of that cap for compress/overflow rows (0 = pure priority)
     overflowReserve = tonumber(stock.overflowReserve) or 0,
     -- A1: reserve >=1 slot per cycle for manual jobs so a quota flood can't starve them
@@ -1100,11 +1105,15 @@ local function processCraftQueue(now, plans)
     tasks.at = now
     craftingCache.__tasks = tasks
   end
-  local failedInactive = 0
+  local amountsByName = {}
+  for name, item in pairs(itemsByName or {}) do amountsByName[name] = itemAmount(item) end
+  local failedInactive, progressedInactive = 0, 0
   if tasks.method ~= "none" and tasks.method ~= "no-bridge" then
-    failedInactive = select(2, cqueue.failInactiveCrafting(craftQueue, tasks.byName, now,
-      TTL.craftingStale, "no active RS task"))
+    local _
+    _, failedInactive, progressedInactive = cqueue.reconcileInactiveCrafting(craftQueue, tasks.byName,
+      amountsByName, now, TTL.craftingStale, "no active RS task")
   end
+  if progressedInactive > 0 then saveQueue(craftQueue) end
   if failedInactive > 0 then
     saveQueue(craftQueue)
     ensureCraftResults()
