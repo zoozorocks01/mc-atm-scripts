@@ -84,11 +84,11 @@ local DEFAULT_CONFIG = {
   stockKeeper = {
     enabled = false,
     cooldownSeconds = 300,
-    maxCraftsPerCycle = 8,    -- new craft requests issued per cycle (late-game default)
+    maxCraftsPerCycle = 2,    -- new craft requests issued per cycle (safe auto default)
     overflowReserve = 0,      -- CRAFT-5: compress slots reserved first within the cap (0 = pure priority)
     manualReserve = 1,        -- A1: slots reserved first for manual/oneshot jobs (quotas can't starve them)
     maxRequest = 65536,       -- cap per plan row
-    maxBridgeRequest = 64,    -- cap per craftItem bridge call (AP/RS-safe batch)
+    maxBridgeRequest = 32,    -- cap per craftItem bridge call (AP/RS-safe batch)
     items = {},
     categories = {},
   },
@@ -265,7 +265,7 @@ local function normalizeConfig(raw)
   -- every cycle. A non-positive/garbage value falls back to the safe default.
   local cd = tonumber(cfg.stockKeeper.cooldownSeconds)
   cfg.stockKeeper.cooldownSeconds = (cd and cd > 0) and cd or 300
-  cfg.stockKeeper.maxCraftsPerCycle = tonumber(cfg.stockKeeper.maxCraftsPerCycle) or 8
+  cfg.stockKeeper.maxCraftsPerCycle = tonumber(cfg.stockKeeper.maxCraftsPerCycle) or 2
   -- CRAFT-5: clamp the compress reserve to a non-negative integer; fireOrder clamps it to
   -- the cap at use time, so a mis-set value (e.g. 99) can never exceed maxCraftsPerCycle.
   cfg.stockKeeper.overflowReserve = math.max(0, math.floor(tonumber(cfg.stockKeeper.overflowReserve) or 0))
@@ -273,7 +273,7 @@ local function normalizeConfig(raw)
   -- clamps it to the cap at use time, so a mis-set value can never exceed maxCraftsPerCycle).
   cfg.stockKeeper.manualReserve = math.max(0, math.floor(tonumber(cfg.stockKeeper.manualReserve) or 1))
   cfg.stockKeeper.maxRequest = tonumber(cfg.stockKeeper.maxRequest) or 65536
-  cfg.stockKeeper.maxBridgeRequest = math.max(1, math.floor(tonumber(cfg.stockKeeper.maxBridgeRequest) or 64))
+  cfg.stockKeeper.maxBridgeRequest = math.max(1, math.floor(tonumber(cfg.stockKeeper.maxBridgeRequest) or 32))
   if type(cfg.stockKeeper.items) ~= "table" then cfg.stockKeeper.items = {} end
   if type(cfg.stockKeeper.categories) ~= "table" then cfg.stockKeeper.categories = {} end
 
@@ -1078,7 +1078,7 @@ local function processCraftQueue(now, plans)
     maxPerCycle = tonumber(stock.maxCraftsPerCycle) or 2,
     -- AP/RS can accept a large craftItem call and then show no active task; cap each
     -- bridge call so stock rows drain through conservative batches.
-    maxBridgeRequest = tonumber(stock.maxBridgeRequest) or 64,
+    maxBridgeRequest = tonumber(stock.maxBridgeRequest) or 32,
     -- CRAFT-5: reserve part of that cap for compress/overflow rows (0 = pure priority)
     overflowReserve = tonumber(stock.overflowReserve) or 0,
     -- A1: reserve >=1 slot per cycle for manual jobs so a quota flood can't starve them

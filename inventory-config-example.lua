@@ -61,10 +61,10 @@ return {
   stockKeeper = {
     enabled = true,
     cooldownSeconds = 300,
-    maxCraftsPerCycle = 8,
+    maxCraftsPerCycle = 2,
     overflowReserve = 0,    -- compress slots reserved first within maxCraftsPerCycle (0 = pure priority)
     maxRequest = 65536,
-    maxBridgeRequest = 64,  -- max count sent to one RS Bridge craftItem call
+    maxBridgeRequest = 32,  -- max count sent to one RS Bridge craftItem call
     -- Refill uses your exact numbers: set craftTo == target to maintain that floor,
     -- or set craftTo higher than target for a min->max buffer. No auto-band.
     --
