@@ -451,11 +451,24 @@ doctor_file_hashes() {
 
   compare_cc_file inventory-info.lua inventory-info
   compare_cc_file inventory-startup.lua startup
-  compare_cc_file atm10-stockplan.lua atm10-stockplan.lua
-  compare_cc_file atm10-craftrunner.lua atm10-craftrunner.lua
-  compare_cc_file atm10-queue.lua atm10-queue.lua
+  compare_cc_file inventory-config-example.lua inventory-config-example
+  compare_cc_file atm10-status.lua atm10-status.lua
+  compare_cc_file atm10-palette.lua atm10-palette.lua
+  compare_cc_file atm10-draw.lua atm10-draw.lua
   compare_cc_file atm10-control.lua atm10-control.lua
+  compare_cc_file atm10-stockplan.lua atm10-stockplan.lua
+  compare_cc_file atm10-queue.lua atm10-queue.lua
+  compare_cc_file atm10-craftrunner.lua atm10-craftrunner.lua
+  compare_cc_file atm10-managed.lua atm10-managed.lua
+  compare_cc_file atm10-balance.lua atm10-balance.lua
+  compare_cc_file atm10-suggest.lua atm10-suggest.lua
+  compare_cc_file atm10-presets.lua atm10-presets.lua
+  compare_cc_file atm10-console.lua atm10-console.lua
   compare_cc_file atm10-health.lua atm10-health.lua
+  compare_cc_file atm10-monitor.lua atm10-monitor.lua
+  compare_cc_file atm10-pattern-give.lua atm10-pattern-give.lua
+  compare_cc_file atm10-bridge-probe.lua atm10-bridge-probe
+  compare_cc_file atm10-patterns.lua atm10-patterns
   compare_cc_file safereboot.lua safereboot
   compare_cc_file reboot-guard.lua reboot
   compare_cc_file atm10-update.lua update
