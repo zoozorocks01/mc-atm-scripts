@@ -7,6 +7,13 @@ rednet.open(MODEM_SIDE)
 
 local power = require("atm10-power") -- QUICK-2: shared percent normalization (tested off-CC)
 
+-- The induction port is (re)wrapped EVERY cycle (see the loop). A chunk unload/
+-- reload -- e.g. the operator logging out and back in -- recreates the block
+-- entity, and a wrap captured once at boot stays bound to the DEAD instance:
+-- reads freeze (0 FE in/out, static stored energy) until the computer is
+-- rebooted. Wrapping is cheap at once a second; a fresh handle follows the
+-- current block entity with no reboot. If the port vanishes entirely the sample
+-- degrades to sensorOk=false (the display's SENSOR state) instead of erroring.
 local port = peripheral.wrap(INDUCTION_SIDE)
 if not port then error("No induction port on " .. INDUCTION_SIDE) end
 
@@ -21,7 +28,7 @@ local lastNonzeroOutput = 0
 -- read errored, so a wrong/detached induction port can be told apart from a genuine 0 instead
 -- of fabricating a plausible empty matrix.
 local function call(name)
-  if port[name] then
+  if port and port[name] then
     local ok, value = pcall(port[name])
     if ok then return tonumber(value) or value, true end
   end
@@ -64,6 +71,9 @@ end
 
 while true do
   ticks = ticks + 1
+
+  -- re-acquire the handle so a chunk-reload-recreated port is picked up live
+  port = peripheral.wrap(INDUCTION_SIDE)
 
   if not displayId or ticks % 30 == 1 then
     findDisplay()
