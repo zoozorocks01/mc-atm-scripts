@@ -11,6 +11,13 @@
 -- We wait until RS reports zero active craft jobs (+ a drain grace for the final
 -- AP events), then reboot. No bridge on this computer => reboot immediately.
 --
+-- TWO things the live task list cannot see:
+--  * getCraftingTasks only mirrors RS's ACTIVE tasks. A job still in preview/
+--    calculation can be invisible, so the snapshot's lastCraftAt keeps the drain
+--    floor open even when the list reads 0.
+--  * Recorded craftItem job ids are checked with getCraftingTask(id). Done,
+--    canceled, errored, or NOT_FOUND jobs count as settled.
+--
 -- PROCEDURE: run `safereboot`; it will request a manager drain before rebooting.
 --
 -- Usage:
@@ -24,8 +31,8 @@ local DRAIN_REQUEST_FILE = ".atm10-drain-request"
 local HEARTBEAT_FILE = ".atm10-heartbeat"
 local POLL_SECONDS = 3
 local HEARTBEAT_STALE_MS = 30000
-local GRACE_AUTHORITATIVE_MS = 12000            -- grace once the task list reads empty
-local GRACE_BLIND_MS = control.DEFAULT_DRAIN_MS  -- conservative wait if we can't query
+local GRACE_AUTHORITATIVE_MS = 12000              -- grace once the task list reads empty
+local GRACE_BLIND_MS = control.DEFAULT_DRAIN_MS   -- conservative wait if we can't query
 
 local function nowMs()
   if os.epoch then return os.epoch("utc") end
@@ -136,6 +143,7 @@ while true do
   if not fs.exists(DRAIN_REQUEST_FILE) then
     writeSerializedFile(DRAIN_REQUEST_FILE, { requestedAt = requestedAt })
   end
+
   local craftState = readCraftState()
   local acked = drainAcked(craftState, requestedAt)
   local heartbeatOk, heartbeatReason = heartbeatFresh(now)
@@ -146,14 +154,20 @@ while true do
     local count, method = control.activeCraftCount(bridge, fallbackNames(craftState))
     local unsettled = control.unsettledJobs(bridge, craftState.outstanding)
     local blind = (method == "none")
-    if count > 0 then lastActiveAt = now end
+    if type(unsettled) ~= "table" then
+      if unsettled == nil then blind = true end
+      unsettled = { count = tonumber(unsettled) or 0 }
+    elseif unsettled.method == "missing" and type(craftState.outstanding) == "table" and #craftState.outstanding > 0 then
+      blind = true
+    end
+    local unsettledCount = tonumber(unsettled.count) or 0
+    if count > 0 or unsettledCount > 0 then lastActiveAt = now end
     -- blind (no craft-status API): wait a full conservative window from start
     if blind and not lastActiveAt then lastActiveAt = startedAt end
     local lastCraftAt = maxAt(lastActiveAt, craftState.lastCraftAt)
     local drainMs = (method == "isItemCrafting" or blind) and GRACE_BLIND_MS or GRACE_AUTHORITATIVE_MS
     if craftState.lastCraftAt then drainMs = math.max(drainMs, control.DEFAULT_DRAIN_MS) end
 
-    local unsettledCount = tonumber(unsettled.count) or 0
     local verdict = control.rebootSafety({
       now = now,
       lastCraftAt = lastCraftAt,

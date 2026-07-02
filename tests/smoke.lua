@@ -461,6 +461,81 @@ do
     "Browse sort chip cycles from QTY to A-Z")
 end
 
+-- ---- managed store: an out-of-band disk change survives an operator tap -------
+-- The managedStore cache is loaded once per run; the CLOBBER bug was saving that
+-- stale cache wholesale, wiping any newer on-disk state (external backfill). This
+-- run caches the (empty) store in cycle 1, seeds a quota into the FILE mid-run,
+-- then taps the SMART toggle. mutateManaged must reload-mutate-save so BOTH the
+-- seeded quota and the toggle land. BITING: restore save-the-cache semantics in
+-- mutateManaged and the backfill assert fails.
+do
+  screen = {}
+  files = {}
+  ei = 0
+  local function realSer(v)
+    if type(v) == "table" then
+      local parts = {}
+      for k, val in pairs(v) do
+        local key = type(k) == "string" and ("[" .. string.format("%q", k) .. "]") or ("[" .. tostring(k) .. "]")
+        parts[#parts + 1] = key .. "=" .. realSer(val)
+      end
+      return "{" .. table.concat(parts, ",") .. "}"
+    elseif type(v) == "string" then
+      return string.format("%q", v)
+    end
+    return tostring(v)
+  end
+  -- fs-stub writes are lossy for atomicWrite targets (close promotes, move nils),
+  -- so capture the persisted managed store via a serialize spy like other sections.
+  local savedManaged = nil
+  _G.textutils = {
+    serialize = function(t)
+      if type(t) == "table" and type(t.items) == "table" then savedManaged = t end
+      return realSer(t)
+    end,
+    unserialize = function(text)
+      local f = load("return " .. tostring(text))
+      if not f then return nil end
+      local okU, v = pcall(f)
+      if okU then return v end
+      return nil
+    end,
+  }
+  local SEED = realSer({ items = { ["mc:backfill_test"] = {
+    name = "mc:backfill_test", label = "Backfill Test", target = 64, craftTo = 128, addedAt = 1,
+  } }, rev = 7 })
+  events = {
+    { "timer", 1 },                  -- cycle 1: scan caches the (empty) managed store
+    { "SEED" },                      -- out-of-band: a backfill lands ON DISK mid-run
+    { "monitor_touch", "r", 46, 2 }, -- tab -> SMART ([SMART] spans cols 44-50 post-HEALTH)
+    { "monitor_touch", "r", 1, 7 },  -- SMART toggle -> mutateManaged writes the store
+  }
+  _G.os.pullEvent = function()
+    ei = ei + 1
+    local ev = events[ei]
+    if not ev then error(SENTINEL, 0) end
+    if ev[1] == "SEED" then
+      files[".atm10-managed"] = SEED
+      ei = ei + 1
+      ev = events[ei]
+      if not ev then error(SENTINEL, 0) end
+    end
+    return table.unpack(ev)
+  end
+  _G.rednet = { open = function() end, broadcast = function() end }
+  BR = fakeBridge()
+
+  local okM, errM = pcall(function() dofile("inventory/manager.lua") end)
+  check(okM == false and tostring(errM):find(SENTINEL, 1, true) ~= nil,
+    "managed-clobber run still hit the sentinel (loop survived)")
+  check(type(savedManaged) == "table" and type(savedManaged.settings) == "table"
+      and savedManaged.settings.smartMode == true,
+    "SMART toggle persisted its setting through mutateManaged")
+  check(type(savedManaged) == "table" and type(savedManaged.items) == "table"
+      and savedManaged.items["mc:backfill_test"] ~= nil,
+    "out-of-band backfilled quota SURVIVED the operator tap (no stale-cache clobber)")
+end
+
 -- ---- queue: failed entries show retry control and tap clears backoff ----------
 do
   screen = {}

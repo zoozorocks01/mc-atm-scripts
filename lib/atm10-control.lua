@@ -322,7 +322,7 @@ function control.craftJobSettled(job)
   for _, field in ipairs({ "done", "isDone", "canceled", "cancelled", "error", "errored" }) do
     if job[field] == true then return true end
   end
-  for _, method in ipairs({ "isDone", "isCanceled", "isCancelled", "hasErrorOccurred" }) do
+  for _, method in ipairs({ "isDone", "isCanceled", "isCancelled", "hasErrorOccurred", "isCalculationNotSuccessful" }) do
     if type(job[method]) == "function" then
       local ok, value = pcall(job[method])
       if ok and value == true then return true end
@@ -452,6 +452,15 @@ function control.activeCraftCount(bridge, fallbackNames)
   return snap.count, snap.method
 end
 
+-- Per-job settled check over the craftItem job ids the manager recorded in its
+-- drain snapshot. This closes the CALCULATION-phase hole: AP keeps ticking a job
+-- (and will fire a CC event at this computer when its preview resolves) even
+-- while getCraftingTasks reads empty, because that list only mirrors RS's ACTIVE
+-- tasks. A job is SETTLED once the bridge no longer knows its id (AP purged it,
+-- so every event has already fired) or it reports done/canceled/errored.
+-- outstanding = { {id=, name=, at=}, ... } from .atm10-craftstate.
+-- Returns the unsettled count, or nil when there are recorded jobs but no
+-- getCraftingTask API to check them -- callers must then use the blind window.
 -- ===========================================================================
 -- CONTROL COMMANDS (CTRL-1): the foundation for the eventual control center.
 -- A `command` is a pure data shape { action, target, args, token }; dispatch()

@@ -75,6 +75,37 @@ do
   t.check(dm.sourceMore[1].perMin >= 199 and dm.sourceMore[1].perMin <= 201, "monitor.demand: ~200/min drain")
 end
 
+-- control.unsettledJobs: safereboot's per-job settled check over recorded craftItem
+-- ids -- closes the CALCULATION-phase hole (job invisible to getCraftingTasks but
+-- AP still fires its events). Biting: settled/unsettled/blind classification.
+do
+  local function job(flags)
+    local j = {}
+    for _, m in ipairs({ "isDone", "isCanceled", "hasErrorOccurred", "isCalculationNotSuccessful" }) do
+      j[m] = function() return flags[m] == true end
+    end
+    return j
+  end
+  local jobs = {
+    [1] = job({}),                        -- live: calculating or crafting
+    [2] = job({ isDone = true }),         -- settled: done
+    [3] = job({ hasErrorOccurred = true }), -- settled: errored
+  }
+  local bridge = { getCraftingTask = function(id) return jobs[id] end } -- unknown id -> nil (purged)
+  local out = { { id = 1 }, { id = 2 }, { id = 3 }, { id = 99 } }
+  local live = control.unsettledJobs(bridge, out)
+  t.eq(live.count, 1, "unsettledJobs: only the live job blocks (done/errored/purged settle)")
+  t.eq(live.method, "getCraftingTask", "unsettledJobs: reports getCraftingTask as the check method")
+  t.eq(control.unsettledJobs(bridge, {}).count, 0, "unsettledJobs: no recorded jobs -> 0")
+  t.eq(control.unsettledJobs(bridge, nil).count, 0, "unsettledJobs: missing outstanding list -> 0 (old craftstate)")
+  t.eq(control.unsettledJobs({}, out).method, "missing", "unsettledJobs: recorded jobs but no getCraftingTask API -> missing")
+  t.eq(control.unsettledJobs(nil, out).method, "missing", "unsettledJobs: no bridge -> missing")
+  local throwing = { getCraftingTask = function() error("boom") end }
+  t.eq(control.unsettledJobs(throwing, { { id = 1 } }).count, 1, "unsettledJobs: bridge throw on lookup stays conservative")
+  local methodless = { getCraftingTask = function() return {} end } -- job with NO status methods
+  t.eq(control.unsettledJobs(methodless, { { id = 1 } }).count, 1, "unsettledJobs: unqueryable job state stays conservative (unsettled)")
+end
+
 -- control.activeCraftCount: the LIVE bridge query the hardened safereboot relies on.
 -- Biting: wrong method preference / fallback / nil-handling changes count or method.
 do
