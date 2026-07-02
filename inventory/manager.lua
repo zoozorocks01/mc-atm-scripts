@@ -533,6 +533,60 @@ local function ensureCraftResults()
   return craftResults
 end
 
+function ui.appendCraftAudit(event, now, tasks)
+  event = event or {}
+  event.at = event.at or now or nowMs()
+  event.queueDepth = event.queueDepth or cqueue.count(craftQueue)
+  if event.name and itemsByName and itemsByName[event.name] then
+    local item = itemsByName[event.name]
+    event.stockAtScan = tonumber(item.amount or item.count or item.size) or 0
+  end
+  if tasks then
+    event.activeCraftMethod = tasks.method
+    event.activeCraftCount = tasks.count
+    if event.name and type(tasks.byName) == "table" then event.activeNow = tasks.byName[event.name] ~= nil end
+  end
+  local audit = {}
+  if fs.exists(CRAFT_RESULTS.auditFile) then
+    local f = fs.open(CRAFT_RESULTS.auditFile, "r")
+    if f then
+      local text = f.readAll()
+      f.close()
+      local ok, data = pcall(textutils.unserialize, text)
+      if ok and type(data) == "table" then audit = data end
+    end
+  end
+  cqueue.recordAudit(audit, event)
+  cqueue.pruneAudit(audit, CRAFT_RESULTS.auditMax)
+  pcall(atomicWrite, CRAFT_RESULTS.auditFile, audit)
+end
+
+function ui.forgetOutstandingCraft(jobId)
+  if jobId == nil or type(ui.outstandingCraftJobs) ~= "table" then return end
+  ui.outstandingCraftJobs[tostring(jobId)] = nil
+end
+
+function ui.recordCraftOutcome(entry, ok, reason, now, kind, jobId, tasks)
+  if type(entry) ~= "table" or not entry.name then return end
+  now = now or nowMs()
+  local eventJobId = jobId or entry.jobId
+  ensureCraftResults()
+  cqueue.recordResult(craftResults, entry.name, ok == true, reason, now)
+  cqueue.pruneResults(craftResults, CRAFT_RESULTS.max)
+  saveCraftResults(craftResults)
+  ui.forgetOutstandingCraft(eventJobId)
+  if not kind then kind = ok and "job_done" or "job_failed" end
+  ui.appendCraftAudit({
+    kind = kind,
+    key = entry.key,
+    name = entry.name,
+    amount = entry.inflightRequest or entry.request,
+    ok = ok == true,
+    reason = reason,
+    jobId = eventJobId,
+  }, now, tasks)
+end
+
 -- compact "how long ago" for craft-result readouts: 45s / 12m / 3h / 2d
 local function agoShort(at, now)
   local s = math.max(0, math.floor(((now or nowMs()) - (tonumber(at) or 0)) / 1000))
@@ -634,6 +688,104 @@ function ui.outstandingCraftList(q, now)
   local max = tonumber(ui.MAX_OUTSTANDING_CRAFTS) or 100
   while #out > max do table.remove(out, 1) end
   return out
+end
+
+function ui.craftEventMessage(message)
+  if message == nil then return "" end
+  return string.upper(tostring(message))
+end
+
+function ui.craftEventDone(message)
+  local msg = ui.craftEventMessage(message)
+  return msg == "JOB_DONE" or msg == "DONE"
+end
+
+function ui.craftEventStarted(message)
+  return ui.craftEventMessage(message) == "CRAFTING_STARTED"
+end
+
+function ui.craftEventFailed(errorFlag, message)
+  if errorFlag == true then return true end
+  local msg = ui.craftEventMessage(message)
+  return msg == "JOB_CANCELED" or msg == "JOB_CANCELLED"
+    or msg == "NOT_CRAFTABLE" or msg == "MISSING_ITEMS" or msg == "UNKNOWN_ERROR"
+end
+
+function ui.craftFailureReason(message)
+  local msg = ui.craftEventMessage(message)
+  if msg ~= "" then return msg end
+  return "craft failed"
+end
+
+function ui.jobMethod(job, method)
+  if type(job) ~= "table" or type(job[method]) ~= "function" then return nil end
+  local ok, value = pcall(job[method])
+  if not ok then return nil end
+  return value
+end
+
+function ui.jobMissing(job)
+  if job == nil then return true end
+  if type(job) ~= "table" then
+    local msg = tostring(job):lower()
+    return msg:find("not_found", 1, true) ~= nil or msg:find("not found", 1, true) ~= nil
+  end
+  return false
+end
+
+function ui.jobFailed(job)
+  if type(job) ~= "table" then return false end
+  for _, field in ipairs({ "canceled", "cancelled", "error", "errored" }) do
+    if job[field] == true then return true end
+  end
+  if job.error ~= nil and job.error ~= false and tostring(job.error) ~= "" then return true end
+  for _, method in ipairs({ "isCanceled", "isCancelled", "hasErrorOccurred" }) do
+    if ui.jobMethod(job, method) == true then return true end
+  end
+  for _, field in ipairs({ "message", "status", "state", "reason" }) do
+    local value = job[field]
+    if value ~= nil and ui.craftEventFailed(false, value) then return true end
+  end
+  return false
+end
+
+function ui.jobDone(job)
+  if ui.jobMissing(job) then return true end
+  if type(job) ~= "table" then return false end
+  if job.done == true or job.isDone == true then return true end
+  if ui.jobMethod(job, "isDone") == true then return true end
+  for _, field in ipairs({ "message", "status", "state" }) do
+    if ui.craftEventDone(job[field]) then return true end
+  end
+  return false
+end
+
+function ui.jobStarted(job)
+  if type(job) ~= "table" then return false end
+  if job.started == true or job.craftingStarted == true then return true end
+  for _, method in ipairs({ "isStarted", "isCraftingStarted" }) do
+    if ui.jobMethod(job, method) == true then return true end
+  end
+  for _, field in ipairs({ "message", "status", "state" }) do
+    if ui.craftEventStarted(job[field]) then return true end
+  end
+  return false
+end
+
+function ui.jobReason(job, fallback)
+  if type(job) == "table" then
+    for _, method in ipairs({ "getErrorMessage", "getMessage", "getStatus", "getState" }) do
+      local value = ui.jobMethod(job, method)
+      if value ~= nil and tostring(value) ~= "" then return tostring(value) end
+    end
+    for _, field in ipairs({ "message", "status", "state", "reason", "error" }) do
+      local value = job[field]
+      if value ~= nil and value ~= false and tostring(value) ~= "" then return tostring(value) end
+    end
+  elseif job ~= nil then
+    return tostring(job)
+  end
+  return fallback or "craft failed"
 end
 
 local function pickTextScale()
@@ -1148,6 +1300,103 @@ local function handleControlMessage(senderId, message)
   ui.flashAt = nowMs()
 end
 
+function ui.handleCraftEvent(errorFlag, jobId, message)
+  if jobId == nil then return end
+  local now = nowMs()
+  local msg = ui.craftEventMessage(message)
+  craftQueue = craftQueue or loadQueue()
+  if ui.craftEventDone(msg) then
+    local _, entry = cqueue.completeJobId(craftQueue, jobId)
+    if entry then
+      saveQueue(craftQueue)
+      ui.recordCraftOutcome(entry, true, nil, now, "job_done", jobId)
+      ui.flashMsg = "done: " .. tostring(entry.name)
+      ui.flashAt = now
+      print("Craft done (" .. tostring(jobId) .. "): " .. tostring(entry.name))
+    end
+    return
+  end
+  if ui.craftEventFailed(errorFlag, msg) then
+    local reason = ui.craftFailureReason(msg)
+    local _, entry = cqueue.failJobId(craftQueue, jobId, now, reason)
+    if entry then
+      saveQueue(craftQueue)
+      ui.recordCraftOutcome(entry, false, reason, now, "job_failed", jobId)
+      ui.flashMsg = "failed: " .. tostring(entry.name)
+      ui.flashAt = now
+      print("Craft failed (" .. tostring(reason) .. "): " .. tostring(entry.name))
+    end
+    return
+  end
+  if ui.craftEventStarted(msg) then
+    local _, entry = cqueue.markJobStarted(craftQueue, jobId, now)
+    if entry then
+      saveQueue(craftQueue)
+      ui.appendCraftAudit({
+        kind = "job_started",
+        key = entry.key,
+        name = entry.name,
+        amount = entry.inflightRequest or entry.request,
+        ok = true,
+        jobId = jobId,
+      }, now)
+    end
+  end
+end
+
+function ui.pollCraftJobCompletion(now, tasks)
+  if not craftQueue or not bridge or type(bridge.getCraftingTask) ~= "function" then return 0 end
+  now = now or nowMs()
+  local changed = 0
+  for _, e in ipairs(cqueue.list(craftQueue)) do
+    local jobId = e.jobId
+    local startedAt = tonumber(e.craftingAt) or 0
+    if e.state == cqueue.CRAFTING and jobId ~= nil and startedAt < now then
+      local ok, job = pcall(bridge.getCraftingTask, jobId)
+      if ok then
+        if ui.jobFailed(job) then
+          local reason = ui.jobReason(job, "craft failed")
+          local _, entry = cqueue.failJobId(craftQueue, jobId, now, reason)
+          if entry then
+            ui.recordCraftOutcome(entry, false, reason, now, "job_failed", jobId, tasks)
+            changed = changed + 1
+            print("Craft failed (" .. tostring(reason) .. "): " .. tostring(entry.name))
+          end
+        elseif ui.jobDone(job) then
+          local _, entry = cqueue.completeJobId(craftQueue, jobId)
+          if entry then
+            ui.recordCraftOutcome(entry, true, nil, now, "job_done", jobId, tasks)
+            changed = changed + 1
+            print("Craft done (" .. tostring(jobId) .. "): " .. tostring(entry.name))
+          end
+        elseif ui.jobStarted(job) then
+          local _, entry = cqueue.markJobStarted(craftQueue, jobId, now)
+          if entry then
+            ui.appendCraftAudit({
+              kind = "job_started",
+              key = entry.key,
+              name = entry.name,
+              amount = entry.inflightRequest or entry.request,
+              ok = true,
+              jobId = jobId,
+            }, now, tasks)
+            changed = changed + 1
+          end
+        end
+      elseif ui.jobMissing(job) then
+        local _, entry = cqueue.completeJobId(craftQueue, jobId)
+        if entry then
+          ui.recordCraftOutcome(entry, true, nil, now, "job_done", jobId, tasks)
+          changed = changed + 1
+          print("Craft done (" .. tostring(jobId) .. "): " .. tostring(entry.name))
+        end
+      end
+    end
+  end
+  if changed > 0 then saveQueue(craftQueue) end
+  return changed
+end
+
 -- Run the approved craft queue through the gated runner. The runner performs at
 -- most one bridge request per approval; nothing crafts unless mode + capability
 -- + approval all pass. Returns nothing; prints a short line per request/failure.
@@ -1243,6 +1492,7 @@ local function processCraftQueue(now, plans)
       end
     end
   end
+  ui.pollCraftJobCompletion(now, tasks)
   if tasks.method ~= "none" and tasks.method ~= "no-bridge" then
     local _
     _, failedInactive, progressedInactive = cqueue.reconcileInactiveCrafting(craftQueue, activeByName,
@@ -1288,9 +1538,12 @@ local function processCraftQueue(now, plans)
   if #summary.requested > 0 or #summary.failed > 0 then
     ensureCraftResults()
     for _, r in ipairs(summary.requested) do
-      cqueue.recordResult(craftResults, r.name, true, nil, now)
-      ui.rememberOutstandingCraft(r.jobId, r.name, now)
-      appendAudit({ kind = "requested", key = r.key, name = r.name, amount = r.amount, ok = true, jobId = r.jobId })
+      local _, activeJob = cqueue.findByJobId(craftQueue, r.jobId)
+      if r.jobId == nil or activeJob then
+        cqueue.recordResult(craftResults, r.name, true, nil, now)
+        ui.rememberOutstandingCraft(r.jobId, r.name, now)
+        appendAudit({ kind = "requested", key = r.key, name = r.name, amount = r.amount, ok = true, jobId = r.jobId })
+      end
     end
     for _, f in ipairs(summary.failed) do
       cqueue.recordResult(craftResults, f.name, false, f.reason, now)
@@ -3071,6 +3324,8 @@ parallel.waitForAny(
       elseif kind == "rednet_message" and ev[4] == control.PROTOCOL then
         -- CTRL-3: inbound control command (off unless config.controlEnabled).
         guard(handleControlMessage, ev[2], ev[3])
+      elseif kind == "rs_crafting" then
+        guard(ui.handleCraftEvent, ev[2], ev[3], ev[4])
       end
     end
   end

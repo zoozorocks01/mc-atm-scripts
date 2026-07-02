@@ -251,6 +251,77 @@ check(files[".atm10-drain-request"] == nil,
 check(taskListCalls >= 1 and perItemCraftingCalls == 0,
   "empty getCraftingTasks snapshot skips per-item isCrafting checks during planning")
 
+local function runManagerWithEvents(label, bridgeHandle, scriptedEvents)
+  files = { [MANAGED_FILE] = "MANAGED" }
+  clock = 0
+  jobSeq = 1000
+  _G.peripheral.wrap = function(n)
+    if n == "monitor_0" then return MON end
+    if n == "rs_bridge_0" then return bridgeHandle end
+    return nil
+  end
+  local eventIndex = 0
+  _G.os.pullEvent = function()
+    eventIndex = eventIndex + 1
+    local ev = scriptedEvents[eventIndex]
+    if not ev then error(SENTINEL, 0) end
+    return table.unpack(ev)
+  end
+  print(label)
+  return pcall(function() dofile("inventory/manager.lua") end)
+end
+
+-- ---- AP-EVENT-1: rs_crafting JOB_DONE closes the tracked job id -------------
+local BRE = fakeBridge()
+local okE, errE = runManagerWithEvents("smoke-auto: rs_crafting JOB_DONE closes AP job id", BRE, {
+  { "timer", 1 },
+  { "rs_crafting", false, 1001, "JOB_DONE" },
+})
+check(okE == false and tostring(errE):find(SENTINEL, 1, true) ~= nil,
+  "AP-EVENT-1: manager handled JOB_DONE then stopped: " .. tostring(errE))
+qfile = textutils.unserialize(files[".atm10-craft-queue"])
+qentry = qfile and qfile.entries and qfile.entries["alltheores:zinc_ingot"]
+check(qentry == nil, "AP-EVENT-1: JOB_DONE removes the tracked queue entry")
+local resultsE = textutils.unserialize(files[".atm10-craft-results"])
+check(type(resultsE) == "table" and resultsE["alltheores:zinc_ingot"]
+  and resultsE["alltheores:zinc_ingot"].ok == true,
+  "AP-EVENT-1: JOB_DONE records a successful terminal craft result")
+
+-- ---- AP-EVENT-2: AP failure event returns the job to retryable APPROVED ------
+local BRF = fakeBridge()
+local okF, errF = runManagerWithEvents("smoke-auto: rs_crafting MISSING_ITEMS fails AP job id", BRF, {
+  { "timer", 1 },
+  { "rs_crafting", true, 1001, "MISSING_ITEMS" },
+})
+check(okF == false and tostring(errF):find(SENTINEL, 1, true) ~= nil,
+  "AP-EVENT-2: manager handled MISSING_ITEMS then stopped: " .. tostring(errF))
+qfile = textutils.unserialize(files[".atm10-craft-queue"])
+qentry = qfile and qfile.entries and qfile.entries["alltheores:zinc_ingot"]
+check(qentry and qentry.state == "APPROVED" and qentry.error == "MISSING_ITEMS" and qentry.jobId == nil,
+  "AP-EVENT-2: MISSING_ITEMS returns the row to APPROVED with the AP reason")
+local resultsF = textutils.unserialize(files[".atm10-craft-results"])
+check(type(resultsF) == "table" and resultsF["alltheores:zinc_ingot"]
+  and resultsF["alltheores:zinc_ingot"].ok == false
+  and resultsF["alltheores:zinc_ingot"].reason == "MISSING_ITEMS",
+  "AP-EVENT-2: MISSING_ITEMS records a failed terminal craft result")
+
+-- ---- AP-POLL-1: missed event fallback closes a vanished getCraftingTask id ---
+local BRP = fakeBridge()
+BRP.getCraftingTask = function() return nil end
+local okP, errP = runManagerWithEvents("smoke-auto: vanished getCraftingTask closes AP job id", BRP, {
+  { "timer", 1 },
+  { "timer", 2 },
+})
+check(okP == false and tostring(errP):find(SENTINEL, 1, true) ~= nil,
+  "AP-POLL-1: manager polled vanished AP job then stopped: " .. tostring(errP))
+qfile = textutils.unserialize(files[".atm10-craft-queue"])
+qentry = qfile and qfile.entries and qfile.entries["alltheores:zinc_ingot"]
+check(qentry == nil, "AP-POLL-1: vanished AP job id removes the tracked queue entry")
+local resultsP = textutils.unserialize(files[".atm10-craft-results"])
+check(type(resultsP) == "table" and resultsP["alltheores:zinc_ingot"]
+  and resultsP["alltheores:zinc_ingot"].ok == true,
+  "AP-POLL-1: vanished AP job records a successful terminal craft result")
+
 -- ---- DRAIN-1: an active drain request ACKs and suppresses craftItem ----------
 -- The flag must be set AFTER boot: stale flags are intentionally deleted during
 -- startup, while an active safereboot request lands while the manager is running.

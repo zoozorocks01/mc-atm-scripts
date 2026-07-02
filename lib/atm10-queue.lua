@@ -165,6 +165,51 @@ function queue.markCrafting(q, name, now, inflightRequest, jobId)
   return q
 end
 
+-- AP craft lifecycle events report only the craft job id. Keep the lookup here
+-- so callers do not duplicate the queue-entry search or jobId string/number
+-- normalization rules.
+function queue.findByJobId(q, jobId)
+  q = queue.normalize(q)
+  if jobId == nil then return nil, nil end
+  local want = tostring(jobId)
+  for key, e in pairs(q.entries) do
+    if type(e) == "table" and e.jobId ~= nil and tostring(e.jobId) == want then
+      return key, e
+    end
+  end
+  return nil, nil
+end
+
+function queue.markJobStarted(q, jobId, now)
+  local key, e = queue.findByJobId(q, jobId)
+  if not e then return q, nil, nil end
+  e.craftingStartedAt = e.craftingStartedAt or (tonumber(now) or 0)
+  e.lastJobEventAt = tonumber(now) or 0
+  e.error = nil
+  return q, e, key
+end
+
+function queue.completeJobId(q, jobId)
+  q = queue.normalize(q)
+  local key, e = queue.findByJobId(q, jobId)
+  if not e then return q, nil, nil end
+  q.entries[key] = nil
+  return q, e, key
+end
+
+function queue.failJobId(q, jobId, now, reason)
+  local key, e = queue.findByJobId(q, jobId)
+  if not e then return q, nil, nil end
+  e.state = queue.APPROVED
+  e.triedAt = tonumber(now) or 0
+  e.error = reason and tostring(reason) or "craft failed"
+  e.craftingAt = nil
+  e.craftingStartedAt = nil
+  e.inflightRequest = nil
+  e.jobId = nil
+  return q, e, key
+end
+
 -- Record a failed craft attempt. The entry stays APPROVED (so it retries after
 -- the runner's backoff); triedAt stamps the backoff start. No-op if absent.
 function queue.markError(q, name, now, reason)
