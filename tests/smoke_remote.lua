@@ -117,6 +117,12 @@ local events = {
   { "monitor_touch", "monitor_0", 31, 13 }, -- [DUST] filter -> 1 match
   { "monitor_touch", "monitor_0", 5, 14 },  -- row tap -> detail card
   { "monitor_touch", "monitor_0", 20, 24 }, -- [SORT:Qty] -> [SORT:A-Z]
+  -- ORDER bite (VIEW-3): this fixture is qty-descending AND alphabetical at once,
+  -- so a label-only check can't tell a real re-sort from a no-op. Clear the filter
+  -- and cycle to Mod sort, where the order genuinely flips: alltheores: rows lead
+  -- and the test: items (Alpha/Beta, qty #1/#2) drop to the bottom.
+  { "monitor_touch", "monitor_0", 2, 13 },  -- [ALL] filter -> full list again
+  { "monitor_touch", "monitor_0", 20, 24 }, -- [SORT:A-Z] -> [SORT:Mod] (order must flip)
 }
 local ei = 0
 _G.os.pullEvent = function()
@@ -138,6 +144,15 @@ check(blob:find("1/13 shown", 1, true) ~= nil, "DUST filter narrowed the list to
 check(blob:find("ITEM DETAIL", 1, true) ~= nil, "row tap opened the read-only detail card")
 check(blob:find("alltheores:zinc_dust", 1, true) ~= nil, "detail card includes the registry id")
 check(blob:find("[SORT:A-Z]", 1, true) ~= nil, "sort chip cycles from Qty to A-Z")
+check(blob:find("[SORT:Mod]", 1, true) ~= nil, "sort chip cycles on to Mod")
+-- The FINAL render (after the Mod tap) must actually reorder the rows: row 1 is
+-- Copper Ingot (first alltheores: by name), not qty-leader Alpha Item (test:).
+local lastRow1 = nil
+for i = #rendered, 1, -1 do
+  if rendered[i]:match("^%s+1%. ") then lastRow1 = rendered[i]; break end
+end
+check(lastRow1 ~= nil and lastRow1:find("Copper Ingot", 1, true) ~= nil,
+  "sort tap actually REORDERS the list (Mod sort row 1 = Copper Ingot, got: " .. tostring(lastRow1) .. ")")
 check(#sent == 0, "remote viewer sent no rednet control messages")
 
 print("")
