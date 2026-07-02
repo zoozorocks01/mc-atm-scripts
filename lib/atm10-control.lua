@@ -398,6 +398,39 @@ function control.activeCraftCount(bridge, fallbackNames)
   return snap.count, snap.method
 end
 
+-- Per-job settled check over the craftItem job ids the manager recorded in its
+-- drain snapshot. This closes the CALCULATION-phase hole: AP keeps ticking a job
+-- (and will fire a CC event at this computer when its preview resolves) even
+-- while getCraftingTasks reads empty, because that list only mirrors RS's ACTIVE
+-- tasks. A job is SETTLED once the bridge no longer knows its id (AP purged it,
+-- so every event has already fired) or it reports done/canceled/errored.
+-- outstanding = { {id=, name=, at=}, ... } from .atm10-craftstate.
+-- Returns the unsettled count, or nil when there are recorded jobs but no
+-- getCraftingTask API to check them -- callers must then use the blind window.
+function control.unsettledJobs(bridge, outstanding)
+  if type(outstanding) ~= "table" or #outstanding == 0 then return 0 end
+  if not bridge or type(bridge.getCraftingTask) ~= "function" then return nil end
+  local unsettled = 0
+  for _, e in ipairs(outstanding) do
+    local id = tonumber(type(e) == "table" and e.id or nil)
+    if id then
+      local ok, job = pcall(bridge.getCraftingTask, id)
+      if ok and type(job) == "table" then
+        local settled = false
+        for _, m in ipairs({ "isDone", "isCanceled", "hasErrorOccurred", "isCalculationNotSuccessful" }) do
+          if type(job[m]) == "function" then
+            local mok, v = pcall(job[m])
+            if mok and v == true then settled = true; break end
+          end
+        end
+        if not settled then unsettled = unsettled + 1 end
+      end
+      -- pcall failure or nil job = NOT_FOUND = purged = already fired everything.
+    end
+  end
+  return unsettled
+end
+
 -- ===========================================================================
 -- CONTROL COMMANDS (CTRL-1): the foundation for the eventual control center.
 -- A `command` is a pure data shape { action, target, args, token }; dispatch()

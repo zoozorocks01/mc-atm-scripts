@@ -139,6 +139,7 @@ local ui = {            -- bundled flash/page transient scalars (B1-prep)
   FLASH_MS = 4000,      -- how long an approve/cancel confirmation stays up
   frame = nil,          -- B1: in-progress render buffer (set during a render)
   prevFrame = nil,      -- B1: last rendered buffer, for the flicker-free diff
+  outstandingCrafts = {}, -- craftItem job ids for safereboot's settled check (rides ui: locals cap)
 }
 local smartRowRegions = {} -- tappable suggestion rows on the Smart page
 local smartButtons = nil   -- enable/disable + clear toggle row on the Smart page
@@ -403,11 +404,20 @@ end
 -- computer is safe even after the manager is terminated (the file outlives the
 -- process). Fixed-size; overwrites in place (no growth). Fail-safe: best effort.
 local function writeCraftState(now, crafting, craftingNames, metrics)
+  -- Prune the recorded craftItem job ids: AP purges done jobs after ~5min, so a
+  -- 30min TTL (+ newest-32 cap) only bounds the file, never hides a live job.
+  local keep = {}
+  for _, e in ipairs(ui.outstandingCrafts or {}) do
+    if type(e) == "table" and tonumber(e.at) and now - e.at < 1800000 then keep[#keep + 1] = e end
+  end
+  while #keep > 32 do table.remove(keep, 1) end
+  ui.outstandingCrafts = keep
   local state = {
     at = now,
     lastCraftAt = lastCraftAt,
     crafting = tonumber(crafting) or 0,
     craftingNames = craftingNames or {},
+    outstanding = keep,
   }
   if type(metrics) == "table" then
     for k, v in pairs(metrics) do state[k] = v end
@@ -940,6 +950,17 @@ local function requestCraft(name, count)
   if result == nil or result == false then return false, "bridge rejected craft" end
   if type(result) == "table" and result.success == false then
     return false, tostring(result.error or "bridge rejected craft")
+  end
+  -- On AP 0.7.6x craftItem returns a live job handle. Record its id: AP keeps
+  -- ticking the job (and will fire a CC event here when its state changes) even
+  -- while the task list reads empty (preview/CALCULATION phase), so safereboot
+  -- must verify these ids via getCraftingTask(id) before detaching this computer.
+  -- Pruned by TTL/cap when the craftstate snapshot is written each cycle.
+  if type(result) == "table" and type(result.getId) == "function" then
+    local okId, id = pcall(result.getId)
+    if okId and tonumber(id) then
+      ui.outstandingCrafts[#ui.outstandingCrafts + 1] = { id = tonumber(id), name = name, at = nowMs() }
+    end
   end
   return true
 end

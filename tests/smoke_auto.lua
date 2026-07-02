@@ -101,8 +101,23 @@ _G.fs = {
   makeDir = function() end,
 }
 
+-- Real (minimal) serializer so asserts can inspect WRITTEN file content (e.g. the
+-- drain snapshot's outstanding job ids). Reads stay scripted via unserialize below.
+local function ser(v)
+  if type(v) == "table" then
+    local parts = {}
+    for k, val in pairs(v) do
+      local key = type(k) == "string" and ("[" .. string.format("%q", k) .. "]") or ("[" .. tostring(k) .. "]")
+      parts[#parts + 1] = key .. "=" .. ser(val)
+    end
+    return "{" .. table.concat(parts, ",") .. "}"
+  elseif type(v) == "string" then
+    return string.format("%q", v)
+  end
+  return tostring(v)
+end
 _G.textutils = {
-  serialize = function() return "{}" end,
+  serialize = ser,
   -- the managed file maps to the real store; everything else is empty
   unserialize = function(text) if text == "MANAGED" then return MANAGED_STORE end return {} end,
 }
@@ -143,7 +158,12 @@ local function fakeBridge()
     getCraftingTasks = function() taskListCalls = taskListCalls + 1; return {} end,
     isItemCrafting = function() perItemCraftingCalls = perItemCraftingCalls + 1; return false end,
     isCrafting = function() perItemCraftingCalls = perItemCraftingCalls + 1; return false end,
-    craftItem = function(arg) crafted[#crafted + 1] = arg; return true end,
+    -- Returns a job handle like AP 0.7.6x (getId) so the manager's outstanding-id
+    -- recording path runs; older-build boolean returns are covered by smoke.lua.
+    craftItem = function(arg)
+      crafted[#crafted + 1] = arg
+      return { getId = function() return 4242 end }
+    end,
     getUsedItemStorage = function() return 1000 end,
     getTotalItemStorage = function() return 100000 end,
     getAvailableItemStorage = function() return 99000 end,
@@ -202,6 +222,18 @@ check(files[".atm10-craft-audit"] ~= nil,
   "auto mode writes the bounded craft audit file for live diagnostics")
 check(taskListCalls >= 1 and perItemCraftingCalls == 0,
   "empty getCraftingTasks snapshot skips per-item isCrafting checks during planning")
+
+-- The safereboot calc-phase fix: craftItem's returned job id must be recorded and
+-- persisted into the drain snapshot so safereboot can verify it via
+-- getCraftingTask(id) even while AP's task list reads empty. BITING: neutralize
+-- the recording in requestCraft (or drop `outstanding` from writeCraftState) and
+-- these fail.
+local craftstate = files[".atm10-craftstate"]
+check(craftstate ~= nil, "drain snapshot (.atm10-craftstate) written during the auto cycle")
+check(craftstate ~= nil and craftstate:find("outstanding", 1, true) ~= nil,
+  "drain snapshot persists the outstanding craftItem job list")
+check(craftstate ~= nil and craftstate:find("4242", 1, true) ~= nil,
+  "drain snapshot records the job id returned by craftItem (calc-phase reboot guard)")
 
 -- ---- STAB-2: craft-path attachment recheck ---------------------------------
 -- Race the #1 server-crash trigger: the bridge is CONNECTED when scan reads it
