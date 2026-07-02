@@ -360,6 +360,10 @@ We can't patch the mod, so we remove the triggers:
   how to exit for reload, use the old safe path once (`update`, stop the old
   manager, then run `atm10-reload`). After that, normal deploys are `update` then
   `atm10-reload`.
+  Aborting `safereboot` or `atm10-reload` mid-drain (Ctrl+T) is safe: the request
+  flag stops being renewed, the manager resumes crafting within about a minute
+  (a `[DRAINING]` chip shows on the dashboard while a drain is live), and the
+  startup wrapper ignores and deletes a stale reload flag.
 - **Force-load the CC chunk.** Keep the manager computer + rs_bridge in a
   force-loaded chunk (Chunky `/chunky force`, FTB Chunks claim+load, or spawn
   chunks) so they never detach when you walk away / log off. This removes the

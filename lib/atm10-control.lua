@@ -312,6 +312,21 @@ function control.rebootSafety(state)
   return { safe = true, crafting = 0, secondsLeft = 0, reason = "no crafts in flight" }
 end
 
+-- A drain request is a standing order only while its requester (safereboot /
+-- atm10-reload) is alive to renew it. Both rewrite the flag with renewedAt every
+-- poll; if the requester is aborted (Ctrl+T) or crashes mid-drain, the leftover
+-- flag goes stale and must NOT quiesce the manager forever. A future timestamp
+-- still counts as fresh so clock weirdness can never strand a live drain.
+control.DRAIN_REQUEST_TTL_MS = 60000
+
+function control.drainRequestFresh(data, now, ttlMs)
+  if type(data) ~= "table" then return false end
+  local ts = tonumber(data.renewedAt) or tonumber(data.requestedAt)
+  if not ts then return false end
+  local ttl = tonumber(ttlMs) or control.DRAIN_REQUEST_TTL_MS
+  return ((tonumber(now) or 0) - ts) <= ttl
+end
+
 function control.craftJobSettled(job)
   if job == nil then return true end
   if type(job) ~= "table" then

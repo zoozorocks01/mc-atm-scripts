@@ -103,6 +103,12 @@ Bootstrap caveat: the first live deploy onto a manager that predates
 `atm10-reload` may need the old safe stop path once. After the reload-capable
 manager is running, use `update` -> `atm10-reload`.
 
+Aborting `safereboot`/`atm10-reload` mid-drain (Ctrl+T) is safe: the drain flag
+stops being renewed and the manager resumes crafting within about a minute (the
+dashboard shows a `[DRAINING]` chip while a drain is live). A stale reload flag
+is ignored and deleted by the startup wrapper, so an aborted reload can never
+make the wrapper exit on a later, unrelated program stop.
+
 Host-side console commands:
 
 - `tools/atm10-diagnostics.sh cc-dump 6` is read-only and safe.

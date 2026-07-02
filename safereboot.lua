@@ -130,7 +130,7 @@ end
 print("safereboot: draining crafts before reboot.  Ctrl+T to abort.")
 
 local requestedAt = nowMs()
-if not writeSerializedFile(DRAIN_REQUEST_FILE, { requestedAt = requestedAt }) then
+if not writeSerializedFile(DRAIN_REQUEST_FILE, { requestedAt = requestedAt, renewedAt = requestedAt }) then
   print("safereboot: could not write " .. DRAIN_REQUEST_FILE .. "; aborting")
   return
 end
@@ -140,9 +140,10 @@ local lastActiveAt = nil
 local startedAt = nowMs()
 while true do
   local now = nowMs()
-  if not fs.exists(DRAIN_REQUEST_FILE) then
-    writeSerializedFile(DRAIN_REQUEST_FILE, { requestedAt = requestedAt })
-  end
+  -- Renew every poll: the manager honors the request only while it stays fresh
+  -- (control.DRAIN_REQUEST_TTL_MS), so aborting this program (Ctrl+T) cannot
+  -- leave the manager quiesced forever on a dead requester's order.
+  writeSerializedFile(DRAIN_REQUEST_FILE, { requestedAt = requestedAt, renewedAt = now })
 
   local craftState = readCraftState()
   local acked = drainAcked(craftState, requestedAt)

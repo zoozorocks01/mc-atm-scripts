@@ -343,7 +343,10 @@ _G.os.pullEvent = function()
   local ev = eventsD[eid]
   if not ev then error(SENTINEL, 0) end
   if ev[1] == "drain_request" then
-    files[".atm10-drain-request"] = textutils.serialize({ requestedAt = drainRequestedAt })
+    -- renewedAt far in the future = a LIVE requester (safereboot renews every poll;
+    -- the stub clock advances 50ms per os.epoch call, so a bare requestedAt could
+    -- cross the freshness TTL mid-scan and turn this test flaky)
+    files[".atm10-drain-request"] = textutils.serialize({ requestedAt = drainRequestedAt, renewedAt = 1e9 })
     return "weird_unhandled_event", "drain"
   end
   return table.unpack(ev)
@@ -360,6 +363,43 @@ check(type(drainState) == "table" and drainState.drainAck == true
   "DRAIN-1: manager persisted a matching drain ack in craftstate")
 check(files[".atm10-drain-request"] ~= nil,
   "DRAIN-1: active drain flag remains for safereboot while the manager is holding")
+
+-- ---- DRAIN-2: a STALE drain request must NOT quiesce the manager --------------
+-- If safereboot/atm10-reload is aborted (Ctrl+T) mid-drain, its flag stops being
+-- renewed. The manager must treat the dead requester's order as expired and keep
+-- crafting, instead of holding fire forever with no one coming back to reboot.
+files = { [MANAGED_FILE] = "MANAGED" }
+clock = 0
+jobSeq = 1000
+local staleCrafted = {}
+local BRS = fakeBridge()
+BRS.craftItem = function(arg) staleCrafted[#staleCrafted + 1] = arg; return fakeCraftJob() end
+_G.peripheral.wrap = function(n)
+  if n == "monitor_0" then return MON end
+  if n == "rs_bridge_0" then return BRS end
+  return nil
+end
+local eventsS, eis = { { "stale_drain" }, { "timer", 1 } }, 0
+_G.os.pullEvent = function()
+  eis = eis + 1
+  local ev = eventsS[eis]
+  if not ev then error(SENTINEL, 0) end
+  if ev[1] == "stale_drain" then
+    -- last renewal long before any reachable clock value = requester died mid-drain
+    files[".atm10-drain-request"] = textutils.serialize({ requestedAt = -999999, renewedAt = -999999 })
+    return "weird_unhandled_event", "stale"
+  end
+  return table.unpack(ev)
+end
+print("smoke-auto: STALE drain request is ignored (aborted safereboot cannot quiesce)")
+local okS, errS = pcall(function() dofile("inventory/manager.lua") end)
+check(okS == false and tostring(errS):find(SENTINEL, 1, true) ~= nil,
+  "DRAIN-2: manager reached the sentinel with a stale drain flag present: " .. tostring(errS))
+check(#staleCrafted > 0,
+  "DRAIN-2: stale drain flag did NOT hold craftItem (dead requester's order expired)")
+local staleState = textutils.unserialize(files[".atm10-craftstate"])
+check(type(staleState) ~= "table" or staleState.drainAck ~= true,
+  "DRAIN-2: manager did not ack a stale drain request")
 
 -- ---- RELOAD-1: reload drain exits the manager without firing craftItem --------
 files = { [MANAGED_FILE] = "MANAGED" }
@@ -380,7 +420,8 @@ _G.os.pullEvent = function()
   local ev = eventsL[eil]
   if not ev then error(SENTINEL, 0) end
   if ev[1] == "reload_request" then
-    files[".atm10-drain-request"] = textutils.serialize({ requestedAt = reloadRequestedAt, reload = true })
+    -- renewedAt in the future = a LIVE atm10-reload (it renews every poll; see DRAIN-1)
+    files[".atm10-drain-request"] = textutils.serialize({ requestedAt = reloadRequestedAt, renewedAt = 1e9, reload = true })
     files[".atm10-reload-request"] = tostring(reloadRequestedAt)
     return "weird_unhandled_event", "reload"
   end

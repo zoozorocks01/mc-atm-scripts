@@ -70,11 +70,13 @@ _G.os = {
 }
 
 local sleeps = 0
+local sleepDrainReq = nil -- drain request as the manager would see it mid-wait
 _G.sleep = function(seconds)
   sleeps = sleeps + 1
   now = now + ((tonumber(seconds) or 0) * 1000)
   if sleeps == 1 then
     local req = textutils.unserialize(files[".atm10-drain-request"])
+    sleepDrainReq = req
     files[".atm10-craftstate"] = textutils.serialize({
       drainAck = true,
       reloadAck = true,
@@ -109,6 +111,50 @@ check(package.loaded["not-atm10"] ~= nil,
   "atm10-reload left unrelated package.loaded entries alone")
 check(#shellRuns == 1 and shellRuns[1] == "startup",
   "atm10-reload starts the normal startup wrapper once")
+check(sleepDrainReq ~= nil and tonumber(sleepDrainReq.renewedAt) ~= nil,
+  "atm10-reload stamps renewedAt on the drain request (manager freshness gate input)")
+
+-- ---- wrapper: a FRESH reload flag makes the startup wrapper exit for reload ----
+-- The wrapper is what atm10-reload hands control back to; it must exit (not
+-- restart) only while a live reload is actually in flight.
+_G.colors = { white = 1, orange = 2, yellow = 4, red = 8 }
+_G.term = { clear = function() end, setCursorPos = function() end, setTextColor = function() end }
+_G.parallel = { waitForAny = function(a) a() end }
+_G.sleep = function() end
+
+files = { [".atm10-heartbeat"] = tostring(now), [".atm10-reload-request"] = tostring(now) }
+local freshRuns = 0
+_G.shell = { run = function(program) freshRuns = freshRuns + 1; return true end }
+print("smoke-reload: wrapper exits for a FRESH reload flag")
+local wOk, wErr = pcall(function() dofile("inventory/manager-startup.lua") end)
+check(wOk == true, "wrapper returned cleanly for a fresh reload flag: " .. tostring(wErr))
+check(freshRuns == 1, "wrapper ran the program once, then exited for reload")
+check(files[".atm10-reload-request"] ~= nil,
+  "wrapper leaves the fresh reload flag for atm10-reload to clean up")
+check(files[".atm10-heartbeat"] == nil,
+  "wrapper dropped the heartbeat so atm10-reload sees the manager as stopped")
+
+-- ---- wrapper: a STALE reload flag must NOT strand the watchdog -----------------
+-- If atm10-reload was aborted mid-flight, its flag stops being renewed. On the
+-- manager's NEXT natural stop (days later), the wrapper must delete the stale
+-- flag and keep restarting -- exiting for it would silently kill the watchdog.
+files = { [".atm10-reload-request"] = tostring(now - 3600000) }
+local staleRuns = 0
+_G.shell = {
+  run = function(program)
+    staleRuns = staleRuns + 1
+    if staleRuns >= 2 then error("Terminated", 0) end -- end the test loop via Ctrl+T path
+    return true
+  end,
+}
+print("smoke-reload: wrapper ignores + deletes a STALE reload flag")
+local sOk, sErr = pcall(function() dofile("inventory/manager-startup.lua") end)
+check(sOk == false and tostring(sErr) == "Terminated",
+  "wrapper kept looping past the stale flag (ended by the scripted Ctrl+T): " .. tostring(sErr))
+check(staleRuns == 2,
+  "wrapper RESTARTED the program after a stale reload flag instead of exiting")
+check(files[".atm10-reload-request"] == nil,
+  "wrapper deleted the stale reload flag (dead requester)")
 
 print((failures == 0) and "SMOKE-RELOAD OK" or ("SMOKE-RELOAD FAILED (" .. failures .. ")"))
 os.exit(failures == 0 and 0 or 1)

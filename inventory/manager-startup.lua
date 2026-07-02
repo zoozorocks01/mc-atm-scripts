@@ -2,6 +2,7 @@ local PROGRAM = "inventory-info"
 local RESTART_DELAY = 5
 local HEARTBEAT_FILE = ".atm10-heartbeat"
 local RELOAD_REQUEST_FILE = ".atm10-reload-request"
+local RELOAD_REQUEST_TTL_MS = 600000 -- honor a reload flag only this soon after its last renewal
 local WATCHDOG_TIMEOUT = 90 -- seconds without a heartbeat before the program is treated as hung
 local WATCHDOG_POLL = 5
 -- Crash-loop backoff: a program that exits in under FAST_FAIL_SECONDS counts as a
@@ -41,7 +42,19 @@ local function backoffDelay(fastFailures)
 end
 
 local function reloadRequested()
-  return fs.exists(RELOAD_REQUEST_FILE)
+  if not fs.exists(RELOAD_REQUEST_FILE) then return false end
+  local f = fs.open(RELOAD_REQUEST_FILE, "r")
+  local ts = nil
+  if f then
+    ts = tonumber(((f.readAll() or "")):match("%-?%d+"))
+    f.close()
+  end
+  if ts and (nowMs() - ts) <= RELOAD_REQUEST_TTL_MS then return true end
+  -- Stale/garbled flag: atm10-reload renews it every poll while alive, so this
+  -- requester died mid-flight. Exiting for it would silently kill the watchdog
+  -- on the NEXT natural program stop -- delete it and keep restarting instead.
+  pcall(fs.delete, RELOAD_REQUEST_FILE)
+  return false
 end
 
 -- Ends the parallel run (restarting the PROGRAM) when the program stops emitting

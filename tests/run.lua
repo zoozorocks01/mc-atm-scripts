@@ -106,6 +106,21 @@ do
   t.eq(control.unsettledJobs(methodless, { { id = 1 } }).count, 1, "unsettledJobs: unqueryable job state stays conservative (unsettled)")
 end
 
+-- control.drainRequestFresh: the aborted-drain staleness gate. safereboot/atm10-reload
+-- renew the flag every poll; a flag whose requester died must go stale so the manager
+-- resumes crafting. Biting: dropping the TTL check or the renewedAt preference flips these.
+do
+  t.eq(control.drainRequestFresh(nil, 1000), false, "drainFresh: no data is not fresh")
+  t.eq(control.drainRequestFresh({}, 1000), false, "drainFresh: no timestamps is not fresh")
+  t.eq(control.drainRequestFresh({ requestedAt = 500 }, 1000), true, "drainFresh: recent requestedAt-only (first write) is fresh")
+  t.eq(control.drainRequestFresh({ requestedAt = 500 }, 70000), false, "drainFresh: unrenewed request goes stale past the TTL")
+  t.eq(control.drainRequestFresh({ requestedAt = 500, renewedAt = 69000 }, 70000), true, "drainFresh: renewal keeps an old request alive")
+  t.eq(control.drainRequestFresh({ requestedAt = 500, renewedAt = 500 }, 70000), false, "drainFresh: a dead requester's last renewal expires")
+  t.eq(control.drainRequestFresh({ renewedAt = 90000 }, 70000), true, "drainFresh: future timestamp still fresh (clock skew never strands a live drain)")
+  t.eq(control.drainRequestFresh({ renewedAt = 1000 }, 5000, 3000), false, "drainFresh: caller-supplied TTL is respected")
+  t.eq(control.drainRequestFresh({ renewedAt = "junk" }, 1000), false, "drainFresh: non-numeric timestamps are not fresh")
+end
+
 -- control.activeCraftCount: the LIVE bridge query the hardened safereboot relies on.
 -- Biting: wrong method preference / fallback / nil-handling changes count or method.
 do

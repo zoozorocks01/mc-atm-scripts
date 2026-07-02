@@ -418,9 +418,14 @@ function ui.readSerializedFile(path)
   return nil
 end
 
-function ui.drainRequest()
+function ui.drainRequest(now)
   local data = ui.readSerializedFile(FILES.drainRequest)
-  if type(data) == "table" then return data end
+  -- Freshness-gated: safereboot/atm10-reload renew the flag every poll, so a
+  -- stale one (requester aborted mid-drain) must not quiesce crafting forever.
+  -- Boot-time cleanup still deletes any leftover flag outright.
+  if type(data) == "table" and control.drainRequestFresh(data, now or nowMs()) then
+    return data
+  end
   return nil
 end
 
@@ -444,7 +449,7 @@ local function writeCraftState(now, crafting, craftingNames, metrics)
   if type(metrics) == "table" then
     for k, v in pairs(metrics) do state[k] = v end
   end
-  local drain = ui.drainRequest()
+  local drain = ui.drainRequest(now)
   if drain then
     state.drainAck = true
     state.drainAckAt = now
@@ -455,7 +460,7 @@ local function writeCraftState(now, crafting, craftingNames, metrics)
 end
 
 function ui.writeDrainAck(now)
-  local drain = ui.drainRequest()
+  local drain = ui.drainRequest(now)
   if not drain then return false end
   local state = ui.readSerializedFile(FILES.craftstate) or {}
   state.at = now
@@ -2677,6 +2682,13 @@ local function draw(data)
     mwrite(x, 4, craftChip, craftLive and colors.black or colors.lightGray,
       craftLive and colors.lime or colors.black)
     x = x + #craftChip + 1
+    if data.drainRequested then
+      -- safereboot/atm10-reload drain in progress: crafts held on purpose. Without
+      -- this chip a drain looks like a silent craft outage from the dashboard.
+      local draining = "[DRAINING]"
+      mwrite(x, 4, draining, colors.black, colors.yellow)
+      x = x + #draining + 1
+    end
     if data.bridgeDegraded then
       local held = "[BRIDGE HELD]"
       mwrite(x, 4, held, colors.black, colors.orange)

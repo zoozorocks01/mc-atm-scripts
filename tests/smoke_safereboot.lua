@@ -94,8 +94,11 @@ _G.peripheral = {
 }
 
 local sleeps = 0
+local renewals = {} -- drain-request snapshots taken each poll (renewal liveness)
 _G.sleep = function(seconds)
   sleeps = sleeps + 1
+  local req = textutils.unserialize(files[".atm10-drain-request"]) or {}
+  renewals[#renewals + 1] = { renewedAt = tonumber(req.renewedAt), requestedAt = req.requestedAt }
   now = now + ((tonumber(seconds) or 0) * 1000)
   if sleeps == 1 then
     local req = textutils.unserialize(files[".atm10-drain-request"])
@@ -122,6 +125,12 @@ check(getTaskCalls >= 2,
   "safereboot polled getCraftingTask for the persisted AP job id")
 check(rebooted == true,
   "safereboot called os.reboot only after the drain checks passed")
+check(#renewals >= 2 and renewals[1].renewedAt ~= nil
+  and renewals[#renewals].renewedAt ~= nil
+  and renewals[#renewals].renewedAt > renewals[1].renewedAt,
+  "safereboot RENEWS the drain request every poll (an aborted run goes stale for the manager)")
+check(renewals[#renewals].requestedAt == renewals[1].requestedAt,
+  "safereboot renewals keep requestedAt stable so the manager's ack still matches")
 
 print((failures == 0) and "SMOKE-SAFEREBOOT OK" or ("SMOKE-SAFEREBOOT FAILED (" .. failures .. ")"))
 os.exit(failures == 0 and 0 or 1)

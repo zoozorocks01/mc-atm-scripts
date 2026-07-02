@@ -62,19 +62,22 @@ local function drainAcked(state, requestedAt)
   return tostring(state.drainRequestAt) == tostring(requestedAt)
 end
 
-local function writeRequests(requestedAt)
-  local drainOk = writeSerializedFile(DRAIN_REQUEST_FILE, { requestedAt = requestedAt, reload = true })
-  local reloadOk = writeText(RELOAD_REQUEST_FILE, tostring(requestedAt))
+-- Both flags carry a renewal timestamp and are rewritten every poll: the manager
+-- and the startup wrapper honor them only while fresh, so an aborted (Ctrl+T)
+-- atm10-reload cannot quiesce the manager forever or strand the wrapper into
+-- exiting on a later, unrelated program stop.
+local function writeRequests(requestedAt, now)
+  now = now or requestedAt
+  local drainOk = writeSerializedFile(DRAIN_REQUEST_FILE,
+    { requestedAt = requestedAt, renewedAt = now, reload = true })
+  local reloadOk = writeText(RELOAD_REQUEST_FILE, tostring(now))
   return drainOk and reloadOk
 end
 
 local function waitForManagerToDrainAndStop(requestedAt)
   while true do
-    if not fs.exists(DRAIN_REQUEST_FILE) or not fs.exists(RELOAD_REQUEST_FILE) then
-      writeRequests(requestedAt)
-    end
-
     local now = nowMs()
+    writeRequests(requestedAt, now)
     local fresh, heartbeatReason = heartbeatFresh(now)
     if not fresh then
       print("atm10-reload: manager not running (" .. heartbeatReason .. ")")
