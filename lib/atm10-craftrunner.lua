@@ -123,7 +123,7 @@ end
 --   now           : current time in ms
 --   cooldownMs    : retry backoff after a failed craft (ms; <=0 disables)
 --   isCrafting    : function(name) -> bool   (is RS already crafting it?)
---   craft         : function(name, amount) -> ok, reason   (the bridge call)
+--   craft         : function(name, amount) -> ok, reason, jobId   (the bridge call)
 --   recordRequest : function(name, amount, now)            (optional; ledger write)
 --   maxPerCycle   : cap on NEW bridge requests issued this run (<=0/nil = unlimited);
 --                   over-cap entries stay APPROVED for a later cycle, so the operator
@@ -253,12 +253,13 @@ function runner.run(q, deps)
             -- canExecute checks the gate WITHOUT running the executor, so we can tell
             -- a closed gate (leave APPROVED, quiet) apart from a bridge rejection.
             if control.canExecute(action, policy) then
-              local ok, reason = control.execute(action, policy) -- only here does the bridge run
+              local ok, reason, jobId = control.execute(action, policy) -- only here does the bridge run
               if ok then
                 if recordRequest then recordRequest(e.name, fireAmount, now) end
                 requestedThisRun[e.name] = true
+                if jobId ~= nil then e.jobId = jobId end
                 summary.requested[#summary.requested + 1] = {
-                  key = ekey, name = e.name, label = e.label, kind = e.kind, amount = fireAmount,
+                  key = ekey, name = e.name, label = e.label, kind = e.kind, amount = fireAmount, jobId = jobId,
                 }
                 summary.changed = true
                 fired = fired + 1
@@ -273,7 +274,7 @@ function runner.run(q, deps)
                     e.error = nil -- a partial fire is not an error; keep it APPROVED for next cycle
                   end
                 else
-                  cqueue.markCrafting(q, ekey, now, fireAmount)
+                  cqueue.markCrafting(q, ekey, now, fireAmount, jobId)
                 end
               else
                 cqueue.markError(q, ekey, now, reason)

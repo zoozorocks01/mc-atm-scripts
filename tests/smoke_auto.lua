@@ -101,10 +101,39 @@ _G.fs = {
   makeDir = function() end,
 }
 
+local function smokeSerialize(value, seen)
+  local t = type(value)
+  if t == "nil" or t == "boolean" or t == "number" then return tostring(value) end
+  if t == "string" then return string.format("%q", value) end
+  if t ~= "table" then error("cannot serialize " .. t) end
+  seen = seen or {}
+  if seen[value] then error("cannot serialize recursive table") end
+  seen[value] = true
+  local keys, parts = {}, {}
+  for k in pairs(value) do keys[#keys + 1] = k end
+  table.sort(keys, function(a, b)
+    if type(a) == type(b) then return tostring(a) < tostring(b) end
+    return type(a) < type(b)
+  end)
+  for _, k in ipairs(keys) do
+    parts[#parts + 1] = "[" .. smokeSerialize(k, seen) .. "]=" .. smokeSerialize(value[k], seen)
+  end
+  seen[value] = nil
+  return "{" .. table.concat(parts, ",") .. "}"
+end
+
 _G.textutils = {
-  serialize = function() return "{}" end,
-  -- the managed file maps to the real store; everything else is empty
-  unserialize = function(text) if text == "MANAGED" then return MANAGED_STORE end return {} end,
+  serialize = smokeSerialize,
+  -- the managed file maps to the real store; everything else parses like CC data.
+  unserialize = function(text)
+    if text == "MANAGED" then return MANAGED_STORE end
+    if type(text) ~= "string" then return nil end
+    local chunk = load("return " .. text, "smoke-textutils", "t", {})
+    if not chunk then return nil end
+    local ok, data = pcall(chunk)
+    if not ok then return nil end
+    return data
+  end,
 }
 
 _G.rs = {
@@ -127,6 +156,12 @@ end
 
 -- bridge: zinc_ingot is a CRAFTABLE deficit (1000 < 5000). craftItem is a SPY.
 local crafted = {}
+local jobSeq = 1000
+local function fakeCraftJob()
+  jobSeq = jobSeq + 1
+  local id = jobSeq
+  return { getId = function() return id end }
+end
 local taskListCalls, perItemCraftingCalls = 0, 0
 local function fakeBridge()
   local items = {
@@ -143,7 +178,7 @@ local function fakeBridge()
     getCraftingTasks = function() taskListCalls = taskListCalls + 1; return {} end,
     isItemCrafting = function() perItemCraftingCalls = perItemCraftingCalls + 1; return false end,
     isCrafting = function() perItemCraftingCalls = perItemCraftingCalls + 1; return false end,
-    craftItem = function(arg) crafted[#crafted + 1] = arg; return true end,
+    craftItem = function(arg) crafted[#crafted + 1] = arg; return fakeCraftJob() end,
     getUsedItemStorage = function() return 1000 end,
     getTotalItemStorage = function() return 100000 end,
     getAvailableItemStorage = function() return 99000 end,
@@ -200,6 +235,15 @@ end
 check(hit, "auto mode crafted the deficit item (zinc_ingot) with a positive count")
 check(files[".atm10-craft-audit"] ~= nil,
   "auto mode writes the bounded craft audit file for live diagnostics")
+local qfile = textutils.unserialize(files[".atm10-craft-queue"])
+local qentry = qfile and qfile.entries and qfile.entries["alltheores:zinc_ingot"]
+check(qentry and qentry.jobId == 1001,
+  "auto mode stores craftItem job id on the queue entry")
+local craftstate = textutils.unserialize(files[".atm10-craftstate"])
+check(type(craftstate) == "table" and type(craftstate.outstanding) == "table"
+  and craftstate.outstanding[1] and craftstate.outstanding[1].id == 1001
+  and craftstate.outstanding[1].name == "alltheores:zinc_ingot",
+  "craftstate exposes the outstanding craftItem job id for safereboot")
 check(taskListCalls >= 1 and perItemCraftingCalls == 0,
   "empty getCraftingTasks snapshot skips per-item isCrafting checks during planning")
 

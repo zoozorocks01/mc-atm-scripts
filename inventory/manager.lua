@@ -139,6 +139,8 @@ local ui = {            -- bundled flash/page transient scalars (B1-prep)
   FLASH_MS = 4000,      -- how long an approve/cancel confirmation stays up
   frame = nil,          -- B1: in-progress render buffer (set during a render)
   prevFrame = nil,      -- B1: last rendered buffer, for the flicker-free diff
+  outstandingCraftJobs = nil, -- AP craft jobs seen from craftItem; exposed for safereboot
+  MAX_OUTSTANDING_CRAFTS = 100,
 }
 local smartRowRegions = {} -- tappable suggestion rows on the Smart page
 local smartButtons = nil   -- enable/disable + clear toggle row on the Smart page
@@ -534,6 +536,64 @@ local function fmt(n)
   if a >= 1000000 then return (string.format("%.2fM", n / 1000000):gsub("%.00?M$", "M")) end
   if a >= 1000 then return (string.format("%.1fk", n / 1000):gsub("%.0k$", "k")) end
   return tostring(math.floor(n))
+end
+
+function ui.craftJobId(job)
+  if type(job) ~= "table" or type(job.getId) ~= "function" then return nil end
+  local ok, id = pcall(job.getId)
+  if not ok or id == nil then return nil end
+  return tonumber(id) or tostring(id)
+end
+
+function ui.rememberOutstandingCraft(jobId, name, requestedAt)
+  if jobId == nil then return end
+  if type(ui.outstandingCraftJobs) ~= "table" then ui.outstandingCraftJobs = {} end
+  ui.outstandingCraftJobs[tostring(jobId)] = {
+    id = jobId,
+    name = name,
+    requestedAt = tonumber(requestedAt) or nowMs(),
+  }
+  local max = tonumber(ui.MAX_OUTSTANDING_CRAFTS) or 100
+  local count = 0
+  for _ in pairs(ui.outstandingCraftJobs) do count = count + 1 end
+  while count > max do
+    local oldestKey, oldestAt = nil, math.huge
+    for k, job in pairs(ui.outstandingCraftJobs) do
+      local at = tonumber(job and job.requestedAt) or 0
+      if at < oldestAt then oldestAt, oldestKey = at, k end
+    end
+    if not oldestKey then return end
+    ui.outstandingCraftJobs[oldestKey] = nil
+    count = count - 1
+  end
+end
+
+function ui.outstandingCraftList(q, now)
+  local byId = {}
+  local function add(jobId, name, requestedAt)
+    if jobId == nil then return end
+    byId[tostring(jobId)] = {
+      id = jobId,
+      name = name,
+      requestedAt = tonumber(requestedAt) or tonumber(now) or nowMs(),
+    }
+  end
+  for _, job in pairs(ui.outstandingCraftJobs or {}) do
+    add(job.id, job.name, job.requestedAt)
+  end
+  for _, e in ipairs(cqueue.list(q or cqueue.new())) do
+    add(e.jobId, e.name, e.craftingAt or e.triedAt or e.approvedAt)
+  end
+  local out = {}
+  for _, job in pairs(byId) do out[#out + 1] = job end
+  table.sort(out, function(a, b)
+    local aa, bb = tonumber(a.requestedAt) or 0, tonumber(b.requestedAt) or 0
+    if aa ~= bb then return aa < bb end
+    return tostring(a.id) < tostring(b.id)
+  end)
+  local max = tonumber(ui.MAX_OUTSTANDING_CRAFTS) or 100
+  while #out > max do table.remove(out, 1) end
+  return out
 end
 
 local function pickTextScale()
@@ -933,7 +993,7 @@ local function requestCraft(name, count)
     return false, "bridge offline"
   end
 
-  local result = call(bridge, "craftItem", { name = name, count = count })
+  local result, extra = call(bridge, "craftItem", { name = name, count = count })
   -- Advanced Peripherals' craftItem returns a boolean on most builds (a table on
   -- some). call() returns nil if the method is missing or pcall errored. Treat an
   -- explicit false / nil as rejected. EXACT return shape to confirm in-game.
@@ -941,7 +1001,7 @@ local function requestCraft(name, count)
   if type(result) == "table" and result.success == false then
     return false, tostring(result.error or "bridge rejected craft")
   end
-  return true
+  return true, nil, ui.craftJobId((type(result) == "table" and result) or extra)
 end
 
 -- Persist a craft request into the ledger so the planner's cooldown engages and
@@ -1189,7 +1249,8 @@ local function processCraftQueue(now, plans)
     ensureCraftResults()
     for _, r in ipairs(summary.requested) do
       cqueue.recordResult(craftResults, r.name, true, nil, now)
-      appendAudit({ kind = "requested", key = r.key, name = r.name, amount = r.amount, ok = true })
+      ui.rememberOutstandingCraft(r.jobId, r.name, now)
+      appendAudit({ kind = "requested", key = r.key, name = r.name, amount = r.amount, ok = true, jobId = r.jobId })
     end
     for _, f in ipairs(summary.failed) do
       cqueue.recordResult(craftResults, f.name, false, f.reason, now)
@@ -1239,6 +1300,7 @@ local function processCraftQueue(now, plans)
     queueFailed = qFailed,
     queueStale = qStale,
     queueDepth = cqueue.count(craftQueue),
+    outstanding = ui.outstandingCraftList(craftQueue, now),
     wouldCraftCount = wouldCount,
     wouldCraftAmount = wouldAmount,
     craftsPerMin = #firedTimes,

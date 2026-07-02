@@ -151,7 +151,7 @@ end
 
 -- Mark an entry as in-flight (craft request accepted). Clears any prior error.
 -- No-op if the entry is absent.
-function queue.markCrafting(q, name, now, inflightRequest)
+function queue.markCrafting(q, name, now, inflightRequest, jobId)
   q = queue.normalize(q)
   local e = q.entries[name]
   if not e then return q end
@@ -160,6 +160,7 @@ function queue.markCrafting(q, name, now, inflightRequest)
   if inflightRequest ~= nil then
     e.inflightRequest = math.max(0, math.floor(tonumber(inflightRequest) or 0))
   end
+  if jobId ~= nil then e.jobId = jobId end
   e.error = nil
   return q
 end
@@ -172,6 +173,7 @@ function queue.markError(q, name, now, reason)
   if not e then return q end
   e.triedAt = tonumber(now) or 0
   e.error = reason and tostring(reason) or "craft failed"
+  e.jobId = nil
   return q
 end
 
@@ -193,6 +195,7 @@ function queue.failInactiveCrafting(q, activeByName, now, graceMs, reason)
         e.state = queue.APPROVED
         e.triedAt = now
         e.error = reason and tostring(reason) or "no active RS task"
+        e.jobId = nil
         n = n + 1
       end
     end
@@ -234,6 +237,7 @@ function queue.reconcileInactiveCrafting(q, activeByName, amountsByName, now, gr
             e.approvedAt = now
             e.craftingAt = nil
             e.inflightRequest = nil
+            e.jobId = nil
             e.error = nil
           else
             q.entries[key] = nil
@@ -243,6 +247,7 @@ function queue.reconcileInactiveCrafting(q, activeByName, amountsByName, now, gr
           e.state = queue.APPROVED
           e.triedAt = now
           e.error = reason and tostring(reason) or "no active RS task"
+          e.jobId = nil
           stale = stale + 1
         end
       end
@@ -443,6 +448,7 @@ function queue.recordAudit(audit, event)
     amount = tonumber(event.amount or event.request),
     ok = event.ok == nil and nil or event.ok == true,
     reason = event.reason and tostring(event.reason) or nil,
+    jobId = event.jobId,
     stockAtScan = tonumber(event.stockAtScan),
     activeCraftMethod = event.activeCraftMethod and tostring(event.activeCraftMethod) or nil,
     activeCraftCount = tonumber(event.activeCraftCount),
