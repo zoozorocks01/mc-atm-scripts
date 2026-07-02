@@ -179,10 +179,10 @@ local events = {
   { "monitor_touch", "r", 25, 2 },      -- tab -> BROWSE
   { "monitor_touch", "r", 1, 8 },       -- BROWSE: tap an item -> open editor
   { "monitor_touch", "r", 1, 8 },       -- editor: hit a button row (step/+/-)
-  { "monitor_touch", "r", 28, 2 },      -- tab -> PRESETS (exits editor)
+  { "monitor_touch", "r", 35, 2 },      -- tab -> PRESETS (exits editor; [PRESETS] spans 34-42 post-HEALTH)
   { "monitor_touch", "r", 1, 8 },       -- PRESETS: apply first preset
   { "monitor_touch", "r", 1, 9 },       -- PRESETS: apply another (zoozo, smart on)
-  { "monitor_touch", "r", 38, 2 },      -- tab -> SMART
+  { "monitor_touch", "r", 46, 2 },      -- tab -> SMART ([SMART] spans 44-50 post-HEALTH)
   { "monitor_touch", "r", 1, 7 },       -- SMART: toggle button
   { "redstone" },                       -- redstone page button
   { "timer", 1 },                       -- second refresh (managed + smart active)
