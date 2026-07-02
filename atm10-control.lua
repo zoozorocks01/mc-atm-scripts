@@ -312,6 +312,60 @@ function control.rebootSafety(state)
   return { safe = true, crafting = 0, secondsLeft = 0, reason = "no crafts in flight" }
 end
 
+function control.craftJobSettled(job)
+  if job == nil then return true end
+  if type(job) ~= "table" then
+    local msg = tostring(job):lower()
+    return msg:find("not_found", 1, true) ~= nil or msg:find("not found", 1, true) ~= nil
+  end
+
+  for _, field in ipairs({ "done", "isDone", "canceled", "cancelled", "error", "errored" }) do
+    if job[field] == true then return true end
+  end
+  for _, method in ipairs({ "isDone", "isCanceled", "isCancelled", "hasErrorOccurred" }) do
+    if type(job[method]) == "function" then
+      local ok, value = pcall(job[method])
+      if ok and value == true then return true end
+    end
+  end
+  return false
+end
+
+function control.unsettledJobs(bridge, outstanding)
+  local result = { count = 0, checked = 0, method = "none", jobs = {} }
+  if type(outstanding) ~= "table" or #outstanding == 0 then return result end
+  if not bridge or type(bridge.getCraftingTask) ~= "function" then
+    result.method = "missing"
+    return result
+  end
+
+  result.method = "getCraftingTask"
+  for _, entry in ipairs(outstanding) do
+    local id = type(entry) == "table" and (entry.id or entry.jobId) or entry
+    if id ~= nil then
+      result.checked = result.checked + 1
+      local ok, job = pcall(bridge.getCraftingTask, id)
+      if ok then
+        if not control.craftJobSettled(job) then
+          result.count = result.count + 1
+          result.jobs[#result.jobs + 1] = { id = id, name = type(entry) == "table" and entry.name or nil }
+        end
+      else
+        local msg = tostring(job):lower()
+        if not (msg:find("not_found", 1, true) or msg:find("not found", 1, true)) then
+          result.count = result.count + 1
+          result.jobs[#result.jobs + 1] = {
+            id = id,
+            name = type(entry) == "table" and entry.name or nil,
+            reason = tostring(job),
+          }
+        end
+      end
+    end
+  end
+  return result
+end
+
 local function taskResource(task)
   if type(task) ~= "table" then return nil end
   if type(task.resource) == "table" then return task.resource end

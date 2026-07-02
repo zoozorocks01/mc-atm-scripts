@@ -135,6 +135,7 @@ _G.textutils = {
     return data
   end,
 }
+files[".atm10-drain-request"] = textutils.serialize({ requestedAt = -1 })
 
 _G.rs = {
   getSides = function() return { "top", "bottom", "left", "right", "front", "back" } end,
@@ -244,8 +245,49 @@ check(type(craftstate) == "table" and type(craftstate.outstanding) == "table"
   and craftstate.outstanding[1] and craftstate.outstanding[1].id == 1001
   and craftstate.outstanding[1].name == "alltheores:zinc_ingot",
   "craftstate exposes the outstanding craftItem job id for safereboot")
+check(files[".atm10-drain-request"] == nil,
+  "manager clears a stale drain request flag on boot")
 check(taskListCalls >= 1 and perItemCraftingCalls == 0,
   "empty getCraftingTasks snapshot skips per-item isCrafting checks during planning")
+
+-- ---- DRAIN-1: an active drain request ACKs and suppresses craftItem ----------
+-- The flag must be set AFTER boot: stale flags are intentionally deleted during
+-- startup, while an active safereboot request lands while the manager is running.
+files = { [MANAGED_FILE] = "MANAGED" }
+clock = 0
+jobSeq = 1000
+local drainCrafted = {}
+local BRD = fakeBridge()
+BRD.craftItem = function(arg) drainCrafted[#drainCrafted + 1] = arg; return fakeCraftJob() end
+_G.peripheral.wrap = function(n)
+  if n == "monitor_0" then return MON end
+  if n == "rs_bridge_0" then return BRD end
+  return nil
+end
+local drainRequestedAt = 4242
+local eventsD, eid = { { "drain_request" }, { "timer", 1 } }, 0
+_G.os.pullEvent = function()
+  eid = eid + 1
+  local ev = eventsD[eid]
+  if not ev then error(SENTINEL, 0) end
+  if ev[1] == "drain_request" then
+    files[".atm10-drain-request"] = textutils.serialize({ requestedAt = drainRequestedAt })
+    return "weird_unhandled_event", "drain"
+  end
+  return table.unpack(ev)
+end
+print("smoke-auto: active safereboot drain request suppresses craft firing")
+local okD, errD = pcall(function() dofile("inventory/manager.lua") end)
+check(okD == false and tostring(errD):find(SENTINEL, 1, true) ~= nil,
+  "DRAIN-1: manager reached the sentinel while a drain was requested: " .. tostring(errD))
+check(#drainCrafted == 0,
+  "DRAIN-1: drain request held craftItem even though AUTO had a craftable deficit")
+local drainState = textutils.unserialize(files[".atm10-craftstate"])
+check(type(drainState) == "table" and drainState.drainAck == true
+  and drainState.drainRequestAt == drainRequestedAt,
+  "DRAIN-1: manager persisted a matching drain ack in craftstate")
+check(files[".atm10-drain-request"] ~= nil,
+  "DRAIN-1: active drain flag remains for safereboot while the manager is holding")
 
 -- ---- STAB-2: craft-path attachment recheck ---------------------------------
 -- Race the #1 server-crash trigger: the bridge is CONNECTED when scan reads it

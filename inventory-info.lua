@@ -29,6 +29,7 @@ local FILES = {
   trends = ".atm10-trends",         -- smart-mode consumption history (survives reboot)
   dismissed = ".atm10-dismissed",   -- smart suggestions the operator cleared
   craftstate = ".atm10-craftstate", -- drain snapshot read by safereboot (avoids the AP detach-crash)
+  drainRequest = ".atm10-drain-request", -- safereboot -> manager request to stop issuing craftItem
   planstate = ".atm10-planstate",   -- compact stock-plan snapshot for SSH diagnostics
   loopstate = ".atm10-loopstate",   -- manager scan/render pace metric (is it keeping up?)
   heartbeat = ".atm10-heartbeat",   -- liveness ping; startup watchdog restarts a hung manager
@@ -395,6 +396,23 @@ local function saveQueue(q)
   return atomicWrite(FILES.queue, q)
 end
 
+function ui.readSerializedFile(path)
+  if not fs.exists(path) then return nil end
+  local file = fs.open(path, "r")
+  if not file then return nil end
+  local text = file.readAll()
+  file.close()
+  local ok, data = pcall(textutils.unserialize, text)
+  if ok then return data end
+  return nil
+end
+
+function ui.drainRequest()
+  local data = ui.readSerializedFile(FILES.drainRequest)
+  if type(data) == "table" then return data end
+  return nil
+end
+
 -- Liveness ping: the startup watchdog restarts the program if these stop landing
 -- (a hang the pcall-restart loop can't catch). Fixed-size; overwrites in place.
 local function writeHeartbeat(now)
@@ -414,7 +432,25 @@ local function writeCraftState(now, crafting, craftingNames, metrics)
   if type(metrics) == "table" then
     for k, v in pairs(metrics) do state[k] = v end
   end
+  local drain = ui.drainRequest()
+  if drain then
+    state.drainAck = true
+    state.drainAckAt = now
+    state.drainRequestAt = tonumber(drain.requestedAt) or drain.requestedAt
+  end
   pcall(atomicWrite, FILES.craftstate, state)
+end
+
+function ui.writeDrainAck(now)
+  local drain = ui.drainRequest()
+  if not drain then return false end
+  local state = ui.readSerializedFile(FILES.craftstate) or {}
+  state.at = now
+  if state.lastCraftAt == nil then state.lastCraftAt = lastCraftAt end
+  state.drainAck = true
+  state.drainAckAt = now
+  state.drainRequestAt = tonumber(drain.requestedAt) or drain.requestedAt
+  return atomicWrite(FILES.craftstate, state)
 end
 
 local function writePlanState(now, plans, tally)
@@ -2897,7 +2933,10 @@ local function refreshAndDraw()
       -- held until recoverCycles consecutive clean scans, so craft-firing does not
       -- resume on the bridge's first (still-settling) clean read -- it auto-resumes
       -- once the bridge has been stably clean (no manual clear).
-      if craftingCache.__bridge and craftingCache.__bridge.allowFire == false then
+      if ui.drainRequest() then
+        data.drainRequested = true
+        ui.writeDrainAck(nowMs())
+      elseif craftingCache.__bridge and craftingCache.__bridge.allowFire == false then
         data.bridgeDegraded = true -- for the (pinned, in-game-visual) header chip
       else
         local craftStart = nowMs()
@@ -2980,6 +3019,7 @@ do
       FILES.loopstate, FILES.planstate, CRAFT_RESULTS.file, CRAFT_RESULTS.auditFile,
     })
   end
+  pcall(fs.delete, FILES.drainRequest)
 end
 
 -- TOUCH-DECOUPLE: the heavy RS scan (refreshAndDraw -> bridge.getItems over a huge

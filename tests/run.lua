@@ -113,6 +113,19 @@ do
   t.eq(snap2.count, 1, "activeCraftSnapshot: fallback counts crafting names")
   t.check(snap2.byName.x ~= nil and snap2.byName.y == nil,
     "activeCraftSnapshot: fallback indexes only true isItemCrafting names")
+  local unsettled = control.unsettledJobs({
+    getCraftingTask = function() return { getDebugMessage = function() return "CALCULATION_STARTED" end } end,
+  }, { { id = 77, name = "alltheores:zinc_ingot" } })
+  t.eq(unsettled.count, 1, "unsettledJobs: present calculating AP job is unsafe")
+  t.eq(unsettled.jobs[1].id, 77, "unsettledJobs: reports the unsafe AP job id")
+  local done = control.unsettledJobs({
+    getCraftingTask = function() return { isDone = function() return true end } end,
+  }, { { id = 78 } })
+  t.eq(done.count, 0, "unsettledJobs: done AP job is settled")
+  local missing = control.unsettledJobs({ getCraftingTask = function() return nil end }, { { id = 79 } })
+  t.eq(missing.count, 0, "unsettledJobs: NOT_FOUND/nil AP job is settled")
+  local errored = control.unsettledJobs({ getCraftingTask = function() error("bridge read failed", 0) end }, { { id = 80 } })
+  t.eq(errored.count, 1, "unsettledJobs: unexpected getCraftingTask error fails unsafe")
 end
 
 -- ---------------------------------------------------------------------------
