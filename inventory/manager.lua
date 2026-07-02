@@ -386,7 +386,16 @@ local function loadManaged()
   return managed.normalize(data)
 end
 
-local function saveManaged(store)
+-- Apply an operator mutation to the FRESHEST on-disk store, then persist and
+-- refresh the render cache. The long-lived managedStore is only a cache: saving
+-- it wholesale would clobber any newer on-disk state (external backfill/restore,
+-- a second writer) with a stale copy the moment an operator taps mode/quota/
+-- preset/smart. Reload-mutate-save closes that window; rev counts mutations.
+local function mutateManaged(fn)
+  local store = loadManaged()
+  store = fn(store) or store
+  store.rev = (tonumber(store.rev) or 0) + 1
+  managedStore = store
   return atomicWrite(FILES.managed, store)
 end
 
@@ -998,9 +1007,9 @@ local function cycleMode(autoArmed)
     return
   end
   ui.modeConfirm = nil
-  managedStore = managedStore or loadManaged()
-  managed.setSetting(managedStore, "modeOverride", nextMode)
-  saveManaged(managedStore)
+  mutateManaged(function(store)
+    return managed.setSetting(store, "modeOverride", nextMode)
+  end)
   ui.pageShownAt = nowMs()
   print("Mode -> " .. nextMode)
 end
@@ -2504,18 +2513,18 @@ local function openEditor(entry)
 end
 
 local function saveEditing()
-  local store = managedStore or loadManaged()
   local hasOverflow = editing.ceiling > 0 and editing.into ~= nil
-  managed.set(store, {
-    name = editing.name, label = editing.label,
-    target = editing.target, craftTo = editing.craftTo,
-    ceiling = hasOverflow and editing.ceiling or nil,
-    into = hasOverflow and editing.into or nil,
-    ratio = editing.ratio,
-  }, nowMs())
-  if not hasOverflow then managed.clearOverflow(store, editing.name) end
-  managedStore = store
-  saveManaged(managedStore)
+  mutateManaged(function(store)
+    managed.set(store, {
+      name = editing.name, label = editing.label,
+      target = editing.target, craftTo = editing.craftTo,
+      ceiling = hasOverflow and editing.ceiling or nil,
+      into = hasOverflow and editing.into or nil,
+      ratio = editing.ratio,
+    }, nowMs())
+    if not hasOverflow then managed.clearOverflow(store, editing.name) end
+    return store
+  end)
   print("Quota saved: " .. tostring(editing.label) .. "  target " .. editing.target ..
     (hasOverflow and ("  compress>" .. editing.ceiling .. " -> " .. tostring(editing.into.label)) or ""))
   ui.flashMsg = "+ Saved " .. tostring(editing.label); ui.flashAt = nowMs()
@@ -2524,8 +2533,9 @@ end
 
 local function removeEditing()
   local removedLabel = editing.label
-  managedStore = managed.remove(managedStore or loadManaged(), editing.name)
-  saveManaged(managedStore)
+  mutateManaged(function(store)
+    return managed.remove(store, editing.name)
+  end)
   print("Quota removed: " .. tostring(removedLabel))
   ui.flashMsg = "x Removed " .. tostring(removedLabel); ui.flashAt = nowMs()
   editing = nil
@@ -2534,20 +2544,22 @@ end
 -- Apply a stage preset: merge its quotas into the managed store and persist.
 local function applyPreset(p)
   if not p or not p.id then return end
-  managedStore = managedStore or loadManaged()
-  local _, n = presets.apply(managedStore, p.id, nowMs())
-  -- a profile may also enable behavior (e.g. smart mode); apply those settings
-  local settings = presets.settings(p.id)
-  local extra = ""
-  if settings.smartMode then
-    managed.setSetting(managedStore, "smartMode", true)
-    extra = "  + smart mode ON"
-  end
-  if settings.compressChains then
-    managed.setSetting(managedStore, "compressChains", true)
-    extra = extra .. " + compress chains ON"
-  end
-  saveManaged(managedStore)
+  local n, extra = 0, ""
+  mutateManaged(function(store)
+    local _, count = presets.apply(store, p.id, nowMs())
+    n = count or 0
+    -- a profile may also enable behavior (e.g. smart mode); apply those settings
+    local settings = presets.settings(p.id)
+    if settings.smartMode then
+      managed.setSetting(store, "smartMode", true)
+      extra = "  + smart mode ON"
+    end
+    if settings.compressChains then
+      managed.setSetting(store, "compressChains", true)
+      extra = extra .. " + compress chains ON"
+    end
+    return store
+  end)
   ui.presetStatus = "Applied " .. tostring(p.label) .. ": " .. n .. " quotas." .. extra
   ui.flashMsg = "+ Applied " .. tostring(p.label); ui.flashAt = nowMs()
   ui.pageShownAt = nowMs()
@@ -2556,10 +2568,11 @@ end
 
 -- Toggle smart mode on/off (persisted on the managed store).
 local function toggleSmart()
-  managedStore = managedStore or loadManaged()
-  local on = not (managed.getSetting(managedStore, "smartMode") == true)
-  managed.setSetting(managedStore, "smartMode", on)
-  saveManaged(managedStore)
+  local on
+  mutateManaged(function(store)
+    on = not (managed.getSetting(store, "smartMode") == true)
+    return managed.setSetting(store, "smartMode", on)
+  end)
   ui.flashMsg = on and "+ Smart mode ON" or "x Smart mode off"; ui.flashAt = nowMs()
   ui.pageShownAt = nowMs()
   print("Smart mode " .. (on and "ENABLED" or "disabled"))
