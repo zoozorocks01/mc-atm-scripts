@@ -1,0 +1,20 @@
+modLoader = "lowcodefml"
+loaderVersion = "[1,)"
+license = "MIT"
+issueTrackerURL = "https://github.com/zoozorocks01/mc-atm-scripts/issues"
+
+[[mods]]
+modId = "apdetachguard"
+version = "1.0.0"
+displayName = "AP Detach Guard"
+description = '''Server-crash guard for AdvancedPeripherals: catches the NotAttachedException fired when a computer detaches while an RS Bridge craft job is pending. Uncaught, that exception escapes into the server tick and crashes the whole server. Remove once fixed upstream.'''
+
+[[dependencies.apdetachguard]]
+modId = "advancedperipherals"
+type = "required"
+range = "[0.7,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[mixins]]
+config = "apdetachguard.mixins.json"
