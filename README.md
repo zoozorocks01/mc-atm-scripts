@@ -356,6 +356,10 @@ We can't patch the mod, so we remove the triggers:
   then `atm10-reload`. It asks the manager to drain/stop, clears cached `atm10-*`
   modules, and starts the normal watchdog wrapper again without detaching the
   rs_bridge.
+  For the first deploy onto an already-running old manager that does not yet know
+  how to exit for reload, use the old safe path once (`update`, stop the old
+  manager, then run `atm10-reload`). After that, normal deploys are `update` then
+  `atm10-reload`.
 - **Force-load the CC chunk.** Keep the manager computer + rs_bridge in a
   force-loaded chunk (Chunky `/chunky force`, FTB Chunks claim+load, or spawn
   chunks) so they never detach when you walk away / log off. This removes the

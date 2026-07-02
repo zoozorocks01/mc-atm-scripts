@@ -99,6 +99,10 @@ drain, clears cached `atm10-*` modules, and restarts through the watchdog wrappe
 without detaching the bridge. Use `safereboot` only when the computer itself must
 restart.
 
+Bootstrap caveat: the first live deploy onto a manager that predates
+`atm10-reload` may need the old safe stop path once. After the reload-capable
+manager is running, use `update` -> `atm10-reload`.
+
 Host-side console commands:
 
 - `tools/atm10-diagnostics.sh cc-dump 6` is read-only and safe.

@@ -101,6 +101,11 @@ The role is saved in `.atm10-role`. Future updates on the inventory manager are
 `update` then `safereboot`. `inventory-config` is only installed if missing, so
 your edits survive updates.
 
+One-time bootstrap caveat: the first deploy onto an already-running old
+inventory manager may need the old safe stop path once, because that running
+program does not yet know how to exit for `atm10-reload`. After that first
+reload-capable version is running, use `update` then `atm10-reload`.
+
 ## The console (touchscreen tabs)
 
 Right-click the monitor to tap. Tabs (tap a tab, or pulse the page-button
