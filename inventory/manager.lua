@@ -30,6 +30,7 @@ local FILES = {
   dismissed = ".atm10-dismissed",   -- smart suggestions the operator cleared
   craftstate = ".atm10-craftstate", -- drain snapshot read by safereboot (avoids the AP detach-crash)
   drainRequest = ".atm10-drain-request", -- safereboot -> manager request to stop issuing craftItem
+  reloadRequest = ".atm10-reload-request", -- atm10-reload asks startup wrapper to stand down
   planstate = ".atm10-planstate",   -- compact stock-plan snapshot for SSH diagnostics
   loopstate = ".atm10-loopstate",   -- manager scan/render pace metric (is it keeping up?)
   heartbeat = ".atm10-heartbeat",   -- liveness ping; startup watchdog restarts a hung manager
@@ -142,6 +143,7 @@ local ui = {            -- bundled flash/page transient scalars (B1-prep)
   prevFrame = nil,      -- B1: last rendered buffer, for the flicker-free diff
   outstandingCraftJobs = nil, -- AP craft jobs seen from craftItem; exposed for safereboot
   MAX_OUTSTANDING_CRAFTS = 100,
+  reloadRequested = false,
 }
 local smartRowRegions = {} -- tappable suggestion rows on the Smart page
 local smartButtons = nil   -- enable/disable + clear toggle row on the Smart page
@@ -437,6 +439,7 @@ local function writeCraftState(now, crafting, craftingNames, metrics)
     state.drainAck = true
     state.drainAckAt = now
     state.drainRequestAt = tonumber(drain.requestedAt) or drain.requestedAt
+    if drain.reload == true then state.reloadAck = true end
   end
   pcall(atomicWrite, FILES.craftstate, state)
 end
@@ -450,6 +453,7 @@ function ui.writeDrainAck(now)
   state.drainAck = true
   state.drainAckAt = now
   state.drainRequestAt = tonumber(drain.requestedAt) or drain.requestedAt
+  if drain.reload == true then state.reloadAck = true end
   return atomicWrite(FILES.craftstate, state)
 end
 
@@ -2933,9 +2937,11 @@ local function refreshAndDraw()
       -- held until recoverCycles consecutive clean scans, so craft-firing does not
       -- resume on the bridge's first (still-settling) clean read -- it auto-resumes
       -- once the bridge has been stably clean (no manual clear).
-      if ui.drainRequest() then
+      local drain = ui.drainRequest()
+      if drain then
         data.drainRequested = true
         ui.writeDrainAck(nowMs())
+        if drain.reload == true then ui.reloadRequested = true end
       elseif craftingCache.__bridge and craftingCache.__bridge.allowFire == false then
         data.bridgeDegraded = true -- for the (pinned, in-game-visual) header chip
       else
@@ -3020,6 +3026,7 @@ do
     })
   end
   pcall(fs.delete, FILES.drainRequest)
+  pcall(fs.delete, FILES.reloadRequest)
 end
 
 -- TOUCH-DECOUPLE: the heavy RS scan (refreshAndDraw -> bridge.getItems over a huge
@@ -3040,6 +3047,7 @@ parallel.waitForAny(
     while true do
       guard(advancePageIfDue)
       guard({ refreshAndDraw, resetDisplay = true })
+      if ui.reloadRequested then return end
       writeHeartbeat(nowMs())
       sleep((config and config.refreshSeconds) or REFRESH_SECONDS)
     end

@@ -2325,7 +2325,7 @@ local luaFiles = {
   "inventory-request.lua", "inventory/request-startup.lua", "inventory-request-startup.lua",
   "inventory/config.lua", "inventory/config-example.lua",
   "power/display.lua", "power/probe.lua",
-  "atm10-update.lua", "safereboot.lua", "atm10-bridge-probe.lua", "atm10-patterns.lua",
+  "atm10-update.lua", "safereboot.lua", "atm10-reload.lua", "atm10-bridge-probe.lua", "atm10-patterns.lua",
   "reboot-guard.lua",
   "inventory/manager-startup.lua", "inventory-startup.lua",
   "inventory/remote-startup.lua", "inventory-remote-startup.lua",

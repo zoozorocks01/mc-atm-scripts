@@ -1,6 +1,7 @@
 local PROGRAM = "inventory-info"
 local RESTART_DELAY = 5
 local HEARTBEAT_FILE = ".atm10-heartbeat"
+local RELOAD_REQUEST_FILE = ".atm10-reload-request"
 local WATCHDOG_TIMEOUT = 90 -- seconds without a heartbeat before the program is treated as hung
 local WATCHDOG_POLL = 5
 -- Crash-loop backoff: a program that exits in under FAST_FAIL_SECONDS counts as a
@@ -37,6 +38,10 @@ local function backoffDelay(fastFailures)
   if fastFailures < BACKOFF_AFTER then return RESTART_DELAY, false end
   local step = math.min(fastFailures - BACKOFF_AFTER + 1, #BACKOFF_STEPS)
   return BACKOFF_STEPS[step], true
+end
+
+local function reloadRequested()
+  return fs.exists(RELOAD_REQUEST_FILE)
 end
 
 -- Ends the parallel run (restarting the PROGRAM) when the program stops emitting
@@ -76,6 +81,13 @@ while true do
     function() ok, result = pcall(shell.run, PROGRAM) end,
     function() watchdog(); hung = true end
   )
+
+  if reloadRequested() then
+    if fs.exists(HEARTBEAT_FILE) then pcall(fs.delete, HEARTBEAT_FILE) end
+    term.setTextColor(colors.yellow)
+    print("Reload requested; startup wrapper exiting for atm10-reload.")
+    return
+  end
 
   -- a real Ctrl+T terminate should drop the operator to a shell, not auto-restart
   if not hung and not ok and tostring(result) == "Terminated" then

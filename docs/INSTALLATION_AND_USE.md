@@ -9,7 +9,8 @@ ComputerCraft/CC:Tweaked scripts for an ATM10 base:
   manager (different role / computer).
 - **Power dashboard** — a Mekanism induction-matrix monitor.
 
-One updater installs each computer; after that it's `update` + `safereboot`.
+One updater installs each computer; after that the inventory manager uses
+`update` + `atm10-reload`, while other roles still use `update` + `safereboot`.
 
 ## What this system can and cannot control
 
@@ -90,12 +91,13 @@ Then the role for that computer:
 
 | Role | Command |
 | --- | --- |
-| Inventory manager | `update inventory-source` then `safereboot` |
+| Inventory manager | `update inventory-source` then `atm10-reload` |
 | Inventory remote | `update inventory-remote` then `safereboot` |
 | Power display | `update power-display` then `safereboot` |
 | Power probe | `update power-probe` then `safereboot` |
 
-The role is saved in `.atm10-role`. Future updates on any computer are just
+The role is saved in `.atm10-role`. Future updates on the inventory manager are
+`update` then `atm10-reload`; future updates on the remote/power computers are
 `update` then `safereboot`. `inventory-config` is only installed if missing, so
 your edits survive updates.
 
@@ -295,7 +297,8 @@ own computer + monitor.
 
 ```lua
 startup          -- rerun this computer's role
-update; safereboot   -- force a fresh update
+update; atm10-reload -- update/reload the inventory manager without rebooting
+update; safereboot   -- update/reboot non-manager roles
 update <role>; safereboot   -- change role (inventory-source/-remote/power-*)
 ```
 

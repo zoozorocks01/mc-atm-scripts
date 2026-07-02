@@ -24,12 +24,14 @@ update inventory-source
 update inventory-remote
 ```
 
-After that, future updates are just:
+After that, future inventory-manager updates are:
 
 ```lua
 update
-safereboot
+atm10-reload
 ```
+
+Remote and power computers still use `update` then `safereboot`.
 
 ## Readiness Check
 
@@ -250,13 +252,14 @@ just the script will crash on the first `require`):
 ```lua
 wget https://raw.githubusercontent.com/zoozorocks01/mc-atm-scripts/main/atm10-update.lua update
 update inventory-source
-safereboot
+atm10-reload
 ```
 
-After the first install use **`safereboot`, not `reboot`**, on this computer —
-rebooting while a craft is in flight crashes the server (see "Avoiding the
+After install, use **`atm10-reload`** for future manager updates and
+**`safereboot`, not `reboot`**, only when the computer itself must restart.
+Rebooting while a craft is in flight crashes the server (see "Avoiding the
 AdvancedPeripherals craft-job crash" below). On a fresh install with nothing
-crafting, `safereboot` reboots immediately.
+crafting, `atm10-reload` starts the manager without a reboot.
 
 Low-stock watches and stock keeper settings live in `inventory-config`.
 The updater installs that config only if it is missing, so your edited values
@@ -349,6 +352,10 @@ We can't patch the mod, so we remove the triggers:
   live `isItemCrafting` re-check and a visible countdown — then reboots. Viewer and
   power computers (no bridge) reboot immediately. `safereboot --force` overrides.
   The manager console also shows a `reboot ok` / `DO NOT REBOOT Ns` chip on line 4.
+- **`atm10-reload` for manager updates.** On the inventory manager, run `update`
+  then `atm10-reload`. It asks the manager to drain/stop, clears cached `atm10-*`
+  modules, and starts the normal watchdog wrapper again without detaching the
+  rs_bridge.
 - **Force-load the CC chunk.** Keep the manager computer + rs_bridge in a
   force-loaded chunk (Chunky `/chunky force`, FTB Chunks claim+load, or spawn
   chunks) so they never detach when you walk away / log off. This removes the

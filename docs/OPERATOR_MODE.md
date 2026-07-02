@@ -91,12 +91,13 @@ Preferred deploy command set:
 
 ```lua
 update
-safereboot
-startup
+atm10-reload
 ```
 
-Use `safereboot` before stopping/restarting the manager when autocrafting may have
-recently fired.
+Use `atm10-reload` for normal manager deploys. It asks the running manager to
+drain, clears cached `atm10-*` modules, and restarts through the watchdog wrapper
+without detaching the bridge. Use `safereboot` only when the computer itself must
+restart.
 
 Host-side console commands:
 

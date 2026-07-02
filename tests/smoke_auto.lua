@@ -56,14 +56,15 @@ _G.parallel = {
     local function step(co, ...)
       local ok, err = coroutine.resume(co, ...)
       if not ok then error(err, 0) end       -- propagate a real loop error OR the SENTINEL
+      return coroutine.status(co) == "dead"
     end
     step(inputCo)                            -- prime: advance the input loop to its first pullEvent
     while true do
       local ev = { script() }                -- next scripted event (raises SENTINEL when done)
       if ev[1] == "timer" then
-        step(scanCo)                          -- one refresh cycle; parks at sleep()
+        if step(scanCo) then return end       -- one refresh cycle; parks at sleep(), unless it exits
       else
-        step(inputCo, table.unpack(ev))       -- one event delivered; parks at os.pullEvent()
+        if step(inputCo, table.unpack(ev)) then return end -- one event delivered; parks at os.pullEvent()
       end
     end
   end,
@@ -288,6 +289,42 @@ check(type(drainState) == "table" and drainState.drainAck == true
   "DRAIN-1: manager persisted a matching drain ack in craftstate")
 check(files[".atm10-drain-request"] ~= nil,
   "DRAIN-1: active drain flag remains for safereboot while the manager is holding")
+
+-- ---- RELOAD-1: reload drain exits the manager without firing craftItem --------
+files = { [MANAGED_FILE] = "MANAGED" }
+clock = 0
+jobSeq = 1000
+local reloadCrafted = {}
+local BRL = fakeBridge()
+BRL.craftItem = function(arg) reloadCrafted[#reloadCrafted + 1] = arg; return fakeCraftJob() end
+_G.peripheral.wrap = function(n)
+  if n == "monitor_0" then return MON end
+  if n == "rs_bridge_0" then return BRL end
+  return nil
+end
+local reloadRequestedAt = 5252
+local eventsL, eil = { { "reload_request" }, { "timer", 1 } }, 0
+_G.os.pullEvent = function()
+  eil = eil + 1
+  local ev = eventsL[eil]
+  if not ev then error(SENTINEL, 0) end
+  if ev[1] == "reload_request" then
+    files[".atm10-drain-request"] = textutils.serialize({ requestedAt = reloadRequestedAt, reload = true })
+    files[".atm10-reload-request"] = tostring(reloadRequestedAt)
+    return "weird_unhandled_event", "reload"
+  end
+  return table.unpack(ev)
+end
+print("smoke-auto: active atm10-reload request drains then exits manager")
+local okL, errL = pcall(function() dofile("inventory/manager.lua") end)
+check(okL == true,
+  "RELOAD-1: manager exited cleanly for atm10-reload instead of waiting for the sentinel")
+check(#reloadCrafted == 0,
+  "RELOAD-1: reload request held craftItem before manager exit")
+local reloadState = textutils.unserialize(files[".atm10-craftstate"])
+check(type(reloadState) == "table" and reloadState.drainAck == true
+  and reloadState.reloadAck == true and reloadState.drainRequestAt == reloadRequestedAt,
+  "RELOAD-1: manager persisted matching drain/reload ack before exit")
 
 -- ---- STAB-2: craft-path attachment recheck ---------------------------------
 -- Race the #1 server-crash trigger: the bridge is CONNECTED when scan reads it
