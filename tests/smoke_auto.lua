@@ -246,6 +246,14 @@ check(type(craftstate) == "table" and type(craftstate.outstanding) == "table"
   and craftstate.outstanding[1] and craftstate.outstanding[1].id == 1001
   and craftstate.outstanding[1].name == "alltheores:zinc_ingot",
   "craftstate exposes the outstanding craftItem job id for safereboot")
+local statusFile = textutils.unserialize(files[".atm10-status"])
+check(type(statusFile) == "table" and statusFile.mode == "auto"
+  and statusFile.bridge and statusFile.bridge.online == true
+  and statusFile.queue and statusFile.queue.crafting == 1
+  and statusFile.crafts and statusFile.crafts.inFlight == 1
+  and statusFile.plan and statusFile.plan.wouldCraftCount == 1
+  and statusFile.loop and statusFile.loop.status == "OK",
+  "manager writes a compact .atm10-status summary for agent polling")
 check(files[".atm10-drain-request"] == nil,
   "manager clears a stale drain request flag on boot")
 check(taskListCalls >= 1 and perItemCraftingCalls == 0,

@@ -33,6 +33,7 @@ local FILES = {
   reloadRequest = ".atm10-reload-request", -- atm10-reload asks startup wrapper to stand down
   planstate = ".atm10-planstate",   -- compact stock-plan snapshot for SSH diagnostics
   loopstate = ".atm10-loopstate",   -- manager scan/render pace metric (is it keeping up?)
+  status = ".atm10-status",         -- compact summary for agents/operators to poll over SSH
   heartbeat = ".atm10-heartbeat",   -- liveness ping; startup watchdog restarts a hung manager
 }
 -- Cycleable +/- step sizes in the quota editor: by count AND by stacks (a stack
@@ -457,6 +458,139 @@ local function writeCraftState(now, crafting, craftingNames, metrics)
     if drain.reload == true then state.reloadAck = true end
   end
   pcall(atomicWrite, FILES.craftstate, state)
+end
+
+function ui.queueStatus(rows)
+  local q = { approved = 0, crafting = 0, failed = 0, stale = 0, depth = 0 }
+  for _, e in ipairs(rows or {}) do
+    if type(e) == "table" then
+      q.depth = q.depth + 1
+      if e.state == cqueue.APPROVED then q.approved = q.approved + 1 end
+      if e.state == cqueue.CRAFTING then q.crafting = q.crafting + 1 end
+      if e.error then q.failed = q.failed + 1 end
+      if e.error == "no active RS task" then q.stale = q.stale + 1 end
+    end
+  end
+  return q
+end
+
+function ui.statusRows(rows, limit)
+  local out = {}
+  limit = math.max(0, math.floor(tonumber(limit) or 5))
+  for i = 1, math.min(limit, #(rows or {})) do
+    local r = rows[i]
+    if type(r) == "table" then
+      out[#out + 1] = {
+        name = r.name,
+        label = r.label,
+        reason = r.reason,
+        ageMin = r.ageMin,
+        perMin = r.perMin,
+        etaMin = r.etaMin,
+      }
+    end
+  end
+  return out
+end
+
+function ui.writeStatusState(data, now)
+  data = type(data) == "table" and data or {}
+  now = tonumber(now) or nowMs()
+  local hasData = next(data) ~= nil
+  local override = managedStore and managed.getSetting(managedStore, "modeOverride")
+  local mode = (override and control.normalizeMode(override) == override) and override or (config.mode or "manual")
+
+  local q = ui.queueStatus(data.craftQueue)
+  local plan = {
+    counts = data.stockTally or {},
+    wouldCraftCount = 0,
+    wouldCraftAmount = 0,
+    blockedCount = 0,
+    total = 0,
+  }
+  for _, row in ipairs(data.stockPlans or {}) do
+    if type(row) == "table" then
+      plan.total = plan.total + 1
+      if row.action == "WOULD CRAFT" then
+        plan.wouldCraftCount = plan.wouldCraftCount + 1
+        plan.wouldCraftAmount = plan.wouldCraftAmount + (tonumber(row.request) or 0)
+      elseif row.action == "BLOCKED" or row.action == "NOT CRAFTABLE" or row.action == "NO RECIPE" then
+        plan.blockedCount = plan.blockedCount + 1
+      end
+    end
+  end
+
+  local state = {
+    at = now,
+    version = 1,
+    computerId = type(os.getComputerID) == "function" and os.getComputerID() or nil,
+    mode = mode,
+    page = PAGES[pageIndex],
+    stale = data.stale,
+    summary = data.stale and "STALE" or "OK",
+    bridge = {
+      connected = hasData and data.connected == true or nil,
+      online = hasData and data.online == true or nil,
+      degraded = hasData and (data.bridgeDegraded == true or ((craftingCache.__bridge or {}).allowFire == false)) or nil,
+    },
+    queue = q,
+    plan = plan,
+    crafts = {
+      perMin = #firedTimes,
+      inFlight = q.crafting,
+      stuckCount = 0,
+      stuck = {},
+      recentOk = 0,
+      recentFail = 0,
+    },
+    demand = { fallingBehind = {}, sourceMore = {} },
+    loop = {},
+  }
+
+  local ok, monlib = pcall(require, "atm10-monitor")
+  if ok and monlib then
+    local ch = monlib.craft(data.craftQueue, craftResults, #firedTimes, now, {})
+    state.crafts.inFlight = ch.inFlight
+    state.crafts.stuckCount = #ch.stuck
+    state.crafts.stuck = ui.statusRows(ch.stuck, 5)
+    state.crafts.recentOk = ch.recentOk
+    state.crafts.recentFail = ch.recentFail
+
+    local ph = monlib.pace(data.loop or craftingCache.__loop, now, {
+      refreshMs = ((config and config.refreshSeconds) or REFRESH_SECONDS) * 1000,
+    })
+    state.loop = {
+      status = ph.status,
+      reason = ph.reason,
+      loopSec = ph.loopSec,
+      ageSec = ph.ageSec,
+      refreshSec = ph.refreshSec,
+      loadPct = ph.loadPct,
+      errors = ph.errors,
+    }
+
+    if next(trendHistory) ~= nil then
+      local craftable = {}
+      for _, p in ipairs(data.stockPlans or {}) do
+        if p.name then craftable[p.name] = (p.action ~= "NOT CRAFTABLE") end
+      end
+      local dm = monlib.demand(trendHistory, craftable, { top = 5 })
+      state.demand.fallingBehind = ui.statusRows(dm.fallingBehind, 5)
+      state.demand.sourceMore = ui.statusRows(dm.sourceMore, 5)
+    end
+
+    if ph.status ~= "OK" then state.summary = ph.status end
+    if #ch.stuck > 0 then state.summary = "STUCK" end
+  else
+    state.summary = "DEGRADED"
+    state.error = "atm10-monitor unavailable"
+  end
+
+  if hasData and (data.online == false or state.bridge.connected == false) then state.summary = "BRIDGE_OFFLINE" end
+  if state.bridge.degraded then state.summary = "BRIDGE_DEGRADED" end
+  if q.failed > 0 and state.summary == "OK" then state.summary = "QUEUE_WARN" end
+
+  pcall(atomicWrite, FILES.status, state)
 end
 
 function ui.writeDrainAck(now)
@@ -3197,6 +3331,7 @@ local function refreshAndDraw()
     print("No monitor found. Retrying...")
     loopError = "no monitor"
     finishLoop()
+    ui.writeStatusState(nil, nowMs())
     return
   end
 
@@ -3268,6 +3403,7 @@ local function refreshAndDraw()
   renderCurrent()
   loop.renderMs = math.max(0, nowMs() - renderStart)
   finishLoop()
+  ui.writeStatusState(lastData, nowMs())
 end
 
 -- Every loop step is guarded: an event/control error must NOT freeze the console.
@@ -3301,7 +3437,7 @@ do
   if ok and hmod and hmod.sweepTmps then
     hmod.sweepTmps(fs, {
       FILES.queue, FILES.managed, FILES.trends, FILES.dismissed, FILES.ledger,
-      FILES.loopstate, FILES.planstate, CRAFT_RESULTS.file, CRAFT_RESULTS.auditFile,
+      FILES.loopstate, FILES.planstate, FILES.status, CRAFT_RESULTS.file, CRAFT_RESULTS.auditFile,
     })
   end
   pcall(fs.delete, FILES.drainRequest)
