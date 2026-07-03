@@ -156,6 +156,32 @@ function managed.countNotInGrid(store, itemsByName)
   return n
 end
 
+-- CRAFT-3/4 helper for quota-like arrays: return the deduped entries whose IDs
+-- are absent from the live grid index. Used by the pattern worklist so an
+-- unknown/never-stocked ID does not masquerade as "needs an RS pattern".
+function managed.missingFromGrid(items, itemsByName)
+  itemsByName = itemsByName or {}
+  local out, seen = {}, {}
+  for _, it in ipairs(items or {}) do
+    if it and it.name and not seen[it.name] and not itemsByName[it.name] then
+      seen[it.name] = true
+      out[#out + 1] = {
+        name = it.name,
+        label = it.label or it.name,
+        category = it.category or "Uncategorized",
+        craftMode = it.craftMode,
+        blockReason = it.blockReason,
+        autocraft = it.autocraft,
+      }
+    end
+  end
+  table.sort(out, function(a, b)
+    if a.category ~= b.category then return tostring(a.category) < tostring(b.category) end
+    return tostring(a.label):lower() < tostring(b.label):lower()
+  end)
+  return out
+end
+
 -- Items as an array, sorted by label then name (stable display order).
 function managed.list(store)
   store = managed.normalize(store)

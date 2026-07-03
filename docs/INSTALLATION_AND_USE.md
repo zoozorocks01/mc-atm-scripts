@@ -196,6 +196,21 @@ that is a Refined Storage setup task, not a script issue.
 The instant a pattern exists, that item becomes craftable: it stops showing
 `NOT CRAFTABLE` on PLAN, and `craftItem` can fulfill it.
 
+`UNKNOWN-ID` means something else: the quota's registry name is not present in
+the live RS item grid, so fix the ID or stock that item once before building
+patterns for it.
+
+On the manager computer, run the read-only helper:
+
+```lua
+atm10-patterns
+```
+
+It writes `.atm10-patterns-needed.txt` plus copy lists:
+`.atm10-pattern-ids.txt`, `.atm10-pattern-crafting-ids.txt`,
+`.atm10-pattern-processing-ids.txt`, `.atm10-pattern-manual-ids.txt`, and
+`.atm10-pattern-unknown-ids.txt`.
+
 **Start with one pattern** (e.g. 9 iron → iron block, or zinc dust → zinc ingot)
 to validate the loop before building the whole tree. RS resolves dependency
 **trees** automatically — if every sub-step has a pattern, requesting the top item

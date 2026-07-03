@@ -13,6 +13,7 @@ status.STALE = "STALE"
 status.DISABLED = "DISABLED"
 status.RESERVED = "RESERVED"
 status.UNKNOWN = "UNKNOWN"
+status.UNKNOWN_ID = "UNKNOWN_ID"
 
 local byAction = {
   ["OK"] = status.OK,
@@ -34,6 +35,8 @@ local byAction = {
   ["STALE DATA"] = status.STALE,
   ["DISABLED"] = status.DISABLED,
   ["RESERVED"] = status.RESERVED,
+  ["UNKNOWN-ID"] = status.UNKNOWN_ID,
+  ["UNKNOWN_ID"] = status.UNKNOWN_ID,
   ["UNKNOWN"] = status.UNKNOWN,
 }
 
@@ -50,6 +53,7 @@ local glyphs = {
   STALE = "?",
   DISABLED = "-",
   RESERVED = "=",
+  UNKNOWN_ID = "?",
   UNKNOWN = "?",
 }
 
@@ -66,6 +70,7 @@ local labels = {
   STALE = "STALE",
   DISABLED = "DISABLED",
   RESERVED = "RESERVED",
+  UNKNOWN_ID = "UNKNOWN-ID",
   UNKNOWN = "UNKNOWN",
 }
 
@@ -82,6 +87,7 @@ local colorsByStatus = {
   STALE = colors.orange,
   DISABLED = colors.gray,
   RESERVED = colors.lightBlue,
+  UNKNOWN_ID = colors.orange,
   UNKNOWN = colors.lightGray,
 }
 
@@ -97,6 +103,7 @@ local severity = {
   LOW = 4,
   BLOCKED = 5,
   STALE = 5,
+  UNKNOWN_ID = 6,
   NO_RECIPE = 6,
   CRITICAL = 8,
 }
@@ -156,6 +163,7 @@ function status.tally(rows)
     STALE = 0,
     DISABLED = 0,
     RESERVED = 0,
+    UNKNOWN_ID = 0,
     UNKNOWN = 0,
   }
 

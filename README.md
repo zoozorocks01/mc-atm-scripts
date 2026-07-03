@@ -179,6 +179,10 @@ autocraft patterns** — see "Setting up RS autocrafting" in
 [`docs/INSTALLATION_AND_USE.md`](docs/INSTALLATION_AND_USE.md). It is a Minecraft
 setup task (Crafters + Patterns), not a script error.
 
+`UNKNOWN-ID` is different: the quota's registry name is not present in the live
+RS item grid, so fix the ID or stock that item once before treating it as a
+missing-pattern task.
+
 To see exactly what your RS Bridge exposes (method names, the item-table shape,
 how many items it reports craftable), run the read-only diagnostic on the manager
 computer: `atm10-bridge-probe`. It never crafts or moves anything — it just prints

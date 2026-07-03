@@ -22,6 +22,26 @@ viewer → polish).
 
 ---
 
+## Session log — 2026-07-03 (UNKNOWN-ID split + pattern unknown bucket local)
+
+Quota ID validation now distinguishes `UNKNOWN-ID` from `NOT CRAFTABLE`. The
+manager threads live-grid presence into stock/overflow planning, renders unknown
+IDs separately in PLAN category/tally rows, and includes `unknownIdCount` in the
+compact plan diagnostics. `atm10-patterns` now reads the live item grid, excludes
+unknown/not-in-grid IDs from pattern-build lists, and writes
+`.atm10-pattern-unknown-ids.txt` alongside the existing flat/bucketed pattern
+lists. Dismissed smart suggestions are pruned at load/save boundaries, not only
+at call sites.
+
+- **Gate:** 912 passed / 0 failed; SMOKE OK; SMOKE-AUTO OK; SMOKE-PATTERNS OK;
+  SMOKE-RELOAD OK; SMOKE-SAFEREBOOT OK; SMOKE-REMOTE OK; SMOKE-REQUEST OK;
+  SMOKE-PROBE OK; SMOKE-BRIDGE-PROBE OK; diagnostics shell parse clean; mirror
+  diffs empty; git diff --check clean.
+- **in-game-verify: pending** — after the next deploy, run `atm10-patterns` on
+  computer `6` and inspect `.atm10-pattern-unknown-ids.txt`; PLAN should show
+  `UNKNOWN-ID` rows for quotas absent from the live RS item grid instead of
+  folding them into `NOT CRAFTABLE`.
+
 ## Session log — 2026-06-30 (stale CRAFTING recovery + craft metrics local)
 
 Live monitoring caught a real control-truth bug: `craftItem` could return success

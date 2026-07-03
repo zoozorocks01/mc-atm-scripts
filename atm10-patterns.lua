@@ -15,6 +15,7 @@ if not okPgive then pgive = nil end
 
 local OUT_FILE = ".atm10-patterns-needed.txt"
 local ID_FILE = ".atm10-pattern-ids.txt"
+local UNKNOWN_ID_FILE = ".atm10-pattern-unknown-ids.txt"
 local BUCKET_ID_FILES = {
   crafting = ".atm10-pattern-crafting-ids.txt",
   processing = ".atm10-pattern-processing-ids.txt",
@@ -25,6 +26,7 @@ local MANAGED_FILE = ".atm10-managed"
 
 local lines = {}
 local idLines = {}
+local unknownIdLines = {}
 local bucketIdLines = { crafting = {}, processing = {}, manual = {} }
 local function out(s)
   s = (s == nil) and "" or tostring(s)
@@ -60,6 +62,20 @@ local function craftableInfo(bridge)
   end
   table.sort(list, function(a, b) return tostring(a.label):lower() < tostring(b.label):lower() end)
   return set, list
+end
+
+local function gridItemSet(bridge)
+  if bridge and type(bridge.getItems) == "function" then
+    local ok, items = pcall(bridge.getItems)
+    if ok and type(items) == "table" then
+      local set = {}
+      for _, it in pairs(items) do
+        if type(it) == "table" and it.name then set[it.name] = true end
+      end
+      return set
+    end
+  end
+  return nil
 end
 
 -- Combined quota list: config categories (categorized) + tapped store (category "Tapped").
@@ -124,6 +140,12 @@ local function save()
   if f then f.write(table.concat(lines, "\n")); f.close(); print(""); print("Saved to " .. OUT_FILE) end
   local ids = fs.open(ID_FILE, "w")
   if ids then ids.write(table.concat(idLines, "\n")); ids.close(); print("Saved IDs to " .. ID_FILE) end
+  local unk = fs.open(UNKNOWN_ID_FILE, "w")
+  if unk then
+    unk.write(table.concat(unknownIdLines, "\n"))
+    unk.close()
+    print("Saved unknown IDs to " .. UNKNOWN_ID_FILE)
+  end
   if pgive then
     for _, bucket in ipairs({ "crafting", "processing", "manual" }) do
       local bf = fs.open(BUCKET_ID_FILES[bucket], "w")
@@ -146,10 +168,23 @@ if not bridge then
 end
 
 local set, have = craftableInfo(bridge)
+local gridSet = gridItemSet(bridge)
 local items = gatherItems()
-local need = managed.patternsNeeded(items, function(name) return set[name] == true end)
+local unknown = gridSet and managed.missingFromGrid(items, gridSet) or {}
+local unknownSet = {}
+for _, it in ipairs(unknown) do unknownSet[it.name] = true end
+local patternItems = {}
+for _, it in ipairs(items) do
+  if not (it and it.name and unknownSet[it.name]) then patternItems[#patternItems + 1] = it end
+end
+local need = managed.patternsNeeded(patternItems, function(name) return set[name] == true end)
 local watchOnly = watchOnlyItems(items)
 out("RS HAS " .. #have .. " patterns. Quotas still needing one: " .. #need .. ".")
+if gridSet then
+  out("Quota IDs absent from live grid (excluded from pattern list): " .. #unknown .. ".")
+else
+  out("Live grid ID check unavailable; unknown-ID filtering skipped.")
+end
 if #watchOnly > 0 then
   out("Watch/manual targets excluded from RS pattern worklist: " .. #watchOnly .. ".")
 end
@@ -171,6 +206,17 @@ for _, it in ipairs(need) do
     local bucket, hint = pgive.bucketForItem(it.name)
     bucketIdLines[bucket][#bucketIdLines[bucket] + 1] = it.name
     if hint and hint.text then out("    hint: " .. hint.text) end
+  end
+end
+
+if #unknown > 0 then
+  out("")
+  out("== UNKNOWN / NOT IN GRID (" .. #unknown .. ", fix ID or stock once before pattern work) ==")
+  local unkCat = nil
+  for _, it in ipairs(unknown) do
+    if it.category ~= unkCat then unkCat = it.category; out("-- " .. tostring(unkCat) .. " --") end
+    unknownIdLines[#unknownIdLines + 1] = it.name
+    out("  " .. tostring(it.label or it.name) .. "   (" .. it.name .. ")")
   end
 end
 
@@ -211,6 +257,7 @@ end
 out("")
 out("Build a pattern + Crafter for each, then re-run -- the list shrinks as patterns appear.")
 out("IDs-only copy list is saved to " .. ID_FILE .. ".")
+out("Unknown/not-in-grid IDs are saved to " .. UNKNOWN_ID_FILE .. ".")
 if pgive then
   out("Bucketed ID lists: crafting / processing / manual are saved separately.")
 end

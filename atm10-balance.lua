@@ -11,7 +11,7 @@ local balance = {}
 
 -- ctx fields:
 --   items   : { { name, label, ceiling, into = {name,label}, ratio } }
---   resolve : function(name) -> amount (number), craftable (bool), crafting (bool)
+--   resolve : function(name) -> amount (number), craftable (bool), crafting (bool), exists (bool|nil)
 --   now     : current time ms
 --   ledger  : { requests = { [name] = { requestedAt } } } (shared with stockplan;
 --             cooldown is keyed by the INTO item so refills and compresses of the
@@ -48,8 +48,11 @@ function balance.plan(ctx)
         local row = { name = into.name, key = "compress:" .. it.name, kind = "compress",
           category = "Overflow", label = label, amount = amount, target = ceiling }
 
-        local _, craftable, crafting = resolve(into.name)
-        if not craftable then
+        local _, craftable, crafting, exists = resolve(into.name)
+        if exists == false then
+          row.action = "UNKNOWN-ID"
+          row.reason = "not present in live RS item grid"
+        elseif not craftable then
           row.action = "NOT CRAFTABLE"
         elseif crafting then
           row.action = "ALREADY CRAFTING"

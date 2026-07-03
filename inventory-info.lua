@@ -648,11 +648,11 @@ local function loadDismissed()
   file.close()
   local ok, data = pcall(textutils.unserialize, text)
   if not ok or type(data) ~= "table" then return {} end
-  return data
+  return (suggest.pruneDismissed(data, nowMs(), DISMISSED_OPTS))
 end
 
 local function saveDismissed(set)
-  return atomicWrite(FILES.dismissed, set or {})
+  return atomicWrite(FILES.dismissed, (suggest.pruneDismissed(set or {}, nowMs(), DISMISSED_OPTS)))
 end
 
 -- Per-item last-craft results (QUICK-5): own file, own cap, atomicWrite -- so a
@@ -1098,13 +1098,15 @@ local function formatCategorySummary(summary, width)
     " ~" .. fmt(summary.crafting) ..
     " ." .. fmt(summary.cooldown) ..
     " x" .. fmt(summary.noRecipe) ..
-    " #" .. fmt(summary.blocked)
+    " #" .. fmt(summary.blocked) ..
+    " ?" .. fmt(summary.unknownId)
 
   return uiDraw.fit(text, width)
 end
 
 local function categorySummaryStatus(summary)
   if (summary.noRecipe or 0) > 0 then return uiStatus.NO_RECIPE end
+  if (summary.unknownId or 0) > 0 then return uiStatus.UNKNOWN_ID end
   if (summary.blocked or 0) > 0 then return uiStatus.BLOCKED end
   if (summary.would or 0) > 0 then return uiStatus.WOULD end
   if (summary.crafting or 0) > 0 then return uiStatus.CRAFTING end
@@ -1212,6 +1214,7 @@ local function summarizeCategories(plans)
         cooldown = 0,
         noRecipe = 0,
         blocked = 0,
+        unknownId = 0,
         other = 0,
       }
       byName[name] = summary
@@ -1225,6 +1228,7 @@ local function summarizeCategories(plans)
     elseif normalized == uiStatus.COOLDOWN then summary.cooldown = summary.cooldown + 1
     elseif normalized == uiStatus.NO_RECIPE then summary.noRecipe = summary.noRecipe + 1
     elseif normalized == uiStatus.BLOCKED then summary.blocked = summary.blocked + 1
+    elseif normalized == uiStatus.UNKNOWN_ID then summary.unknownId = summary.unknownId + 1
     else summary.other = summary.other + 1 end
   end
 
@@ -1284,7 +1288,7 @@ local function planOverflowActions(items)
     resolve = function(name)
       local item = findStoredItem(items, name)
       local amount = item and itemAmount(item) or 0
-      return amount, isCraftable(name, item), isItemCrafting(name)
+      return amount, isCraftable(name, item), isItemCrafting(name), item ~= nil
     end,
   })
 end
@@ -1307,7 +1311,7 @@ local function planStockActions(items)
     resolve = function(name)
       local item = findStoredItem(items, name)
       local amount = item and itemAmount(item) or 0
-      return amount, isCraftable(name, item), isItemCrafting(name)
+      return amount, isCraftable(name, item), isItemCrafting(name), item ~= nil
     end,
   })
 end
@@ -2103,7 +2107,7 @@ end
 local function drawPlanPage(data)
   local w, h = monitor.getSize()
 
-  line(6, "Category Summary   + ok  > would  ~ craft  . wait  x recipe  # block", colors.cyan)
+  line(6, "Category Summary   + ok  > would  ~ craft  . wait  x recipe  # block  ? id", colors.cyan)
   local summaries = data.categorySummaries or {}
   local summaryRows = math.min(4, #summaries)
   for i = 1, summaryRows do
@@ -2173,7 +2177,8 @@ local function drawPlanPage(data)
   if w >= 40 then
     local tallyX = nextX + #next + 2
     mwrite(tallyX, navY, "+" .. fmt(tally.OK) .. " >" .. fmt(tally.WOULD) ..
-      " ~" .. fmt(tally.CRAFTING) .. " x" .. fmt(tally.NO_RECIPE) .. " #" .. fmt(tally.BLOCKED), colors.gray)
+      " ~" .. fmt(tally.CRAFTING) .. " x" .. fmt(tally.NO_RECIPE) ..
+      " #" .. fmt(tally.BLOCKED) .. " ?" .. fmt(tally.UNKNOWN_ID), colors.gray)
   end
 
   -- footer hint: a recent action flashes a confirmation here, else the tap hint

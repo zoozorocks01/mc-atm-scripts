@@ -181,17 +181,21 @@ end
 print("status vocabulary")
 t.eq(status.normalize("WOULD CRAFT"), status.WOULD, "WOULD CRAFT -> WOULD")
 t.eq(status.normalize("NOT CRAFTABLE"), status.NO_RECIPE, "NOT CRAFTABLE -> NO_RECIPE")
+t.eq(status.normalize("UNKNOWN-ID"), status.UNKNOWN_ID, "UNKNOWN-ID -> UNKNOWN_ID")
 t.eq(status.normalize("ALREADY CRAFTING"), status.CRAFTING, "ALREADY CRAFTING -> CRAFTING")
 t.eq(status.normalize("CYCLE CAP"), status.BLOCKED, "CYCLE CAP -> BLOCKED")
 t.eq(status.normalize(123), status.UNKNOWN, "non-string -> UNKNOWN")
 t.eq(status.normalize("would"), status.WOULD, "lowercase resolves via upper()")
 t.check(status.color(status.OK) == colors.green, "OK color is green")
 t.check(status.glyph("WOULD CRAFT") == ">", "WOULD glyph is >")
+t.eq(status.label("UNKNOWN-ID"), "UNKNOWN-ID", "UNKNOWN-ID label stays operator-specific")
 t.eq(status.worst({ "OK", "BLOCKED", "WOULD" }), status.BLOCKED, "worst picks BLOCKED")
 t.eq(status.worst({ "OK", "NO_RECIPE", "BLOCKED" }), status.NO_RECIPE, "worst picks NO_RECIPE")
-local tally = status.tally({ { action = "WOULD CRAFT" }, { action = "OK" }, { status = "OK" } })
+local tally = status.tally({ { action = "WOULD CRAFT" }, { action = "OK" }, { status = "OK" },
+  { action = "UNKNOWN-ID" } })
 t.eq(tally.WOULD, 1, "tally WOULD = 1")
 t.eq(tally.OK, 2, "tally OK = 2")
+t.eq(tally.UNKNOWN_ID, 1, "tally UNKNOWN_ID = 1")
 -- power-side states (PR5 vocabulary): additive, existing entries unchanged
 t.eq(status.normalize("STALE DATA"), status.STALE, "STALE DATA -> STALE")
 t.eq(status.normalize("CRITICAL"), status.CRITICAL, "CRITICAL recognized")
@@ -498,6 +502,14 @@ local ncP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100 } }),
   resolve = function() return 0, false, false end })
 t.eq(ncP[1].action, "NOT CRAFTABLE", "no recipe -> NOT CRAFTABLE")
 
+-- below target, absent from the live item grid -> UNKNOWN-ID, not missing pattern
+t.eq((stockplan.plan({ stockKeeper = SK({ { name = "missing:item", target = 100 } }), ledger = emptyLedger,
+  resolve = function() return 0, false, false, false end })[1]).action,
+  "UNKNOWN-ID", "missing live-grid ID -> UNKNOWN-ID")
+t.eq((stockplan.plan({ stockKeeper = SK({ { name = "missing:item", target = 100 } }), ledger = emptyLedger,
+  resolve = function() return 0, false, false, false end })[1]).reason,
+  "not present in live RS item grid", "UNKNOWN-ID carries operator reason")
+
 -- below target, watch/manual route -> explicit BLOCKED reason, never a craft request
 do
   local watchP = stockplan.plan({ stockKeeper = SK({
@@ -643,6 +655,9 @@ do
   t.eq(#planState.rows, 2, "compactState caps persisted non-OK detail rows")
   t.eq(planState.omitted, 1, "compactState reports omitted non-OK detail rows")
   t.eq(planState.rows[2].reason, "missing pattern", "compactState preserves blocked reason")
+  t.eq(stockplan.compactState({
+    { action = "UNKNOWN-ID", name = "ghost:item", label = "Ghost", reason = "not present in live RS item grid" },
+  }).unknownIdCount, 1, "compactState counts UNKNOWN-ID rows separately")
 end
 
 -- ---------------------------------------------------------------------------
@@ -1343,6 +1358,15 @@ t.eq(managed.countNotInGrid(nigStore, { ["mek:steel"] = {}, ["ghost:item"] = {},
   "countNotInGrid is 0 when every quota is in the grid")
 t.eq(managed.countNotInGrid(nigStore, nil), 3, "nil grid -> every quota counts as missing")
 t.eq(managed.countNotInGrid(managed.new(), { ["x"] = {} }), 0, "empty store -> 0 missing")
+t.eq(#managed.missingFromGrid({
+  { name = "mek:steel", label = "Steel", category = "Base" },
+  { name = "ghost:item", label = "Ghost", category = "Base" },
+  { name = "ghost:item", label = "Ghost duplicate", category = "Tapped" },
+}, { ["mek:steel"] = true }), 1, "missingFromGrid dedups quota-like rows absent from live grid")
+t.eq(managed.missingFromGrid({
+  { name = "mek:steel", label = "Steel", category = "Base" },
+  { name = "ghost:item", label = "Ghost", category = "Base" },
+}, { ["mek:steel"] = true })[1].name, "ghost:item", "missingFromGrid returns the absent registry ID")
 
 -- toCategory feeds the planner; empty store -> nil
 t.eq(managed.toCategory(managed.new()), nil, "empty store -> no category")
@@ -1942,6 +1966,8 @@ t.eq(br9[1].request, 100, "ratio 9: (1900-1000)/9 = 100 blocks")
 -- into not craftable / already crafting
 t.eq((balance.plan({ items = { ovItem() }, resolve = function(n) if n == "dust" then return 2000, true, false end return 0, false, false end })[1]).action,
   "NOT CRAFTABLE", "uncraftable into-item -> NOT CRAFTABLE")
+t.eq((balance.plan({ items = { ovItem() }, resolve = function(n) if n == "dust" then return 2000, true, false, true end return 0, false, false, false end })[1]).action,
+  "UNKNOWN-ID", "missing into-item -> UNKNOWN-ID")
 t.eq((balance.plan({ items = { ovItem() }, resolve = function(n) if n == "dust" then return 2000, true, false end return 0, true, true end })[1]).action,
   "ALREADY CRAFTING", "in-flight into-item -> ALREADY CRAFTING")
 

@@ -196,6 +196,7 @@ function stockplan.compactState(plans, opts)
     wouldCraftCount = 0,
     wouldCraftAmount = 0,
     blockedCount = 0,
+    unknownIdCount = 0,
     rows = {},
   }
 
@@ -206,6 +207,8 @@ function stockplan.compactState(plans, opts)
     if action == "WOULD CRAFT" then
       out.wouldCraftCount = out.wouldCraftCount + 1
       out.wouldCraftAmount = out.wouldCraftAmount + (tonumber(row.request) or 0)
+    elseif action == "UNKNOWN-ID" then
+      out.unknownIdCount = out.unknownIdCount + 1
     elseif action == "BLOCKED" or action == "NO RECIPE" or action == "RESERVED" then
       out.blockedCount = out.blockedCount + 1
     end
@@ -231,7 +234,7 @@ end
 --   now         : current time in ms (wall clock; the ledger persists it across reboots)
 --   ledger      : { requests = { [name] = { requestedAt = <ms> } } }  (a table when present)
 --   ledgerError : string surfaced when ledger is nil (fail closed: plan nothing)
---   resolve     : function(name) -> amount (number), craftable (bool), crafting (bool)
+--   resolve     : function(name) -> amount (number), craftable (bool), crafting (bool), exists (bool|nil)
 --
 -- Returns an array of plan rows. Each row has an `action`, one of:
 --   OK, NOT CRAFTABLE, ALREADY CRAFTING, ON COOLDOWN, CYCLE CAP, WOULD CRAFT,
@@ -269,7 +272,7 @@ function stockplan.plan(ctx)
   for _, category in ipairs(categories) do
     local categoryLabel = category.label or "Stock Keeper"
     for _, target in ipairs(category.items or {}) do
-      local amount, craftable, crafting = resolve(target.name)
+      local amount, craftable, crafting, exists = resolve(target.name)
       amount = tonumber(amount) or 0
       local label = target.label or target.name
       local trigger = tonumber(target.target) or 0
@@ -279,7 +282,11 @@ function stockplan.plan(ctx)
       amounts[target.name] = amount
       targets[target.name] = trigger
 
-      if amount >= trigger then
+      if exists == false then
+        plans[#plans + 1] = copyMeta({ action = "UNKNOWN-ID", name = target.name, category = categoryLabel,
+          label = label, amount = amount, target = trigger, craftTo = craftTo, priority = priority,
+          reason = "not present in live RS item grid" }, craftMeta)
+      elseif amount >= trigger then
         plans[#plans + 1] = copyMeta({ action = "OK", name = target.name, category = categoryLabel,
           label = label, amount = amount, target = trigger, priority = 0 }, craftMeta)
       elseif craftMeta.blocked then
