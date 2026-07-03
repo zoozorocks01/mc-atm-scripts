@@ -2617,16 +2617,18 @@ local function drawSmartPage(data)
     return
   end
 
-  line(9, "Suggested quotas (tap to review + save):", colors.cyan)
+  line(9, "Suggested actions:", colors.cyan)
   local start = 10
   local rows = math.min(#sugg, math.max(0, h - start - 1))
-  local kindTag = { quota = "STOCK", raise = "RAISE", cap = "CAP", compress = "COMPRESS" }
+  local kindTag = { quota = "STOCK", raise = "RAISE", cap = "CAP", compress = "COMPRESS",
+    needpattern = "NEEDS PATTERN" }
   for i = 1, rows do
     local s = sugg[i]
     local y = start + (i - 1)
     local detail
     if s.kind == "cap" then detail = "cap " .. fmt(s.ceiling)
     elseif s.kind == "compress" then detail = "band " .. fmt(s.target) .. "-" .. fmt(s.ceiling) .. ", set INTO"
+    elseif s.kind == "needpattern" then detail = "add RS pattern"
     else detail = "keep " .. fmt(s.target) .. "/" .. fmt(s.craftTo) end
     -- append a compact rate + confidence hint so the operator can judge how strongly the
     -- suggestion is observed (conf) and the rate they're being asked to keep up with (perMin).
@@ -2639,7 +2641,7 @@ local function drawSmartPage(data)
       "  (" .. reason .. ")", w), colors.white)
     smartRowRegions[#smartRowRegions + 1] = { y = y, entry = s }
   end
-  line(h, flashing and ui.flashMsg or "Tapping opens the editor pre-filled; SAVE to apply.",
+  line(h, flashing and ui.flashMsg or "Quota rows open the editor; NEEDS PATTERN is advisory.",
     flashing and colors.white or colors.gray)
 end
 
@@ -3234,6 +3236,13 @@ local function handleTouch(x, y)
   end
   local smartEntry = console.rowHit(smartRowRegions, y, 1)
   if smartEntry then
+    if smartEntry.kind == "needpattern" then
+      ui.pageShownAt = nowMs()
+      ui.flashMsg = "Needs RS pattern: " .. tostring(smartEntry.label)
+      ui.flashAt = nowMs()
+      renderCurrent()
+      return
+    end
     openEditor({ name = smartEntry.name, label = smartEntry.label, craftable = true, seeded = true,
       target = smartEntry.target, craftTo = smartEntry.craftTo, ceiling = smartEntry.ceiling })
     renderCurrent()

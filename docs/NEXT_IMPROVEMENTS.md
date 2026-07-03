@@ -662,19 +662,21 @@ at 186 (state folded onto existing tables).
   proves insufficient in-world. Test must BITE: recovery-spike series emits no steady
   quota; monotone drainer still does.
 
-### S8. needpattern advisory branch (pure now, wire on CRAFT-4)
-- **M · value med · risk low · Verify: gate (pure) + blocked (wiring) · Phase: discuss**
+### S8. needpattern advisory branch — PURE BRANCH SHIPPED, wiring still gated
+- **M · value med · risk low · Verify: gate (pure) + blocked (wiring) · Phase: partially shipped**
 - `analyze()` has no craftability input, so it can't separate "drains hard AND we can
   autocraft it" (actionable quota) from "drains hard but has NO pattern" (operator must
   spawn one — CRAFT-4). Add an optional `ctx.patternless = {[name]=true}`; for an
   unmanaged steady drainer in that set, emit `kind='needpattern'` (advisory, rendered
   `[NEEDS PATTERN]`). When `ctx.patternless` is absent, behavior is byte-identical
   (backward compatible).
-- **Blocked:** the live grid reads `craftable` blind (recon blocker — see
-  `base-recon-findings`), so there is no source to populate `patternless` today. Ship
-  the **pure branch + tests** now is possible, but it is a dead branch with no caller
-  until CRAFT-4 lands a craftable source — so it is pinned, not fired. Manager wiring
-  (`inventory-info.lua:1118-1122` feed) deferred to CRAFT-4.
+- **Shipped locally:** the pure `ctx.patternless` branch now emits `kind='needpattern'`
+  instead of a quota, with unit coverage and Smart-page advisory rendering. When
+  `ctx.patternless` is absent, existing quota behavior is unchanged.
+- **Still blocked:** the live grid reads `craftable` blind (recon blocker — see
+  `base-recon-findings`), so there is no trustworthy source to populate
+  `patternless` today. Manager feed wiring stays deferred until CRAFT-4 lands a
+  craftable source.
 
 ---
 
@@ -757,7 +759,7 @@ at 186 (state folded onto existing tables).
 | SMART-3 | surface rate+conf on SMART row | S | med | low | gate | DONE (`195c096`, in-game-verify pending) |
 | SMART-6 | suggestion invariants (tests) | S | low | low | gate | DONE (`e4bdcba`) |
 | S7 | robust slope / min-floor gate | M | med | med | gate | discuss (overlaps SMART-2) |
-| S8 | needpattern advisory branch | M | med | low | gate+blocked | discuss (gated on CRAFT-4) |
+| S8 | needpattern advisory branch | M | med | low | gate+blocked | pure branch shipped; wiring gated on CRAFT-4 |
 | F1 | deploy late-game config | op | high | med | in-game | discuss |
 | F2 | dust rows = watch, not refill | S | med | med | in-game | discuss |
 | F3 | reconcile preset namespaces | S | med | med | in-game | discuss |

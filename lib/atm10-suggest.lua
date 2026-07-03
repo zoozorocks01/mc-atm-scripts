@@ -162,12 +162,14 @@ end
 -- analyze(history, ctx) -> array of suggestions (each seeded for the editor):
 --   { kind, name, label, seeded=true, target, craftTo, ceiling?, ratio?, perMin, reason }
 -- ctx: { managed = {[name]=true}, quotas = {[name]={target,craftTo}},
---        dismissed = {[name]=ts|true|{ts,baseline}}, minDrain = 64, minWindowMs = 60000,
---        max = 8, cooldownSeconds = 300, compressChains = false, resurfaceFactor = 2 }
+--        patternless = {[name]=true}, dismissed = {[name]=ts|true|{ts,baseline}},
+--        minDrain = 64, minWindowMs = 60000, max = 8, cooldownSeconds = 300,
+--        compressChains = false, resurfaceFactor = 2 }
 --
 -- Over a window of >= minWindowMs (skipping a dismissed item unless its drain has materially
 -- accelerated past the baseline frozen at dismissal -- see resurfaceFactor):
 --   * UNMANAGED + net decline >= minDrain  -> "quota": keep it stocked.
+--       If ctx.patternless[name] == true, emit "needpattern" instead: advisory only.
 --   * UNMANAGED + net growth  >= minDrain  -> "cap":      set a compress ceiling, OR
 --                                            "compress":  (when ctx.compressChains AND it climbed
 --                                            past a stable band) seed a full overflow chain
@@ -181,6 +183,7 @@ function suggest.analyze(history, ctx)
   ctx = ctx or {}
   local managedSet = ctx.managed or {}
   local quotas = ctx.quotas or {}
+  local patternless = ctx.patternless or {}
   local dismissed = ctx.dismissed or {}
   local minDrain = tonumber(ctx.minDrain) or 64
   local minWindow = tonumber(ctx.minWindowMs) or 60000
@@ -231,12 +234,20 @@ function suggest.analyze(history, ctx)
         local buffer = math.max(minDrain, math.floor(perMin * (cooldownSec / 60)))
 
         if not isManaged and decline >= minDrain then
-          local target = math.max(0, math.floor(h.minA or 0))
-          out[#out + 1] = {
-            kind = "quota", name = name, label = h.label or name, seeded = true,
-            target = target, craftTo = target + buffer, perMin = perMin, conf = conf, spiky = spiky,
-            reason = "down " .. decline .. " in " .. mins(span) .. "m", _rank = decline * confW,
-          }
+          if patternless[name] == true then
+            out[#out + 1] = {
+              kind = "needpattern", name = name, label = h.label or name, seeded = false,
+              perMin = perMin, conf = conf, spiky = spiky,
+              reason = "down " .. decline .. " in " .. mins(span) .. "m, no pattern", _rank = decline * confW,
+            }
+          else
+            local target = math.max(0, math.floor(h.minA or 0))
+            out[#out + 1] = {
+              kind = "quota", name = name, label = h.label or name, seeded = true,
+              target = target, craftTo = target + buffer, perMin = perMin, conf = conf, spiky = spiky,
+              reason = "down " .. decline .. " in " .. mins(span) .. "m", _rank = decline * confW,
+            }
+          end
         elseif not isManaged and -decline >= minDrain then
           if compressChains and ((h.aN or 0) - (h.minA or 0)) >= minDrain then
             -- climbed past a stable band: seed a full compress chain. `into` is intentionally

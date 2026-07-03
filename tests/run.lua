@@ -1483,6 +1483,20 @@ t.eq(#sg, 1, "declining unmanaged item -> one suggestion")
 t.eq(sg[1].name, "steel", "suggestion names the draining item")
 t.check(sg[1].target >= 0 and sg[1].craftTo > sg[1].target, "suggestion proposes a sane quota")
 
+do
+  -- S8: if the caller knows an unmanaged drainer has no RS pattern, suggest setup work instead of a quota
+  local np = suggest.analyze(hist, { managed = {}, patternless = { steel = true }, minDrain = 64, minWindowMs = 60000 })
+  t.eq(#np, 1, "S8: patternless unmanaged drainer -> one advisory")
+  t.eq(np[1].kind, "needpattern", "S8: patternless drainer is tagged NEEDS PATTERN")
+  t.eq(np[1].seeded, false, "S8: needpattern does not seed the quota editor")
+  t.eq(np[1].target, nil, "S8: needpattern has no quota target")
+  t.eq(np[1].craftTo, nil, "S8: needpattern has no craftTo")
+  t.eq(suggest.analyze(hist, { managed = {}, patternless = { copper = true }, minDrain = 64, minWindowMs = 60000 })[1].kind,
+    "quota", "S8: unrelated patternless entries do not change quota suggestions")
+  t.eq(#suggest.analyze(hist, { managed = { steel = true }, patternless = { steel = true },
+    minDrain = 64, minWindowMs = 60000 }), 0, "S8: managed patternless items stay suppressed")
+end
+
 -- managed or dismissed items are not suggested
 t.eq(#suggest.analyze(hist, { managed = { steel = true } }), 0, "managed item not suggested")
 t.eq(#suggest.analyze(hist, { dismissed = { steel = true } }), 0, "dismissed item not suggested")
@@ -1713,12 +1727,14 @@ do
     grow  = { label = "Grow",  t0 = 0, a0 = 1000, tN = 120000, aN = 5000, minA = 1000, maxA = 5000, n = 20 },
     okmgd = { label = "OkMgd", t0 = 0, a0 = 900,  tN = 120000, aN = 800,  minA = 800,  maxA = 900,  n = 20 },
   }
-  local sg = suggest.analyze(mix, { managed = {}, quotas = { okmgd = { target = 256, craftTo = 300 } }, minDrain = 64 })
+  local sg = suggest.analyze(mix, { managed = {}, quotas = { okmgd = { target = 256, craftTo = 300 } },
+    patternless = { drain = true }, minDrain = 64 })
   local seen = {}
   for _, s in ipairs(sg) do
     t.check(not seen[s.name], "CONF-4: item '" .. s.name .. "' appears at most once")
     seen[s.name] = true
   end
+  t.check(seen.drain, "CONF-4: patternless branch still emits exactly one row for the drainer")
 
   -- INVARIANT 2: when truncating to max, the KEPT set is the highest-ranked. Build many
   -- equal-decline drainers with varying evidence; with max=2 the two kept must be the two
