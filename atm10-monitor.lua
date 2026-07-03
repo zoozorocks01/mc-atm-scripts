@@ -24,10 +24,10 @@ end
 --   nowMs, opts { stuckMs = 300000, compressStuckMs = 1200000, recentMs = 1800000 }
 -- returns { inFlight, stuck = { {label, ageMin}, ... }, recentOk, recentFail, ratePerMin }
 -- A CRAFTING entry that has sat past its kind-specific threshold with no
--- completion is "stuck". Refill jobs stay tight; compress/overflow jobs are
--- expected to be slower bulk drains.
+-- completion is "stuck". Refill jobs stay tight; compress jobs are expected
+-- to be slower bulk drains.
 local function stuckThresholdMs(e, opts)
-  if e and (e.kind == "compress" or e.kind == "overflow") then
+  if e and e.kind == "compress" then
     return opts.compressStuckMs or opts.bulkStuckMs or 1200000
   end
   return opts.stuckMs or 300000

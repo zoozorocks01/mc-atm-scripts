@@ -117,6 +117,15 @@ else
   echo "loop: missing .atm10-loopstate (manager has not run the loop-metrics build yet)"
 fi
 
+if [ -f .atm10-status ]; then
+  status_summary=$(field_from .atm10-status summary | tr -d "\"")
+  status_mode=$(field_from .atm10-status mode | tr -d "\"")
+  status_page=$(field_from .atm10-status page | tr -d "\"")
+  echo "statusFile: summary=${status_summary:-?} mode=${status_mode:-?} page=${status_page:-?}"
+else
+  echo "statusFile: missing .atm10-status (manager has not run the status-summary build yet)"
+fi
+
 q_approved=$(queue_count APPROVED)
 q_crafting=$(queue_count CRAFTING)
 q_failed=$(grep -c "error =" .atm10-craft-queue 2>/dev/null || true)
@@ -134,6 +143,7 @@ stat -f "%Sm %8z %N" \
   .atm10-role inventory-config 2>/dev/null || true
 
 show_file .atm10-heartbeat 20
+show_file .atm10-status 160
 show_file .atm10-loopstate 120
 show_file .atm10-craftstate 180
 show_file .atm10-planstate 220
@@ -387,6 +397,28 @@ if [ -f .atm10-loopstate ]; then
   fi
 else
   echo "WARN missing .atm10-loopstate"
+fi
+
+if [ -f .atm10-status ]; then
+  status_at=$(field_from .atm10-status at)
+  status_summary=$(field_from .atm10-status summary | tr -d "\"")
+  status_mode=$(field_from .atm10-status mode | tr -d "\"")
+  if [ -n "$status_at" ]; then
+    age=$(((now_ms - $(as_int "$status_at")) / 1000))
+    if [ "$age" -lt 0 ]; then age=0; fi
+  else
+    age=999999
+  fi
+  if [ "$age" -le 90 ]; then
+    echo "OK status summary fresh ageSec=$age summary=${status_summary:-?} mode=${status_mode:-?}"
+  else
+    echo "WARN status summary stale ageSec=$age summary=${status_summary:-?} mode=${status_mode:-?}"
+  fi
+  if [ -n "$status_summary" ] && [ "$status_summary" != "OK" ]; then
+    echo "WARN status summary reports $status_summary"
+  fi
+else
+  echo "WARN missing .atm10-status; live manager may not have loaded the status-summary build yet"
 fi
 
 if [ -f .atm10-craftstate ]; then

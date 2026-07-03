@@ -63,6 +63,7 @@ The command reads the live computer 6 directory on `zjn-home-two` and reports:
 
 - script file versions
 - `.atm10-heartbeat`
+- `.atm10-status`
 - `.atm10-loopstate`
 - `.atm10-craftstate`
 - `.atm10-planstate`

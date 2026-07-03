@@ -233,7 +233,10 @@ Key fields:
 
 Machine-written state files (do not hand-edit): `.atm10-managed` (console quotas +
 settings), `.atm10-craft-queue`, `.atm10-craft-results`, `.atm10-craftstate`,
-`.atm10-stock-ledger`, `.atm10-planstate`.
+`.atm10-stock-ledger`, `.atm10-planstate`, `.atm10-loopstate`, `.atm10-status`.
+The `.atm10-status` file is a compact summary for SSH diagnostics and agent
+polling; it mirrors the HEALTH page's current mode, bridge, queue, craft, loop,
+and demand signals without adding extra RS Bridge calls.
 
 At large quotas, keep the conservative throttle defaults until the read-only
 `tools/atm10-diagnostics.sh doctor` check is clean and live queue/craft evidence
