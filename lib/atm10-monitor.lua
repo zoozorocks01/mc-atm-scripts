@@ -18,18 +18,24 @@ local function minutesBetween(a, b)
 end
 
 -- FUNCTIONING: craft-pipeline health from snapshots the manager already keeps.
---   queueEntries : key -> { state, craftingAt, approvedAt, label, name }  (craftQueue.entries)
+--   queueEntries : key -> { state, craftingAt, approvedAt, label, name, kind } (craftQueue.entries)
 --   craftResults : name -> { ok, reason, at }                             (.atm10-craft-results)
 --   firedCount   : #crafts fired in the last 60s  (== crafts/min throughput)
---   nowMs, opts { stuckMs = 300000, recentMs = 1800000 }
+--   nowMs, opts { stuckMs = 300000, compressStuckMs = 1200000, recentMs = 1800000 }
 -- returns { inFlight, stuck = { {label, ageMin}, ... }, recentOk, recentFail, ratePerMin }
--- A CRAFTING entry that has sat past stuckMs with no completion is "stuck" -- RS
--- gives no completion signal, so a healthy in-flight job and a wedged one look
--- identical until you time them; this is that timer.
+-- A CRAFTING entry that has sat past its kind-specific threshold with no
+-- completion is "stuck". Refill jobs stay tight; compress/overflow jobs are
+-- expected to be slower bulk drains.
+local function stuckThresholdMs(e, opts)
+  if e and (e.kind == "compress" or e.kind == "overflow") then
+    return opts.compressStuckMs or opts.bulkStuckMs or 1200000
+  end
+  return opts.stuckMs or 300000
+end
+
 function monitor.craft(queueEntries, craftResults, firedCount, nowMs, opts)
   opts = opts or {}
   nowMs = nowMs or 0
-  local stuckMs = opts.stuckMs or 300000
   local recentMs = opts.recentMs or 1800000
   local out = { inFlight = 0, stuck = {}, recentOk = 0, recentFail = 0, ratePerMin = firedCount or 0 }
 
@@ -37,6 +43,7 @@ function monitor.craft(queueEntries, craftResults, firedCount, nowMs, opts)
     if e.state == "CRAFTING" then
       out.inFlight = out.inFlight + 1
       local age = nowMs - (e.craftingAt or nowMs)
+      local stuckMs = stuckThresholdMs(e, opts)
       if age >= stuckMs then
         out.stuck[#out.stuck + 1] = { label = e.label or e.name or "?", ageMin = age / 60000 }
       end

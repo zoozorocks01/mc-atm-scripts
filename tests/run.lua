@@ -32,9 +32,11 @@ do
   local monitor = require("atm10-monitor")
   local NOW = 10000000
   local mq = {
-    a = { state = "CRAFTING", craftingAt = NOW - 400000, label = "Stuck One" }, -- 6.6m -> stuck
-    b = { state = "CRAFTING", craftingAt = NOW - 60000,  label = "Fresh One" }, -- 1m   -> not stuck
-    c = { state = "APPROVED", approvedAt = NOW - 1000,   label = "Waiting" },   -- not in-flight
+    a = { state = "CRAFTING", craftingAt = NOW - 400000,  label = "Stuck One" }, -- 6.6m -> refill stuck
+    b = { state = "CRAFTING", craftingAt = NOW - 60000,   label = "Fresh One" }, -- 1m   -> not stuck
+    c = { state = "APPROVED", approvedAt = NOW - 1000,    label = "Waiting" },   -- not in-flight
+    d = { state = "CRAFTING", craftingAt = NOW - 600000,  label = "Compress Warmup", kind = "compress" },
+    e = { state = "CRAFTING", craftingAt = NOW - 1260000, label = "Compress Stuck", kind = "compress" },
   }
   local mres = {
     x = { ok = true,  at = NOW - 60000 },
@@ -42,9 +44,10 @@ do
     z = { ok = true,  at = NOW - 9999999 }, -- too old -> excluded
   }
   local ch = monitor.craft(mq, mres, 12, NOW, { stuckMs = 300000, recentMs = 1800000 })
-  t.eq(ch.inFlight, 2, "monitor.craft: 2 CRAFTING in-flight")
-  t.eq(#ch.stuck, 1, "monitor.craft: 1 stuck (>5m CRAFTING)")
-  t.eq(ch.stuck[1].label, "Stuck One", "monitor.craft: names the stuck job")
+  t.eq(ch.inFlight, 4, "monitor.craft: 4 CRAFTING in-flight")
+  t.eq(#ch.stuck, 2, "monitor.craft: refill uses 5m threshold; compress uses 20m threshold")
+  t.eq(ch.stuck[1].label, "Compress Stuck", "monitor.craft: oldest stuck job sorts first")
+  t.eq(ch.stuck[2].label, "Stuck One", "monitor.craft: names the refill stuck job")
   t.eq(ch.recentOk, 1, "monitor.craft: 1 recent ok")
   t.eq(ch.recentFail, 1, "monitor.craft: 1 recent fail")
   t.eq(ch.ratePerMin, 12, "monitor.craft: passes through crafts/min")
