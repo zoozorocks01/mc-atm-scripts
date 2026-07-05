@@ -180,6 +180,46 @@ function queue.findByJobId(q, jobId)
   return nil, nil
 end
 
+local function copyEntry(e, key)
+  local out = {}
+  if type(e) == "table" then
+    for k, v in pairs(e) do out[k] = v end
+  end
+  out.key = out.key or key
+  return out
+end
+
+local function applyStockProgress(q, key, e, amountsByName, now)
+  if type(e) ~= "table" then return q, nil, key, 0, false end
+  amountsByName = type(amountsByName) == "table" and amountsByName or {}
+  local current = tonumber(amountsByName[e.name] or amountsByName[key])
+  local baseline = tonumber(e.amount)
+  local made = 0
+  if current and baseline and current > baseline then
+    made = math.floor(current - baseline)
+    local inflight = math.max(0, math.floor(tonumber(e.inflightRequest or e.request) or 0))
+    if inflight > 0 and made > inflight then made = inflight end
+  end
+  if made <= 0 then return q, nil, key, 0, false end
+
+  local original = copyEntry(e, key)
+  local remaining = math.max(0, math.floor(tonumber(e.request) or 0) - made)
+  if remaining > 0 then
+    e.state = queue.APPROVED
+    e.request = remaining
+    e.amount = current
+    e.approvedAt = tonumber(now) or 0
+    e.craftingAt = nil
+    e.craftingStartedAt = nil
+    e.inflightRequest = nil
+    e.jobId = nil
+    e.error = nil
+  else
+    q.entries[key] = nil
+  end
+  return q, original, key, made, remaining <= 0
+end
+
 function queue.markJobStarted(q, jobId, now)
   local key, e = queue.findByJobId(q, jobId)
   if not e then return q, nil, nil end
@@ -208,6 +248,17 @@ function queue.failJobId(q, jobId, now, reason)
   e.inflightRequest = nil
   e.jobId = nil
   return q, e, key
+end
+
+-- A terminal AP failure can arrive after RS already completed a capped batch.
+-- In that case stock increased even though the full queue entry is not done.
+-- Treat it as progress, reduce the remaining request, and let the next batch
+-- fire later instead of marking the row as a zero-progress failure.
+function queue.progressJobId(q, jobId, amountsByName, now)
+  q = queue.normalize(q)
+  local key, e = queue.findByJobId(q, jobId)
+  if not e then return q, nil, nil, 0, false end
+  return applyStockProgress(q, key, e, amountsByName, now)
 end
 
 -- Record a failed craft attempt. The entry stays APPROVED (so it retries after
@@ -264,29 +315,8 @@ function queue.reconcileInactiveCrafting(q, activeByName, amountsByName, now, gr
       local active = activeByName[e.name] or activeByName[key]
       local started = tonumber(e.craftingAt or e.approvedAt) or 0
       if not active and (now - started) >= graceMs then
-        local current = tonumber(amountsByName[e.name] or amountsByName[key])
-        local baseline = tonumber(e.amount)
-        local made = 0
-        if current and baseline and current > baseline then
-          made = math.floor(current - baseline)
-          local inflight = math.max(0, math.floor(tonumber(e.inflightRequest or e.request) or 0))
-          if inflight > 0 and made > inflight then made = inflight end
-        end
-
-        if made > 0 then
-          local remaining = math.max(0, math.floor(tonumber(e.request) or 0) - made)
-          if remaining > 0 then
-            e.state = queue.APPROVED
-            e.request = remaining
-            e.amount = current
-            e.approvedAt = now
-            e.craftingAt = nil
-            e.inflightRequest = nil
-            e.jobId = nil
-            e.error = nil
-          else
-            q.entries[key] = nil
-          end
+        local _, progressedEntry = applyStockProgress(q, key, e, amountsByName, now)
+        if progressedEntry then
           progressed = progressed + 1
         else
           e.state = queue.APPROVED

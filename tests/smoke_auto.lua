@@ -313,6 +313,46 @@ check(type(resultsF) == "table" and resultsF["alltheores:zinc_ingot"]
   and resultsF["alltheores:zinc_ingot"].reason == "MISSING_ITEMS",
   "AP-EVENT-2: MISSING_ITEMS records a failed terminal craft result")
 
+-- ---- AP-EVENT-3: AP failure after stock gain is progress, not failure -------
+local BRG = fakeBridge()
+local progressedCrafted = false
+BRG.craftItem = function(arg) progressedCrafted = true; crafted[#crafted + 1] = arg; return fakeCraftJob() end
+BRG.getItems = function()
+  local amount = progressedCrafted and 1032 or 1000
+  return {
+    { name = "alltheores:zinc_ingot", amount = amount, isCraftable = true },
+    { name = "minecraft:iron_ingot", amount = 800000, isCraftable = false },
+  }
+end
+BRG.getCraftingTasks = function()
+  if progressedCrafted then return { { name = "alltheores:zinc_ingot", count = 32 } } end
+  return {}
+end
+local okG, errG = runManagerWithEvents("smoke-auto: rs_crafting failure with stock progress reduces row", BRG, {
+  { "timer", 1 },
+  { "timer", 2 },
+  { "rs_crafting", true, 1001, "craft failed" },
+})
+check(okG == false and tostring(errG):find(SENTINEL, 1, true) ~= nil,
+  "AP-EVENT-3: manager handled progress-bearing failure then stopped: " .. tostring(errG))
+qfile = textutils.unserialize(files[".atm10-craft-queue"])
+qentry = qfile and qfile.entries and qfile.entries["alltheores:zinc_ingot"]
+check(qentry and qentry.state == "APPROVED" and qentry.error == nil and qentry.jobId == nil
+  and qentry.amount == 1032 and (tonumber(qentry.request) or 0) > 0,
+  "AP-EVENT-3: stock-progress failure keeps row approved with refreshed baseline and no error")
+local resultsG = textutils.unserialize(files[".atm10-craft-results"])
+check(type(resultsG) == "table" and resultsG["alltheores:zinc_ingot"]
+  and resultsG["alltheores:zinc_ingot"].ok == true,
+  "AP-EVENT-3: stock-progress failure records an OK progress result")
+local auditG = textutils.unserialize(files[".atm10-craft-audit"])
+local sawProgressAudit = false
+for _, event in ipairs(type(auditG) == "table" and auditG or {}) do
+  if event.kind == "job_progress" and event.name == "alltheores:zinc_ingot" and event.amount == 32 then
+    sawProgressAudit = true
+  end
+end
+check(sawProgressAudit, "AP-EVENT-3: audit records job_progress with the capped batch size")
+
 -- ---- AP-POLL-1: missed event fallback closes a vanished getCraftingTask id ---
 local BRP = fakeBridge()
 BRP.getCraftingTask = function() return nil end

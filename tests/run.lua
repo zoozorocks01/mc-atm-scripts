@@ -788,6 +788,24 @@ cqueue.failJobId(_G.__jobFailQ, "job-9", 36, "MISSING_ITEMS")
 t.eq(_G.__jobFailQ.entries.failed.state, cqueue.APPROVED, "failJobId returns failed AP jobs to APPROVED")
 t.eq(_G.__jobFailQ.entries.failed.error, "MISSING_ITEMS", "failJobId stores the AP failure reason")
 t.eq(_G.__jobFailQ.entries.failed.jobId, nil, "failJobId clears the completed AP job id")
+_G.__jobProgressQ = cqueue.approve(cqueue.new(), { name = "progress", amount = 100, request = 4096 }, 37)
+cqueue.markCrafting(_G.__jobProgressQ, "progress", 38, 32, "job-10")
+_, _G.__jobProgressEntry, _, _G.__jobProgressMade, _G.__jobProgressDone =
+  cqueue.progressJobId(_G.__jobProgressQ, "job-10", { progress = 132 }, 39)
+t.check(_G.__jobProgressEntry ~= nil, "progressJobId: stock gain turns terminal AP failure into progress")
+t.eq(_G.__jobProgressMade, 32, "progressJobId: progress is capped to the in-flight batch")
+t.eq(_G.__jobProgressDone, false, "progressJobId: partial progress does not complete the full row")
+t.eq(_G.__jobProgressQ.entries.progress.request, 4064, "progressJobId: partial progress reduces remaining request")
+t.eq(_G.__jobProgressQ.entries.progress.amount, 132, "progressJobId: partial progress refreshes stock baseline")
+t.eq(_G.__jobProgressQ.entries.progress.error, nil, "progressJobId: partial progress clears the failure state")
+_G.__jobCompleteQ = cqueue.approve(cqueue.new(), { name = "complete", amount = 10, request = 32 }, 40)
+cqueue.markCrafting(_G.__jobCompleteQ, "complete", 41, 32, "job-11")
+_, _G.__jobCompleteEntry, _, _G.__jobCompleteMade, _G.__jobCompleteDone =
+  cqueue.progressJobId(_G.__jobCompleteQ, "job-11", { complete = 42 }, 42)
+t.check(_G.__jobCompleteEntry ~= nil, "progressJobId: full batch progress is detected")
+t.eq(_G.__jobCompleteMade, 32, "progressJobId: full batch made amount is reported")
+t.eq(_G.__jobCompleteDone, true, "progressJobId: full batch progress can complete the row")
+t.check(cqueue.has(_G.__jobCompleteQ, "complete") == false, "progressJobId: completed row is dropped")
 cqueue.markCrafting(sq, "absent", 40) -- no-op on a missing entry
 t.check(cqueue.has(sq, "absent") == false, "markCrafting on a missing entry is a no-op")
 _G.__staleQ = cqueue.new()
@@ -833,6 +851,8 @@ t.eq(_G.__silentProgress, 0, "reconcileInactiveCrafting: silent reject has no pr
 t.eq(_G.__silentQ.entries.silent.error, "no active RS task",
   "reconcileInactiveCrafting: silent reject records retryable reason")
 _G.__staleQ, _G.__activeQ, _G.__partialQ, _G.__silentQ = nil, nil, nil, nil
+_G.__jobProgressQ, _G.__jobProgressEntry, _G.__jobProgressMade, _G.__jobProgressDone = nil, nil, nil, nil
+_G.__jobCompleteQ, _G.__jobCompleteEntry, _G.__jobCompleteMade, _G.__jobCompleteDone = nil, nil, nil, nil
 _G.__partialStale, _G.__partialProgress, _G.__silentStale, _G.__silentProgress = nil, nil, nil, nil
 
 -- per-item last-craft results (QUICK-5): record ok/reason/timestamp, bounded

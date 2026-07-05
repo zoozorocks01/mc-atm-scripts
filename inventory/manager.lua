@@ -736,6 +736,27 @@ function ui.recordCraftOutcome(entry, ok, reason, now, kind, jobId, tasks)
   }, now, tasks)
 end
 
+function ui.recordCraftProgress(entry, now, kind, jobId, made, terminalReason, tasks)
+  if type(entry) ~= "table" or not entry.name then return end
+  now = now or nowMs()
+  local eventJobId = jobId or entry.jobId
+  ensureCraftResults()
+  cqueue.recordResult(craftResults, entry.name, true, nil, now)
+  cqueue.pruneResults(craftResults, CRAFT_RESULTS.max)
+  saveCraftResults(craftResults)
+  ui.forgetOutstandingCraft(eventJobId)
+  ui.appendCraftAudit({
+    kind = kind or "job_progress",
+    key = entry.key,
+    name = entry.name,
+    amount = made or entry.inflightRequest or entry.request,
+    ok = true,
+    reason = terminalReason,
+    jobId = eventJobId,
+    made = made,
+  }, now, tasks)
+end
+
 -- compact "how long ago" for craft-result readouts: 45s / 12m / 3h / 2d
 local function agoShort(at, now)
   local s = math.max(0, math.floor(((now or nowMs()) - (tonumber(at) or 0)) / 1000))
@@ -1010,6 +1031,12 @@ end
 
 local function itemAmount(item)
   return tonumber(item.amount or item.count or item.size) or 0
+end
+
+function ui.currentAmountsByName()
+  local out = {}
+  for name, item in pairs(itemsByName or {}) do out[name] = itemAmount(item) end
+  return out
 end
 
 local function itemName(item)
@@ -1471,6 +1498,15 @@ function ui.handleCraftEvent(errorFlag, jobId, message)
   end
   if ui.craftEventFailed(errorFlag, msg) then
     local reason = ui.craftFailureReason(msg)
+    local _, progressedEntry, _, made = cqueue.progressJobId(craftQueue, jobId, ui.currentAmountsByName(), now)
+    if progressedEntry then
+      saveQueue(craftQueue)
+      ui.recordCraftProgress(progressedEntry, now, "job_progress", jobId, made, reason)
+      ui.flashMsg = "progress: " .. tostring(progressedEntry.name)
+      ui.flashAt = now
+      print("Craft progress +" .. tostring(made) .. " despite " .. tostring(reason) .. ": " .. tostring(progressedEntry.name))
+      return
+    end
     local _, entry = cqueue.failJobId(craftQueue, jobId, now, reason)
     if entry then
       saveQueue(craftQueue)
@@ -1509,11 +1545,18 @@ function ui.pollCraftJobCompletion(now, tasks)
       if ok then
         if ui.jobFailed(job) then
           local reason = ui.jobReason(job, "craft failed")
-          local _, entry = cqueue.failJobId(craftQueue, jobId, now, reason)
-          if entry then
-            ui.recordCraftOutcome(entry, false, reason, now, "job_failed", jobId, tasks)
+          local _, progressedEntry, _, made = cqueue.progressJobId(craftQueue, jobId, ui.currentAmountsByName(), now)
+          if progressedEntry then
+            ui.recordCraftProgress(progressedEntry, now, "job_progress", jobId, made, reason, tasks)
             changed = changed + 1
-            print("Craft failed (" .. tostring(reason) .. "): " .. tostring(entry.name))
+            print("Craft progress +" .. tostring(made) .. " despite " .. tostring(reason) .. ": " .. tostring(progressedEntry.name))
+          else
+            local _, entry = cqueue.failJobId(craftQueue, jobId, now, reason)
+            if entry then
+              ui.recordCraftOutcome(entry, false, reason, now, "job_failed", jobId, tasks)
+              changed = changed + 1
+              print("Craft failed (" .. tostring(reason) .. "): " .. tostring(entry.name))
+            end
           end
         elseif ui.jobDone(job) then
           local _, entry = cqueue.completeJobId(craftQueue, jobId)
