@@ -2308,7 +2308,8 @@ local function drawQueuePage(data)
         liveCol = "active"
       end
     end
-    local resultCol = e.error and cqueue.retryLabel(e, now, retryCooldownMs)
+    local manualError = e.error and effectiveMode() == control.MODE_MANUAL and not cqueue.isManual(e)
+    local resultCol = e.error and (manualError and "tap retry" or cqueue.retryLabel(e, now, retryCooldownMs))
       or liveCol or craftResultShort(e.name, now)
     local text
     if wide then
@@ -2332,7 +2333,11 @@ local function drawQueuePage(data)
   local hintY = start + rows
   if hintY <= h then
     local flashing = ui.flashMsg and (nowMs() - ui.flashAt < ui.FLASH_MS)
-    local hint = failed > 0 and "Failed rows retry after cooldown." or "Tap a row to cancel its approval."
+    local hint = failed > 0
+      and (effectiveMode() == control.MODE_MANUAL
+        and "Failed rows wait for RETRY FAILED or CLEAR QUEUE."
+        or "Failed rows retry after cooldown.")
+      or "Tap a row to cancel its approval."
     line(hintY, flashing and ui.flashMsg or hint, flashing and colors.white or colors.gray)
     -- bulk: one tap cancels every approval, right-aligned past the hint text
     local label = " [ CLEAR QUEUE ] "

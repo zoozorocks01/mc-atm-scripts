@@ -12,8 +12,9 @@
 --   * Each approval fires AT MOST ONE craft request, then transitions to
 --     CRAFTING so it is never re-requested.
 --   * If the item is already crafting in RS, adopt CRAFTING without a request.
---   * A bridge rejection keeps the entry APPROVED but backs off for one cooldown
---     before retrying, so a recipe that can't be satisfied does not spam.
+--   * A bridge rejection keeps the entry APPROVED with an error. In manual mode,
+--     failed plan approvals stay blocked until the operator explicitly retries or
+--     clears them; auto mode still retries after the cooldown.
 local control = require("atm10-control")
 local cqueue = require("atm10-queue")
 
@@ -151,6 +152,7 @@ function runner.run(q, deps)
   local recordRequest = deps.recordRequest
   local holdReason = deps.holdReason
   local policy = deps.policy
+  local manualMode = deps.mode == control.MODE_MANUAL
   local maxPerCycle = tonumber(deps.maxPerCycle)
   if maxPerCycle and maxPerCycle <= 0 then maxPerCycle = nil end
   local maxBridgeRequest = tonumber(deps.maxBridgeRequest)
@@ -214,6 +216,8 @@ function runner.run(q, deps)
           summary.changed = true
         end
         summary.held[#summary.held + 1] = { name = e.name, reason = heldByDeps }
+      elseif (not manualJob) and e.error and manualMode then
+        summary.held[#summary.held + 1] = { name = e.name, reason = e.error }
       elseif (not manualJob) and e.triedAt and cooldownMs > 0 and (now - e.triedAt) < cooldownMs then
         -- backing off after a recent failed craft; skip this cycle
       elseif isCrafting(e.name) then

@@ -312,6 +312,14 @@ check(type(resultsF) == "table" and resultsF["alltheores:zinc_ingot"]
   and resultsF["alltheores:zinc_ingot"].ok == false
   and resultsF["alltheores:zinc_ingot"].reason == "MISSING_ITEMS",
   "AP-EVENT-2: MISSING_ITEMS records a failed terminal craft result")
+local auditF = textutils.unserialize(files[".atm10-craft-audit"])
+local sawFailedBatchAudit = false
+for _, event in ipairs(type(auditF) == "table" and auditF or {}) do
+  if event.kind == "job_failed" and event.name == "alltheores:zinc_ingot" and event.amount == 32 then
+    sawFailedBatchAudit = true
+  end
+end
+check(sawFailedBatchAudit, "AP-EVENT-2: failed audit records actual capped bridge amount")
 
 -- ---- AP-EVENT-3: AP failure after stock gain is progress, not failure -------
 local BRG = fakeBridge()

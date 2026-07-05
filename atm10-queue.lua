@@ -240,6 +240,7 @@ end
 function queue.failJobId(q, jobId, now, reason)
   local key, e = queue.findByJobId(q, jobId)
   if not e then return q, nil, nil end
+  local original = copyEntry(e, key)
   e.state = queue.APPROVED
   e.triedAt = tonumber(now) or 0
   e.error = reason and tostring(reason) or "craft failed"
@@ -247,7 +248,7 @@ function queue.failJobId(q, jobId, now, reason)
   e.craftingStartedAt = nil
   e.inflightRequest = nil
   e.jobId = nil
-  return q, e, key
+  return q, original, key
 end
 
 -- A terminal AP failure can arrive after RS already completed a capped batch.

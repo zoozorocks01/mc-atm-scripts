@@ -784,10 +784,12 @@ cqueue.completeJobId(_G.__jobQ, 4242)
 t.check(cqueue.has(_G.__jobQ, "jobbed") == false, "completeJobId drops the completed queue entry")
 _G.__jobFailQ = cqueue.approve(cqueue.new(), { name = "failed", request = 16 }, 34)
 cqueue.markCrafting(_G.__jobFailQ, "failed", 35, 8, "job-9")
-cqueue.failJobId(_G.__jobFailQ, "job-9", 36, "MISSING_ITEMS")
+_, _G.__failedOriginal = cqueue.failJobId(_G.__jobFailQ, "job-9", 36, "MISSING_ITEMS")
 t.eq(_G.__jobFailQ.entries.failed.state, cqueue.APPROVED, "failJobId returns failed AP jobs to APPROVED")
 t.eq(_G.__jobFailQ.entries.failed.error, "MISSING_ITEMS", "failJobId stores the AP failure reason")
 t.eq(_G.__jobFailQ.entries.failed.jobId, nil, "failJobId clears the completed AP job id")
+t.eq(_G.__jobFailQ.entries.failed.inflightRequest, nil, "failJobId clears live inflight request")
+t.eq(_G.__failedOriginal.inflightRequest, 8, "failJobId returns original entry for accurate audit amount")
 _G.__jobProgressQ = cqueue.approve(cqueue.new(), { name = "progress", amount = 100, request = 4096 }, 37)
 cqueue.markCrafting(_G.__jobProgressQ, "progress", 38, 32, "job-10")
 _, _G.__jobProgressEntry, _, _G.__jobProgressMade, _G.__jobProgressDone =
@@ -1014,7 +1016,8 @@ craftrunner.run(qa, { policy = pManualCraft, mode = "manual", now = 5,
 t.eq(#c4, 0, "no craft request when RS is already crafting the item")
 t.eq(qa.entries.w.state, cqueue.CRAFTING, "adopts CRAFTING for an in-flight item")
 
--- bridge rejects: stays APPROVED, records error, backs off one cooldown, then retries
+-- bridge rejects in manual mode: stays APPROVED, records error, and waits for
+-- explicit operator retry instead of re-firing after cooldown.
 local tries = 0
 local qf = mkQ({ { name = "f", request = 32 } })
 local depsF = { policy = pManualCraft, mode = "manual", now = 1000, cooldownMs = 300000,
@@ -1035,7 +1038,22 @@ craftrunner.run(qf, depsF)
 t.eq(tries, 1, "no retry within the backoff cooldown")
 depsF.now = 1000 + 400000
 craftrunner.run(qf, depsF)
-t.eq(tries, 2, "retries after the backoff cooldown elapses")
+t.eq(tries, 1, "manual failed approval does not retry after cooldown without operator action")
+qf = cqueue.retryFailed(qf, 1000 + 401000)
+depsF.now = 1000 + 402000
+craftrunner.run(qf, depsF)
+t.eq(tries, 2, "manual failed approval retries after RETRY FAILED clears the error")
+
+tries = 0
+qf = mkQ({ { name = "fa", request = 32 } })
+depsF = { policy = control.policy({ mode = "auto", allowAutocraft = true }), mode = "auto",
+  now = 2000, cooldownMs = 300000,
+  isCrafting = function() return false end,
+  craft = function() tries = tries + 1; return false, "missing ingredients" end }
+craftrunner.run(qf, depsF)
+depsF.now = 2000 + 400000
+craftrunner.run(qf, depsF)
+t.eq(tries, 2, "auto failed approval still retries after cooldown")
 qf = mkQ({ { name = "ra", request = 1 }, { name = "rb", request = 1 } })
 cqueue.markError(qf, "ra", 20, "bridge offline")
 qf, tries = cqueue.retryFailed(qf, 30)
