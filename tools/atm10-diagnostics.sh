@@ -159,6 +159,7 @@ else
 fi
 
 show_file .atm10-bridge-probe.txt 220
+show_file .atm10-target-probe.txt 220
 '
 
 run_remote() {
@@ -500,6 +501,7 @@ doctor_file_hashes() {
   compare_cc_file atm10-monitor.lua atm10-monitor.lua
   compare_cc_file atm10-pattern-give.lua atm10-pattern-give.lua
   compare_cc_file atm10-bridge-probe.lua atm10-bridge-probe
+  compare_cc_file atm10-target-probe.lua atm10-target-probe
   compare_cc_file atm10-patterns.lua atm10-patterns
   compare_cc_file safereboot.lua safereboot
   compare_cc_file reboot-guard.lua reboot

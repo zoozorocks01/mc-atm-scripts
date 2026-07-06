@@ -19,6 +19,7 @@ local commonFiles = {
   { remote = "lib/atm10-monitor.lua", localName = "atm10-monitor.lua" }, -- HEALTH page: functioning + keeping-up (MON-1)
   { remote = "lib/atm10-pattern-give.lua", localName = "atm10-pattern-give.lua" }, -- /give builder (used by atm10-patterns)
   { remote = "atm10-bridge-probe.lua", localName = "atm10-bridge-probe" }, -- READ-ONLY RS Bridge diagnostic
+  { remote = "atm10-target-probe.lua", localName = "atm10-target-probe" }, -- READ-ONLY focused item-count diagnostic
   { remote = "atm10-patterns.lua", localName = "atm10-patterns" }, -- READ-ONLY patterns worklist (CRAFT-4)
   { remote = "safereboot.lua", localName = "safereboot" }, -- drain-safe reboot (avoids AP detach crash)
   { remote = "atm10-theme", localName = "atm10-theme", onlyIfMissing = true },
