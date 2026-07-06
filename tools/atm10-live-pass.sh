@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DIAG="${ATM10_DIAG_CMD:-tools/atm10-diagnostics.sh}"
+HOST="${ATM10_HOST:-zjn-home-two}"
+SERVER_DIR="${ATM10_SERVER_DIR:-/Users/zacharynielsen/LocalServers/ATM10-server-7.0-intel-test}"
+OUT_ROOT="${ATM10_LIVE_PASS_OUT_DIR:-/tmp/atm10-live-pass}"
+OBSERVE_SECONDS="${ATM10_LIVE_PASS_SECONDS:-120}"
+OBSERVE_INTERVAL="${ATM10_LIVE_PASS_INTERVAL:-20}"
+PING_PRIORITY="${ATM10_PING_PRIORITY:-2}"
+PING_OPTIONS="${ATM10_PING_OPTIONS:-Done,Not now,Need details}"
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1)
+if [ -n "${ATM10_SSH_OPTS:-}" ]; then
+  read -r -a SSH_OPTS <<< "$ATM10_SSH_OPTS"
+fi
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  tools/atm10-live-pass.sh preflight
+  tools/atm10-live-pass.sh observe [seconds]
+  tools/atm10-live-pass.sh ask-action <title> <body>
+  tools/atm10-live-pass.sh npe-count
+
+Stable-first live test wrapper. It is read-only except ask-action, which only
+creates a K2 feedback item for Zach.
+
+Commands:
+  preflight   Run doctor, snapshot, and a server-log NPE baseline.
+  observe     Capture snapshots for an observation window, then run doctor.
+  ask-action  Ping Zach through K2 feedback with a specific in-game request.
+  npe-count   Count current NullPointerException lines in latest.log.
+
+Environment:
+  ATM10_LIVE_PASS_OUT_DIR    Output root (default: /tmp/atm10-live-pass)
+  ATM10_LIVE_PASS_SECONDS    Default observe duration (default: 120)
+  ATM10_LIVE_PASS_INTERVAL   Observe snapshot interval (default: 20)
+  ATM10_PING_PRIORITY        K2 feedback priority 1-5 (default: 2)
+  ATM10_PING_OPTIONS         K2 feedback options (default: Done,Not now,Need details)
+USAGE
+}
+
+quote_remote() {
+  printf "%q" "$1"
+}
+
+server_dir="$(quote_remote "$SERVER_DIR")"
+
+new_run_dir() {
+  local stamp dir
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  dir="$OUT_ROOT/$stamp"
+  mkdir -p "$dir"
+  printf '%s\n' "$dir"
+}
+
+need_diag() {
+  if [ ! -x "$DIAG" ]; then
+    printf 'Missing diagnostics command: %s\n' "$DIAG" >&2
+    exit 2
+  fi
+}
+
+run_server_remote() {
+  ssh "${SSH_OPTS[@]}" "$HOST" "cd $server_dir && $1"
+}
+
+npe_count() {
+  run_server_remote 'grep -c "NullPointerException" logs/latest.log 2>/dev/null || true'
+}
+
+write_meta() {
+  local dir="$1"
+  {
+    printf 'time=%s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+    printf 'host=%s\n' "$HOST"
+    printf 'serverDir=%s\n' "$SERVER_DIR"
+    printf 'diag=%s\n' "$DIAG"
+  } > "$dir/meta.txt"
+}
+
+preflight() {
+  need_diag
+  local dir status
+  dir="$(new_run_dir)"
+  write_meta "$dir"
+  printf 'Live-pass output: %s\n\n' "$dir"
+
+  set +e
+  "$DIAG" doctor | tee "$dir/01-doctor.txt"
+  status=${PIPESTATUS[0]}
+  set -e
+  printf '\n' | tee -a "$dir/01-doctor.txt" >/dev/null
+  printf 'npeCount=%s\n' "$(npe_count)" | tee "$dir/02-npe-before.txt"
+
+  if [ "$status" -ne 0 ]; then
+    printf '\nPreflight stopped: doctor failed. No live action requested.\n' | tee "$dir/summary.txt"
+    exit "$status"
+  fi
+
+  "$DIAG" snapshot | tee "$dir/03-snapshot-before.txt" >/dev/null
+  {
+    printf 'result=ready\n'
+    printf 'next=run observe while Zach performs exactly one requested in-game action\n'
+    printf 'ask=tools/atm10-live-pass.sh ask-action "ATM10 action needed: <specific step>" "<exact action and stop condition>"\n'
+  } | tee "$dir/summary.txt"
+}
+
+observe() {
+  need_diag
+  local seconds dir start end i
+  seconds="${1:-$OBSERVE_SECONDS}"
+  case "$seconds" in
+    ""|*[!0-9]*) printf 'observe seconds must be numeric, got: %s\n' "$seconds" >&2; exit 2 ;;
+  esac
+
+  dir="$(new_run_dir)"
+  write_meta "$dir"
+  printf 'Live-pass observation output: %s\n' "$dir"
+  printf 'seconds=%s interval=%s\n' "$seconds" "$OBSERVE_INTERVAL" | tee "$dir/observe.txt"
+  printf 'npeBefore=%s\n' "$(npe_count)" | tee -a "$dir/observe.txt"
+
+  start="$(date +%s)"
+  end=$((start + seconds))
+  i=1
+  while [ "$(date +%s)" -lt "$end" ]; do
+    printf '\n## snapshot %s %s\n' "$i" "$(date '+%H:%M:%S %Z')" | tee -a "$dir/observe.txt"
+    "$DIAG" snapshot | tee "$dir/snapshot-$i.txt" >/dev/null
+    sleep "$OBSERVE_INTERVAL"
+    i=$((i + 1))
+  done
+
+  printf 'npeAfter=%s\n' "$(npe_count)" | tee -a "$dir/observe.txt"
+  "$DIAG" doctor | tee "$dir/doctor-after.txt"
+  printf '\nObservation complete: %s\n' "$dir"
+}
+
+ask_action() {
+  local title body
+  title="${1:-}"
+  body="${2:-}"
+  if [ -z "$title" ] || [ -z "$body" ]; then
+    printf 'ask-action requires a title and body.\n\n' >&2
+    usage >&2
+    exit 2
+  fi
+  k2 feedback ask "$title" \
+    --kind question \
+    --priority "$PING_PRIORITY" \
+    --options "$PING_OPTIONS" \
+    --body "$body"
+}
+
+case "${1:-preflight}" in
+  preflight)
+    preflight
+    ;;
+  observe)
+    shift
+    observe "${1:-$OBSERVE_SECONDS}"
+    ;;
+  ask-action)
+    shift
+    ask_action "${1:-}" "${2:-}"
+    ;;
+  npe-count)
+    npe_count
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

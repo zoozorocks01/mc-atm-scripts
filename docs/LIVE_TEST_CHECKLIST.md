@@ -9,8 +9,7 @@ where to stop.
 From this repo:
 
 ```bash
-tools/atm10-diagnostics.sh doctor
-tools/atm10-diagnostics.sh snapshot
+tools/atm10-live-pass.sh preflight
 ```
 
 Expected before deploy:
@@ -19,16 +18,26 @@ Expected before deploy:
 - Manager heartbeat is fresh.
 - Doctor may warn that deployed ComputerCraft files differ from repo.
 - `.atm10-status` may be missing until the status-summary build is deployed.
+- The wrapper writes a timestamped evidence folder under `/tmp/atm10-live-pass`.
 
 ## Start Capture
 
-Keep this running during the in-game pass:
+For one bounded in-game action, ask Zach through K2 feedback:
 
 ```bash
-tools/atm10-diagnostics.sh watch-log
+tools/atm10-live-pass.sh ask-action \
+  "ATM10 action needed: <specific step>" \
+  "<exact in-game action, stop condition, and what Codex will observe>"
 ```
 
-It writes timestamped snapshots under `/tmp/atm10-diagnostics`.
+Then observe for a short, bounded window:
+
+```bash
+tools/atm10-live-pass.sh observe 120
+```
+
+For longer play-test capture, `tools/atm10-diagnostics.sh watch-log` is still
+available and writes timestamped snapshots under `/tmp/atm10-diagnostics`.
 
 Also keep a log baseline for ComputerCraft Java task errors:
 
@@ -36,8 +45,9 @@ Also keep a log baseline for ComputerCraft Java task errors:
 ssh zjn-home-two 'grep -n "NullPointerException" /Users/zacharynielsen/LocalServers/ATM10-server-7.0-intel-test/logs/latest.log | tail -20'
 ```
 
-After deploy, repeat that command and compare whether new lines are still being
-added.
+The live-pass wrapper also stores a before/after count, which is the normal
+first check. Use the raw grep only when the count changes or a line number is
+needed.
 
 ## Deploy On Computer 6
 

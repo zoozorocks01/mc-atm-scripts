@@ -41,6 +41,38 @@ For the full evidence dump:
 tools/atm10-diagnostics.sh snapshot
 ```
 
+## Stable Live Pass Wrapper
+
+For the normal stability loop, Codex should start with:
+
+```bash
+tools/atm10-live-pass.sh preflight
+```
+
+This wraps `doctor`, a snapshot, and a server-log `NullPointerException`
+baseline into one timestamped folder under `/tmp/atm10-live-pass`. It is
+read-only and does not start crafts, clear queues, flip auto mode, reboot
+ComputerCraft, or write to the server.
+
+When the only missing piece is a human in-game action, Codex pings Zach through
+K2 feedback instead of burying the request in terminal output:
+
+```bash
+tools/atm10-live-pass.sh ask-action \
+  "ATM10 action needed: approve one small craft" \
+  "Please approve exactly one known simple craft on computer 6, then stop. Codex will observe the live files and server log."
+```
+
+Then Codex observes the result:
+
+```bash
+tools/atm10-live-pass.sh observe 120
+```
+
+The wrapper is deliberately narrower than a control system. Direct command
+mailboxes and broader automation should wait until this stability loop is
+boring and repeatable.
+
 For live monitoring while Zach plays:
 
 ```bash
@@ -81,12 +113,16 @@ tools/atm10-diagnostics.sh snapshot
 
 ## Live Work Loop
 
-1. Codex starts `tools/atm10-diagnostics.sh watch-log`.
-2. Zach plays normally.
-3. Codex asks only for specific in-game actions when live evidence is needed.
-4. Codex patches/tests/commits fixes locally.
-5. Zach approves push.
-6. Zach runs the short deploy command set on computer 6.
+1. Codex runs `tools/atm10-live-pass.sh preflight`.
+2. If preflight is not green, stop and fix that specific evidence first.
+3. Codex uses `tools/atm10-live-pass.sh ask-action ...` only for specific
+   in-game actions.
+4. Codex runs `tools/atm10-live-pass.sh observe 120` while Zach performs that
+   one action.
+5. Codex patches/tests/commits fixes locally only when the evidence points to a
+   repo bug.
+6. Zach approves push.
+7. Zach runs the short deploy command set on computer 6.
 
 Preferred deploy command set:
 
