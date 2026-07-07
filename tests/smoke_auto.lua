@@ -168,6 +168,7 @@ local taskListCalls, perItemCraftingCalls = 0, 0
 local function fakeBridge()
   local items = {
     { name = "alltheores:zinc_ingot", amount = 1000, isCraftable = true },
+    { name = "alltheores:zinc_dust", amount = 10000, isCraftable = false },
     { name = "minecraft:iron_ingot", amount = 800000, isCraftable = false },
   }
   return {
@@ -282,14 +283,23 @@ end
 
 -- ---- APPROVE-REQ-1: terminal approval request is consumed by the manager ----
 do
-  local oldSettings = MANAGED_STORE.settings
+  local oldItems, oldSettings = MANAGED_STORE.items, MANAGED_STORE.settings
+  MANAGED_STORE.items = {
+    ["alltheores:zinc_ingot"] = {
+      name = "alltheores:zinc_ingot", label = "Zinc Ingot", target = 5000, craftTo = 5000,
+    },
+    ["alltheores:zinc_dust"] = {
+      name = "alltheores:zinc_dust", label = "Zinc Dust", target = 0, craftTo = 0,
+      ceiling = 1000, into = { name = "alltheores:zinc_ingot", label = "Zinc Ingot" }, ratio = 1,
+    },
+  }
   MANAGED_STORE.settings = { modeOverride = "manual" }
   local okAR, errAR = runManagerWithEvents(
     "smoke-auto: terminal approval request is manager-owned",
     fakeBridge(),
     { { "timer", 1 } },
-    { [".atm10-approve-request"] = textutils.serialize({ target = "zinc", requestedAt = 1 }) })
-  MANAGED_STORE.settings = oldSettings
+    { [".atm10-approve-request"] = textutils.serialize({ target = "alltheores:zinc_ingot", requestedAt = 1 }) })
+  MANAGED_STORE.items, MANAGED_STORE.settings = oldItems, oldSettings
   check(okAR == false and tostring(errAR):find(SENTINEL, 1, true) ~= nil,
     "APPROVE-REQ-1: manager handled the request then stopped: " .. tostring(errAR))
   local approveResult = textutils.unserialize(files[".atm10-approve-result"])
@@ -298,8 +308,9 @@ do
     "APPROVE-REQ-1: approval result records the matched WOULD CRAFT row")
   local approveQueue = textutils.unserialize(files[".atm10-craft-queue"])
   local approveEntry = approveQueue and approveQueue.entries and approveQueue.entries["alltheores:zinc_ingot"]
-  check(approveEntry and approveEntry.state == "CRAFTING" and approveEntry.jobId == 1001,
-    "APPROVE-REQ-1: request flowed through manager queue and fired one capped craft")
+  check(approveEntry and approveEntry.state == "CRAFTING" and approveEntry.jobId == 1001
+    and approveEntry.key == "alltheores:zinc_ingot",
+    "APPROVE-REQ-1: exact output id prefers refill row over compress row")
   check(files[".atm10-approve-request"] == nil,
     "APPROVE-REQ-1: manager deletes a consumed approval request")
 end

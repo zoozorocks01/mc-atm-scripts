@@ -3031,12 +3031,15 @@ local function findApprovalPlan(plans, target)
   target = normalizeSearch(target)
   if target == "" then return nil, "empty target" end
 
-  local exact, fuzzy = {}, {}
+  local exactKey, exact, fuzzy = {}, {}, {}
   for _, p in ipairs(plans or {}) do
     if type(p) == "table" and p.action == "WOULD CRAFT" and p.name and (tonumber(p.request) or 0) > 0 then
       local name = normalizeSearch(p.name)
       local label = normalizeSearch(p.label)
-      if name == target or label == target then
+      local key = normalizeSearch(p.key)
+      if key ~= "" and key == target then
+        exactKey[#exactKey + 1] = p
+      elseif name == target or label == target then
         exact[#exact + 1] = p
       elseif name:find(target, 1, true) or label:find(target, 1, true) then
         fuzzy[#fuzzy + 1] = p
@@ -3044,8 +3047,15 @@ local function findApprovalPlan(plans, target)
     end
   end
 
-  local candidates = (#exact > 0) and exact or fuzzy
+  local candidates = (#exactKey > 0) and exactKey or ((#exact > 0) and exact or fuzzy)
   if #candidates == 1 then return candidates[1], nil end
+  if #candidates > 1 and #exactKey == 0 then
+    local refill = {}
+    for _, p in ipairs(candidates) do
+      if p.kind ~= "compress" and (not p.key or p.key == p.name) then refill[#refill + 1] = p end
+    end
+    if #refill == 1 then return refill[1], nil end
+  end
   if #candidates == 0 then return nil, "no matching WOULD CRAFT row" end
   local labels = {}
   for i = 1, math.min(#candidates, 5) do labels[#labels + 1] = tostring(candidates[i].label or candidates[i].name) end
