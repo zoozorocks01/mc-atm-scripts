@@ -140,6 +140,7 @@ end
 --   holdReason    : optional function(entry, q) -> string reason to leave APPROVED
 --                   without firing this cycle (used for compression-pair deadlocks).
 --   holdFailed    : true => failed non-manual entries never retry automatically.
+--   holdWhenAnyFailed : true => any queue failure holds all non-manual quota rows.
 --
 -- Mutates q in place. Returns a summary and the queue:
 --   { requested = { {name, amount} }, failed = { {name, reason} }, changed = bool }
@@ -156,6 +157,7 @@ function runner.run(q, deps)
   local policy = deps.policy
   local manualMode = deps.mode == control.MODE_MANUAL
   local holdFailed = deps.holdFailed == true
+  local holdWhenAnyFailed = deps.holdWhenAnyFailed == true
   local maxPerCycle = tonumber(deps.maxPerCycle)
   if maxPerCycle and maxPerCycle <= 0 then maxPerCycle = nil end
   local maxBridgeRequest = tonumber(deps.maxBridgeRequest)
@@ -168,6 +170,7 @@ function runner.run(q, deps)
   local summary = { requested = {}, failed = {}, completed = {}, held = {}, changed = false }
   local fired = 0
   local requestedThisRun = {} -- item names already requested this run (avoid double-fire)
+  local anyFailure = holdWhenAnyFailed and cqueue.failureCount(q) > 0
 
   local function capBridgeRequest(amount)
     amount = math.max(0, math.floor(tonumber(amount) or 0))
@@ -221,6 +224,8 @@ function runner.run(q, deps)
         summary.held[#summary.held + 1] = { name = e.name, reason = heldByDeps }
       elseif (not manualJob) and e.error and (manualMode or holdFailed or cqueue.isHardFailure(e)) then
         summary.held[#summary.held + 1] = { name = e.name, reason = e.error }
+      elseif (not manualJob) and anyFailure then
+        summary.held[#summary.held + 1] = { name = e.name, reason = "queue has failed entries" }
       elseif (not manualJob) and e.triedAt and cooldownMs > 0 and (now - e.triedAt) < cooldownMs then
         -- backing off after a recent failed craft; skip this cycle
       elseif isCrafting(e.name) then

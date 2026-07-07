@@ -1081,6 +1081,18 @@ t.eq(tries, 1, "holdFailed stops auto retry after cooldown")
 t.eq(#_G.__failStopSummary.held, 1, "holdFailed surfaces the held failed row")
 _G.__failStopSummary = nil
 
+qf = mkQ({ { name = "bad", request = 32 }, { name = "good", request = 32 } })
+qf.entries.bad.error = "craft failed"
+tries = 0
+depsF = { policy = control.policy({ mode = "auto", allowAutocraft = true }), mode = "auto",
+  now = 2600, cooldownMs = 300000, holdFailed = true, holdWhenAnyFailed = true,
+  isCrafting = function() return false end,
+  craft = function() tries = tries + 1; return true end }
+_G.__failStopSummary = craftrunner.run(qf, depsF)
+t.eq(tries, 0, "holdWhenAnyFailed stops healthy quota rows while failures remain")
+t.eq(#_G.__failStopSummary.held, 2, "holdWhenAnyFailed surfaces both held rows")
+_G.__failStopSummary = nil
+
 tries = 0
 qf = mkQ({ { name = "hard", request = 32 } })
 depsF = { policy = control.policy({ mode = "auto", allowAutocraft = true }), mode = "auto",
