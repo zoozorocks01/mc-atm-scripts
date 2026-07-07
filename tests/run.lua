@@ -1054,6 +1054,19 @@ craftrunner.run(qf, depsF)
 depsF.now = 2000 + 400000
 craftrunner.run(qf, depsF)
 t.eq(tries, 2, "auto failed approval still retries after cooldown")
+tries = 0
+qf = mkQ({ { name = "hard", request = 32 } })
+depsF = { policy = control.policy({ mode = "auto", allowAutocraft = true }), mode = "auto",
+  now = 3000, cooldownMs = 300000,
+  isCrafting = function() return false end,
+  craft = function() tries = tries + 1; return false, "UNKNOWN_ERROR" end }
+craftrunner.run(qf, depsF)
+depsF.now = 3000 + 400000
+_G.__hardSummary = craftrunner.run(qf, depsF)
+t.eq(tries, 1, "auto hard AP failure does not retry after cooldown")
+t.eq(#_G.__hardSummary.held, 1, "auto hard AP failure is surfaced as held")
+t.eq(_G.__hardSummary.held[1].reason, "UNKNOWN_ERROR", "auto hard AP failure preserves the terminal reason")
+_G.__hardSummary = nil
 qf = mkQ({ { name = "ra", request = 1 }, { name = "rb", request = 1 } })
 cqueue.markError(qf, "ra", 20, "bridge offline")
 qf, tries = cqueue.retryFailed(qf, 30)

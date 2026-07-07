@@ -15,6 +15,19 @@ queue.CRAFTING = "CRAFTING" -- craft request accepted by RS; awaiting completion
 -- far). craftFrom is still honored unless force is set. The runner leads with these.
 queue.MANUAL = "manual" -- kind tag for a manual/oneshot craft job
 
+local HARD_FAILURES = {
+  MISSING_ITEMS = true,
+  NOT_CRAFTABLE = true,
+  UNKNOWN_ERROR = true,
+}
+
+function queue.isHardFailure(reasonOrEntry)
+  local reason = reasonOrEntry
+  if type(reasonOrEntry) == "table" then reason = reasonOrEntry.error end
+  if reason == nil then return false end
+  return HARD_FAILURES[string.upper(tostring(reason))] == true
+end
+
 local function copyPlanFields(dest, entry)
   dest.label = entry.label or dest.label or entry.name or dest.name
   dest.request = tonumber(entry.request) or dest.request or 0

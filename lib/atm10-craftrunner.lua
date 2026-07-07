@@ -216,7 +216,7 @@ function runner.run(q, deps)
           summary.changed = true
         end
         summary.held[#summary.held + 1] = { name = e.name, reason = heldByDeps }
-      elseif (not manualJob) and e.error and manualMode then
+      elseif (not manualJob) and e.error and (manualMode or cqueue.isHardFailure(e)) then
         summary.held[#summary.held + 1] = { name = e.name, reason = e.error }
       elseif (not manualJob) and e.triedAt and cooldownMs > 0 and (now - e.triedAt) < cooldownMs then
         -- backing off after a recent failed craft; skip this cycle
