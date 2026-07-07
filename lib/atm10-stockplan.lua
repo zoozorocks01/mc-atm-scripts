@@ -282,7 +282,7 @@ function stockplan.plan(ctx)
       amounts[target.name] = amount
       targets[target.name] = trigger
 
-      if exists == false then
+      if exists == false and not craftable then
         plans[#plans + 1] = copyMeta({ action = "UNKNOWN-ID", name = target.name, category = categoryLabel,
           label = label, amount = amount, target = trigger, craftTo = craftTo, priority = priority,
           reason = "not present in live RS item grid" }, craftMeta)

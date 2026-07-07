@@ -510,6 +510,15 @@ t.eq((stockplan.plan({ stockKeeper = SK({ { name = "missing:item", target = 100 
   resolve = function() return 0, false, false, false end })[1]).reason,
   "not present in live RS item grid", "UNKNOWN-ID carries operator reason")
 
+-- below target, absent from stored getItems rows but craftable -> WOULD CRAFT.
+-- Live RS can omit zero-stock outputs from getItems while isCraftable/getCraftableItems
+-- still proves the output ID and recipe exist.
+_G.__zeroStoredCraftable = stockplan.plan({ stockKeeper = SK({ { name = "zero:item", target = 100, craftTo = 256 } }),
+  ledger = emptyLedger, resolve = function() return 0, true, false, false end })
+t.eq(_G.__zeroStoredCraftable[1].action, "WOULD CRAFT", "zero-stock craftable item is not UNKNOWN-ID")
+t.eq(_G.__zeroStoredCraftable[1].request, 256, "zero-stock craftable request fills to craftTo")
+_G.__zeroStoredCraftable = nil
+
 -- below target, watch/manual route -> explicit BLOCKED reason, never a craft request
 do
   local watchP = stockplan.plan({ stockKeeper = SK({
