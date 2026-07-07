@@ -11,6 +11,7 @@ local ORDER = {
   "approval-aluminum-ambiguous",
   "approval-stale-request",
   "ap-failure-progress",
+  "auto-admission-bounded",
 }
 
 local function contains(text, needle)
@@ -271,6 +272,56 @@ SCENARIOS["ap-failure-progress"] = {
         and event.name == "alltheores:aluminum_ingot"
         and event.amount == 32
     end), "audit records job_progress with the capped batch size")
+    return checks
+  end,
+}
+
+SCENARIOS["auto-admission-bounded"] = {
+  description = "Auto mode admits only a runnable backlog instead of queueing every deficit at once.",
+  run = function()
+    local items, managedItems = {}, {}
+    for i = 1, 6 do
+      local name = "test:auto_item_" .. i
+      items[#items + 1] = { name = name, amount = 0, isCraftable = true }
+      managedItems[name] = {
+        name = name,
+        label = "Auto Item " .. i,
+        target = 4096,
+        craftTo = 4096,
+      }
+    end
+    local bridge = sim.bridge({ items = items })
+    local runner = sim.new({
+      bridge = bridge,
+      managedStore = {
+        items = managedItems,
+        settings = { modeOverride = "auto" },
+      },
+      config = {
+        mode = "auto",
+        allowAutocraft = true,
+        stockKeeper = { enabled = true, maxCraftsPerCycle = 2, maxBridgeRequest = 32 },
+      },
+      events = { { "timer", 1 } },
+    })
+    local result = runner:run()
+    return {
+      runner = runner,
+      result = result,
+      crafted = result.crafted,
+    }
+  end,
+  checks = function(report)
+    local checks = {}
+    local entries = queueEntries(report)
+    local depth = 0
+    for _ in pairs(entries) do depth = depth + 1 end
+    local statusFile = serialized(report, ".atm10-status")
+    addCheck(checks, reachedSentinel(report), "manager completed one auto scan and stopped at the simulator sentinel")
+    addCheck(checks, depth == 2, "auto admission keeps queue depth to maxCraftsPerCycle instead of all deficits")
+    addCheck(checks, #report.crafted == 2, "runner fires only the admitted auto rows in that cycle")
+    addCheck(checks, type(statusFile) == "table" and statusFile.plan and statusFile.plan.wouldCraftCount == 6,
+      "sim still had more deficits available than auto admitted")
     return checks
   end,
 }

@@ -1887,7 +1887,11 @@ local function autoApprovePlans(plans)
   -- Fail-stop: unattended auto must not keep discovering/firing more routes after
   -- any queue row has already failed. The operator can inspect, retry, or clear.
   if cqueue.failureCount(craftQueue) > 0 then return end
-  local _, n = cqueue.autoApprove(craftQueue, plans, nowMs())
+  local autoSlots = math.max(1, math.floor(tonumber(config.stockKeeper.maxCraftsPerCycle) or 1))
+  local _, n = cqueue.autoApprove(craftQueue, plans, nowMs(), {
+    maxNew = autoSlots,
+    maxQueued = autoSlots,
+  })
   if n > 0 then saveQueue(craftQueue) end
 end
 

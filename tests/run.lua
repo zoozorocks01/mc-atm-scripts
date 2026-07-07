@@ -743,6 +743,31 @@ t.eq(cqueue.get(aq, "iron").state, cqueue.APPROVED, "re-armed entry is APPROVED 
 local _, an4 = cqueue.autoApprove(aq, nil, 400)
 t.eq(an4, 0, "autoApprove(nil plans) is a no-op")
 
+do
+  local limitedAutoPlans = {
+    { action = "WOULD CRAFT", name = "auto:a", label = "A", request = 10 },
+    { action = "WOULD CRAFT", name = "auto:b", label = "B", request = 10 },
+    { action = "WOULD CRAFT", name = "auto:c", label = "C", request = 10 },
+  }
+  local lq = cqueue.new()
+  local _, ln1 = cqueue.autoApprove(lq, limitedAutoPlans, 500, { maxNew = 1, maxQueued = 2 })
+  t.eq(ln1, 1, "autoApprove maxNew admits only one absent row per call")
+  t.eq(cqueue.count(lq), 1, "autoApprove maxNew leaves later absent rows out of the queue")
+  local _, ln2 = cqueue.autoApprove(lq, limitedAutoPlans, 600, { maxNew = 2, maxQueued = 2 })
+  t.eq(ln2, 1, "autoApprove maxQueued admits only up to the configured non-manual backlog")
+  t.eq(cqueue.count(lq), 2, "autoApprove maxQueued keeps the backlog bounded")
+  local _, ln3 = cqueue.autoApprove(lq, limitedAutoPlans, 700, { maxNew = 2, maxQueued = 2 })
+  t.eq(ln3, 0, "autoApprove maxQueued blocks additional absent rows once backlog is full")
+  t.eq(cqueue.has(lq, "auto:c"), false, "autoApprove maxQueued did not enqueue the third deficit")
+  local _, ln4 = cqueue.autoApprove(lq, {
+    { action = "WOULD CRAFT", name = "auto:a", label = "A2", request = 20, priority = 0.8 },
+    { action = "WOULD CRAFT", name = "auto:c", label = "C", request = 10 },
+  }, 800, { maxNew = 2, maxQueued = 2 })
+  t.eq(ln4, 0, "autoApprove refreshes existing rows at cap without counting a new approval")
+  t.eq(cqueue.get(lq, "auto:a").request, 20, "autoApprove refresh at cap updates existing request")
+  t.eq(cqueue.get(lq, "auto:a").priority, 0.8, "autoApprove refresh at cap updates existing priority")
+end
+
 q = cqueue.cancel(q, "y")
 t.check(cqueue.has(q, "y") == false, "cancel removes an entry")
 t.eq(cqueue.count(q), 1, "cancel decrements count")

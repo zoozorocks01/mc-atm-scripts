@@ -402,21 +402,41 @@ end
 -- a row that reads WOULD CRAFT again means RS finished it and the quota still wants
 -- the next batch. Returns the queue and the number of entries (re)approved.
 --
+-- opts:
+--   maxNew    : cap absent queue entries admitted by this call
+--   maxQueued : cap existing non-manual auto/quota queue depth before admitting
+--               absent entries. Existing rows can still refresh/re-arm.
+--
 -- Pure: the manager owns the mode gate, the ledger COOLDOWN (which keeps an item
 -- from reading WOULD CRAFT again until its window passes, bounding re-fire), and
 -- persistence. plans rows are the stock/balance planner shape {action,name,label,
 -- request,key?}.
-function queue.autoApprove(q, plans, now)
+function queue.autoApprove(q, plans, now, opts)
   q = queue.normalize(q)
+  opts = opts or {}
+  local maxNew = tonumber(opts.maxNew)
+  if maxNew and maxNew > 0 then maxNew = math.floor(maxNew) else maxNew = nil end
+  local maxQueued = tonumber(opts.maxQueued)
+  if maxQueued and maxQueued > 0 then maxQueued = math.floor(maxQueued) else maxQueued = nil end
+  local queued = 0
+  if maxQueued then
+    for _, e in pairs(q.entries) do
+      if type(e) == "table" and not queue.isManual(e) then queued = queued + 1 end
+    end
+  end
   local n = 0
   for _, p in ipairs(plans or {}) do
     if p and p.action == "WOULD CRAFT" and p.name and (tonumber(p.request) or 0) > 0 then
       local key = p.key or p.name
       local cur = q.entries[key]
-      if not cur or cur.state ~= queue.APPROVED then
+      local absent = cur == nil
+      local canAdmit = (not absent)
+        or ((not maxNew or n < maxNew) and (not maxQueued or queued < maxQueued))
+      if canAdmit and (not cur or cur.state ~= queue.APPROVED) then
         queue.approve(q, p, now)
+        if absent then queued = queued + 1 end
         n = n + 1
-      else
+      elseif cur then
         copyPlanFields(cur, p)
       end
     end
