@@ -146,6 +146,7 @@ show_file .atm10-heartbeat 20
 show_file .atm10-status 160
 show_file .atm10-loopstate 120
 show_file .atm10-craftstate 180
+show_file .atm10-touchstate 120
 show_file .atm10-planstate 220
 show_file .atm10-craft-results 180
 show_file .atm10-craft-audit 220

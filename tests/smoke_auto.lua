@@ -279,6 +279,29 @@ local function runManagerWithEvents(label, bridgeHandle, scriptedEvents)
   return pcall(function() dofile("inventory/manager.lua") end)
 end
 
+-- ---- TOUCHTRACE-1: plan-row touch persists its hit-test result --------------
+do
+  local oldSettings = MANAGED_STORE.settings
+  MANAGED_STORE.settings = { modeOverride = "manual" }
+  local okT, errT = runManagerWithEvents("smoke-auto: manual plan-row touch writes touchstate", fakeBridge(), {
+    { "timer", 1 },
+    { "monitor_touch", "r", 1, 10 },
+  })
+  MANAGED_STORE.settings = oldSettings
+  check(okT == false and tostring(errT):find(SENTINEL, 1, true) ~= nil,
+    "TOUCHTRACE-1: manager handled the touch then stopped: " .. tostring(errT))
+  local touchState = textutils.unserialize(files[".atm10-touchstate"])
+  check(type(touchState) == "table" and touchState.result == "plan_approved"
+    and touchState.matched and touchState.matched.name == "alltheores:zinc_ingot"
+    and type(touchState.visiblePlanRows) == "table" and touchState.visiblePlanRows[1]
+    and touchState.visiblePlanRows[1].y == 10,
+    "TOUCHTRACE-1: touchstate records the matched plan row and visible row map")
+  local touchQueue = textutils.unserialize(files[".atm10-craft-queue"])
+  check(touchQueue and touchQueue.entries and touchQueue.entries["alltheores:zinc_ingot"]
+    and touchQueue.entries["alltheores:zinc_ingot"].state == "APPROVED",
+    "TOUCHTRACE-1: the same touch approved the row into the queue")
+end
+
 -- ---- AP-EVENT-1: rs_crafting JOB_DONE closes the tracked job id -------------
 local BRE = fakeBridge()
 local okE, errE = runManagerWithEvents("smoke-auto: rs_crafting JOB_DONE closes AP job id", BRE, {

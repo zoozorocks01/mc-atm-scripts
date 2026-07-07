@@ -34,6 +34,7 @@ local FILES = {
   planstate = ".atm10-planstate",   -- compact stock-plan snapshot for SSH diagnostics
   loopstate = ".atm10-loopstate",   -- manager scan/render pace metric (is it keeping up?)
   status = ".atm10-status",         -- compact summary for agents/operators to poll over SSH
+  touchstate = ".atm10-touchstate", -- latest touch hit-test result for live approval tests
   heartbeat = ".atm10-heartbeat",   -- liveness ping; startup watchdog restarts a hung manager
 }
 -- Cycleable +/- step sizes in the quota editor: by count AND by stacks (a stack
@@ -1394,6 +1395,42 @@ local function effectiveMode()
   local override = managed.getSetting(managedStore, "modeOverride")
   if override and control.normalizeMode(override) == override then return override end
   return config.mode or "manual"
+end
+
+function ui.writeTouchState(x, y, result, entry)
+  local rows = {}
+  for i = 1, math.min(#(planRowRegions or {}), 20) do
+    local region = planRowRegions[i]
+    local p = region and region.entry or {}
+    rows[#rows + 1] = {
+      y = region and region.y or nil,
+      action = p.action,
+      label = p.label,
+      name = p.name,
+      request = p.request,
+      amount = p.amount,
+    }
+  end
+
+  pcall(atomicWrite, FILES.touchstate, {
+    at = nowMs(),
+    page = PAGES[pageIndex],
+    planPage = planPage,
+    mode = effectiveMode(),
+    x = tonumber(x),
+    y = tonumber(y),
+    result = result,
+    matched = entry and {
+      action = entry.action,
+      label = entry.label,
+      name = entry.name,
+      request = entry.request,
+      amount = entry.amount,
+      key = entry.key,
+      kind = entry.kind,
+    } or nil,
+    visiblePlanRows = rows,
+  })
 end
 
 -- Cycle the console mode chip: monitor -> dry-run -> manual -> auto -> monitor.
@@ -3184,6 +3221,7 @@ end
 
 local function handleTouch(x, y)
   ui.lastInteractionAt = nowMs()
+  ui.writeTouchState(x, y, "received")
   if editing and editing.pickingInto then
     handlePickIntoTouch(x, y)
     return
@@ -3199,6 +3237,7 @@ local function handleTouch(x, y)
 
   -- header mode chip: cycle the control mode (available on every page)
   if modeChip and y == modeChip.y and x >= modeChip.x1 and x <= modeChip.x2 then
+    ui.writeTouchState(x, y, "mode_chip")
     cycleMode(autoArmed)
     renderCurrent()
     return
@@ -3206,6 +3245,7 @@ local function handleTouch(x, y)
 
   local page = console.tabHit(tabStrip, x, y, 1)
   if page then
+    ui.writeTouchState(x, y, "tab")
     setPage(page)
     renderCurrent()
     return
@@ -3214,6 +3254,7 @@ local function handleTouch(x, y)
   -- Plan page: [< PREV] / [NEXT >] paging, then tap a WOULD CRAFT row to approve
   for _, nav in ipairs(planNavRegions) do
     if y == nav.y and x >= nav.x1 and x <= nav.x2 then
+      ui.writeTouchState(x, y, "plan_nav")
       planPage = math.max(1, planPage + nav.delta)
       ui.pageShownAt = nowMs()
       renderCurrent()
@@ -3223,6 +3264,7 @@ local function handleTouch(x, y)
 
   if planActionRegion and y == planActionRegion.y
     and x >= planActionRegion.x1 and x <= planActionRegion.x2 then
+    ui.writeTouchState(x, y, "approve_all")
     approveAllPlans()
     renderCurrent()
     return
@@ -3230,6 +3272,7 @@ local function handleTouch(x, y)
 
   local planEntry = console.rowHit(planRowRegions, y, 1)
   if planEntry then
+    ui.writeTouchState(x, y, "plan_approved", planEntry)
     approve(planEntry)
     renderCurrent()
     return
@@ -3237,6 +3280,7 @@ local function handleTouch(x, y)
 
   if ui.queueRetryRegion and y == ui.queueRetryRegion.y
     and x >= ui.queueRetryRegion.x1 and x <= ui.queueRetryRegion.x2 then
+    ui.writeTouchState(x, y, "queue_retry")
     local q = craftQueue or loadQueue()
     local _, n = cqueue.retryFailed(q, nowMs())
     craftQueue = q
@@ -3250,6 +3294,7 @@ local function handleTouch(x, y)
 
   if queueActionRegion and y == queueActionRegion.y
     and x >= queueActionRegion.x1 and x <= queueActionRegion.x2 then
+    ui.writeTouchState(x, y, "queue_clear")
     clearQueue()
     renderCurrent()
     return
@@ -3257,6 +3302,7 @@ local function handleTouch(x, y)
 
   local queueEntry = console.rowHit(queueRowRegions, y, 1)
   if queueEntry then
+    ui.writeTouchState(x, y, "queue_cancel", queueEntry)
     cancelEntry(queueEntry)
     renderCurrent()
     return
@@ -3264,6 +3310,7 @@ local function handleTouch(x, y)
 
   local presetEntry = console.rowHit(presetRowRegions, y, 1)
   if presetEntry then
+    ui.writeTouchState(x, y, "preset_apply", presetEntry)
     applyPreset(presetEntry)
     renderCurrent()
     return
@@ -3272,10 +3319,12 @@ local function handleTouch(x, y)
   -- Smart page: enable/disable + clear toggles, then tap a suggestion to review
   local smartKey = console.buttonHit(smartButtons, x, y)
   if smartKey == "smarttoggle" then
+    ui.writeTouchState(x, y, "smart_toggle")
     toggleSmart()
     renderCurrent()
     return
   elseif smartKey == "smartclear" then
+    ui.writeTouchState(x, y, "smart_clear")
     local clearedAt = nowMs()
     for _, s in ipairs((lastData and lastData.suggestions) or {}) do
       -- CRAFT-6: record the drain rate at dismissal so analyze can re-surface this item if its
@@ -3290,6 +3339,7 @@ local function handleTouch(x, y)
   end
   local smartEntry = console.rowHit(smartRowRegions, y, 1)
   if smartEntry then
+    ui.writeTouchState(x, y, "smart_row", smartEntry)
     if smartEntry.kind == "needpattern" then
       ui.pageShownAt = nowMs()
       ui.flashMsg = "Needs RS pattern: " .. tostring(smartEntry.label)
@@ -3306,6 +3356,7 @@ local function handleTouch(x, y)
   -- Browse page: sort chip, ALL/MANAGED filter toggle, [< PREV]/[NEXT >] paging, tap a row
   if ui.browseSortBtn and y == ui.browseSortBtn.y
     and x >= ui.browseSortBtn.x1 and x <= ui.browseSortBtn.x2 then
+    ui.writeTouchState(x, y, "browse_sort")
     ui.browseSortMode = console.nextSort(ui.browseSortMode or "qty")
     browsePage = 1
     ui.pageShownAt = nowMs()
@@ -3314,6 +3365,7 @@ local function handleTouch(x, y)
   end
 
   if browseFilterBtn and y == browseFilterBtn.y and x >= browseFilterBtn.x1 and x <= browseFilterBtn.x2 then
+    ui.writeTouchState(x, y, "browse_filter")
     browseFilter = not browseFilter
     browsePage = 1
     ui.pageShownAt = nowMs()
@@ -3322,6 +3374,7 @@ local function handleTouch(x, y)
   end
   for _, nav in ipairs(browseNavRegions) do
     if y == nav.y and x >= nav.x1 and x <= nav.x2 then
+      ui.writeTouchState(x, y, "browse_nav")
       browsePage = math.max(1, browsePage + nav.delta)
       ui.pageShownAt = nowMs()
       renderCurrent()
@@ -3331,6 +3384,7 @@ local function handleTouch(x, y)
 
   local browseEntry = console.rowHit(browseRowRegions, y, 1)
   if browseEntry then
+    ui.writeTouchState(x, y, "browse_open", browseEntry)
     openEditor(browseEntry)
     renderCurrent()
     return
@@ -3338,6 +3392,7 @@ local function handleTouch(x, y)
 
   -- Nothing matched: flash the tap's coords so a "dead" tap is VISIBLE (taps on this
   -- monitor are finicky; this shows exactly where a miss landed, to tune targets).
+  ui.writeTouchState(x, y, "no_target")
   ui.flashMsg = "tap " .. x .. "," .. y .. " - no target"
   ui.flashAt = nowMs()
   renderCurrent()
@@ -3505,7 +3560,8 @@ do
   if ok and hmod and hmod.sweepTmps then
     hmod.sweepTmps(fs, {
       FILES.queue, FILES.managed, FILES.trends, FILES.dismissed, FILES.ledger,
-      FILES.loopstate, FILES.planstate, FILES.status, CRAFT_RESULTS.file, CRAFT_RESULTS.auditFile,
+      FILES.loopstate, FILES.planstate, FILES.status, FILES.touchstate,
+      CRAFT_RESULTS.file, CRAFT_RESULTS.auditFile,
     })
   end
   pcall(fs.delete, FILES.drainRequest)
