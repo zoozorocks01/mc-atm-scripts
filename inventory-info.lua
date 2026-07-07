@@ -1699,6 +1699,9 @@ local function processCraftQueue(now, plans)
     overflowReserve = tonumber(stock.overflowReserve) or 0,
     -- A1: reserve >=1 slot per cycle for manual jobs so a quota flood can't starve them
     manualReserve = tonumber(stock.manualReserve) or 1,
+    -- Unattended safety: failed quota rows require an explicit retry/clear before
+    -- they can fire again, even in auto mode.
+    holdFailed = true,
     -- A1: live source amount for a job's craftFrom reserve (getItems is TTL-cached, cheap)
     resolve = function(name) local it = findStoredItem(getItems(), name); return it and itemAmount(it) or 0 end,
     isCrafting = function(name) return isItemCrafting(name, { verifyEmpty = true }) end,
@@ -1878,6 +1881,9 @@ local function autoApprovePlans(plans)
   if effectiveMode() ~= control.MODE_AUTO then return end
   if type(plans) ~= "table" then return end
   craftQueue = craftQueue or loadQueue()
+  -- Fail-stop: unattended auto must not keep discovering/firing more routes after
+  -- any queue row has already failed. The operator can inspect, retry, or clear.
+  if cqueue.failureCount(craftQueue) > 0 then return end
   local _, n = cqueue.autoApprove(craftQueue, plans, nowMs())
   if n > 0 then saveQueue(craftQueue) end
 end

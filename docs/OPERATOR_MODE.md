@@ -86,6 +86,10 @@ computer 6. The observe phase captures the bounded window, reruns doctor, then
 asks Zach to return the manager to manual. The wrapper never changes mode from
 the host side.
 
+Auto mode is fail-stop around queue failures: once any queue row records an
+error, the manager stops adding new auto approvals and failed rows stay held
+until an operator explicitly retries or clears them.
+
 The wrapper is deliberately narrower than a control system. Direct command
 mailboxes and broader automation should wait until this stability loop is
 boring and repeatable.

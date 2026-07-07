@@ -281,6 +281,40 @@ local function runManagerWithEvents(label, bridgeHandle, scriptedEvents, seedFil
   return pcall(function() dofile("inventory/manager.lua") end)
 end
 
+-- ---- AUTO-FAILSTOP-1: failed queue rows stop unattended auto ---------------
+do
+  local failedCrafted = {}
+  local BRHold = fakeBridge()
+  BRHold.craftItem = function(arg) failedCrafted[#failedCrafted + 1] = arg; return fakeCraftJob() end
+  local failedQueue = {
+    entries = {
+      ["alltheores:zinc_ingot"] = {
+        key = "alltheores:zinc_ingot",
+        name = "alltheores:zinc_ingot",
+        label = "Zinc Ingot",
+        state = "APPROVED",
+        request = 32,
+        approvedAt = 1,
+        triedAt = 1,
+        error = "craft failed",
+      },
+    },
+  }
+  local okFS, errFS = runManagerWithEvents(
+    "smoke-auto: failed queue row holds unattended auto",
+    BRHold,
+    { { "timer", 1 } },
+    { [".atm10-craft-queue"] = textutils.serialize(failedQueue) })
+  check(okFS == false and tostring(errFS):find(SENTINEL, 1, true) ~= nil,
+    "AUTO-FAILSTOP-1: manager reached sentinel with failed queue row: " .. tostring(errFS))
+  check(#failedCrafted == 0,
+    "AUTO-FAILSTOP-1: auto did not retry or add crafts while queue has a failure")
+  local heldQueue = textutils.unserialize(files[".atm10-craft-queue"])
+  local held = heldQueue and heldQueue.entries and heldQueue.entries["alltheores:zinc_ingot"]
+  check(held and held.error == "craft failed" and held.state == "APPROVED",
+    "AUTO-FAILSTOP-1: failed row remains held for explicit retry/clear")
+end
+
 -- ---- APPROVE-REQ-1: terminal approval request is consumed by the manager ----
 do
   local oldItems, oldSettings = MANAGED_STORE.items, MANAGED_STORE.settings

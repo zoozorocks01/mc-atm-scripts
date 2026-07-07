@@ -431,6 +431,15 @@ function queue.count(q)
   return n
 end
 
+function queue.failureCount(q)
+  q = queue.normalize(q)
+  local n = 0
+  for _, e in pairs(q.entries) do
+    if type(e) == "table" and e.error then n = n + 1 end
+  end
+  return n
+end
+
 -- Entries as an array, newest approvals first (stable tiebreak by name). When
 -- opts.priority is true, APPROVED entries with a higher deficit priority sort
 -- first so the craft runner's per-cycle cap fires the most urgent quotas.

@@ -683,6 +683,10 @@ t.eq(q.entries.x.request, 64, "entry carries request size")
 q = cqueue.approve(q, { name = "x", request = 128 }, 20) -- dedupe + refresh
 t.eq(cqueue.count(q), 1, "re-approving same item dedupes")
 t.eq(q.entries.x.request, 128, "re-approve refreshes the request")
+t.eq(cqueue.failureCount(q), 0, "failureCount is zero without errors")
+q.entries.x.error = "craft failed"
+t.eq(cqueue.failureCount(q), 1, "failureCount counts errored entries")
+q.entries.x.error = nil
 
 q = cqueue.approve(q, { label = "no name" }, 30) -- missing name -> no-op
 t.eq(cqueue.count(q), 1, "approve without a name is a no-op")
@@ -1063,6 +1067,20 @@ craftrunner.run(qf, depsF)
 depsF.now = 2000 + 400000
 craftrunner.run(qf, depsF)
 t.eq(tries, 2, "auto failed approval still retries after cooldown")
+
+qf = mkQ({ { name = "f", request = 32 } })
+tries = 0
+depsF = { policy = control.policy({ mode = "auto", allowAutocraft = true }), mode = "auto",
+  now = 2500, cooldownMs = 300000, holdFailed = true,
+  isCrafting = function() return false end,
+  craft = function() tries = tries + 1; return false, "craft failed" end }
+craftrunner.run(qf, depsF)
+depsF.now = 2500 + 400000
+_G.__failStopSummary = craftrunner.run(qf, depsF)
+t.eq(tries, 1, "holdFailed stops auto retry after cooldown")
+t.eq(#_G.__failStopSummary.held, 1, "holdFailed surfaces the held failed row")
+_G.__failStopSummary = nil
+
 tries = 0
 qf = mkQ({ { name = "hard", request = 32 } })
 depsF = { policy = control.policy({ mode = "auto", allowAutocraft = true }), mode = "auto",

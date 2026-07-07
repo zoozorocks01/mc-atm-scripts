@@ -12,9 +12,10 @@
 --   * Each approval fires AT MOST ONE craft request, then transitions to
 --     CRAFTING so it is never re-requested.
 --   * If the item is already crafting in RS, adopt CRAFTING without a request.
---   * A bridge rejection keeps the entry APPROVED with an error. In manual mode,
---     failed plan approvals stay blocked until the operator explicitly retries or
---     clears them; auto mode still retries after the cooldown.
+--   * A bridge rejection keeps the entry APPROVED with an error. In manual mode
+--     or when deps.holdFailed=true, failed plan approvals stay blocked until the
+--     operator explicitly retries or clears them. Auto mode can opt into the same
+--     fail-stop behavior for unattended safety.
 local control = require("atm10-control")
 local cqueue = require("atm10-queue")
 
@@ -138,6 +139,7 @@ end
 --                   by priority. Borrowable: either side uses the other's idle slots. See runner.fireOrder.
 --   holdReason    : optional function(entry, q) -> string reason to leave APPROVED
 --                   without firing this cycle (used for compression-pair deadlocks).
+--   holdFailed    : true => failed non-manual entries never retry automatically.
 --
 -- Mutates q in place. Returns a summary and the queue:
 --   { requested = { {name, amount} }, failed = { {name, reason} }, changed = bool }
@@ -153,6 +155,7 @@ function runner.run(q, deps)
   local holdReason = deps.holdReason
   local policy = deps.policy
   local manualMode = deps.mode == control.MODE_MANUAL
+  local holdFailed = deps.holdFailed == true
   local maxPerCycle = tonumber(deps.maxPerCycle)
   if maxPerCycle and maxPerCycle <= 0 then maxPerCycle = nil end
   local maxBridgeRequest = tonumber(deps.maxBridgeRequest)
@@ -216,7 +219,7 @@ function runner.run(q, deps)
           summary.changed = true
         end
         summary.held[#summary.held + 1] = { name = e.name, reason = heldByDeps }
-      elseif (not manualJob) and e.error and (manualMode or cqueue.isHardFailure(e)) then
+      elseif (not manualJob) and e.error and (manualMode or holdFailed or cqueue.isHardFailure(e)) then
         summary.held[#summary.held + 1] = { name = e.name, reason = e.error }
       elseif (not manualJob) and e.triedAt and cooldownMs > 0 and (now - e.triedAt) < cooldownMs then
         -- backing off after a recent failed craft; skip this cycle

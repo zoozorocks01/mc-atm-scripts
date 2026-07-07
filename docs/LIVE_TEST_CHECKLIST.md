@@ -57,6 +57,10 @@ After Zach confirms the mode is back to manual, run:
 tools/atm10-iterate.sh status
 ```
 
+If the post-soak status reports `QUEUE_WARN`, keep the manager in manual. Failed
+rows should be inspected, retried one at a time, or cleared by an operator; auto
+should not keep adding new approvals while failures are present.
+
 For longer play-test capture, `tools/atm10-diagnostics.sh watch-log` is still
 available and writes timestamped snapshots under `/tmp/atm10-diagnostics`.
 
