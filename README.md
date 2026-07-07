@@ -41,10 +41,12 @@ From the repo root, run the read-only doctor before trusting a live install:
 tools/atm10-diagnostics.sh doctor
 ```
 
-It checks server reachability, port/process health, recent crash reports, manager
-heartbeat/loop state, queue/craft state, and whether the key ComputerCraft files
-match this repo. Use `tools/atm10-diagnostics.sh snapshot` when you need the full
-evidence dump.
+The live tools resolve the active Minecraft host from
+`~/Projects/personal/mc-server-ops/active-server.json` by default. The doctor
+checks the resolved server reachability, port/process health, recent crash
+reports, manager heartbeat/loop state, queue/craft state, and whether the key
+ComputerCraft files match this repo. Use `tools/atm10-diagnostics.sh snapshot`
+when you need the full evidence dump.
 
 ## Local Iteration
 
@@ -67,6 +69,12 @@ lua tools/atm10-sim.lua approval-aluminum
 For the live computer, `tools/atm10-iterate.sh status` prints doctor output plus
 compact approval/queue files, and `tools/atm10-iterate.sh approve <registry-id>`
 writes a manager-owned approval request and polls its result.
+
+To force the standby host for a diagnostic, select it by registry id:
+
+```bash
+ATM10_HOST_ID=zjn-home-two tools/atm10-diagnostics.sh doctor
+```
 
 ## Shared Baseline
 

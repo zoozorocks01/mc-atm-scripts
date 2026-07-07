@@ -25,6 +25,11 @@ Zach is only needed for:
 
 ## Codex Diagnostic Command
 
+The live host is not hard-coded. The scripts read the active MC server registry
+at `~/Projects/personal/mc-server-ops/active-server.json`, then use that host's
+Tailscale address, server directory, and Minecraft port unless explicitly
+overridden.
+
 From the repo root:
 
 ```bash
@@ -91,7 +96,7 @@ For a play-test log that keeps one snapshot every interval:
 tools/atm10-diagnostics.sh watch-log
 ```
 
-The command reads the live computer 6 directory on `zjn-home-two` and reports:
+The command reads the resolved live computer 6 directory and reports:
 
 - script file versions
 - `.atm10-heartbeat`
@@ -103,12 +108,20 @@ The command reads the live computer 6 directory on `zjn-home-two` and reports:
 - compact craft queue fields
 - latest `.atm10-bridge-probe.txt`
 
-Override host/path only if the server moves:
+Override host/path only if the registry needs to be bypassed. To select a
+registered host, prefer the host id:
 
 ```bash
-ATM10_HOST=zjn-home-two \
+ATM10_HOST_ID=zjn-home-two tools/atm10-diagnostics.sh snapshot
+```
+
+For an unregistered target, override host and paths together:
+
+```bash
+ATM10_HOST=example-host \
+ATM10_SERVER_DIR="/path/to/ATM10-server" \
 ATM10_COMPUTER_DIR="/path/to/computercraft/computer/6" \
-tools/atm10-diagnostics.sh snapshot
+tools/atm10-diagnostics.sh doctor
 ```
 
 ## Live Work Loop

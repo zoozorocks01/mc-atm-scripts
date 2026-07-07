@@ -15,6 +15,8 @@ tools/atm10-live-pass.sh preflight
 Expected before deploy:
 
 - Server is reachable and port `25566` is listening.
+- Doctor reports the resolved registry host, usually from
+  `~/Projects/personal/mc-server-ops/active-server.json`.
 - Manager heartbeat is fresh.
 - Doctor may warn that deployed ComputerCraft files differ from repo.
 - `.atm10-status` may be missing until the status-summary build is deployed.
@@ -42,12 +44,12 @@ available and writes timestamped snapshots under `/tmp/atm10-diagnostics`.
 Also keep a log baseline for ComputerCraft Java task errors:
 
 ```bash
-ssh zjn-home-two 'grep -n "NullPointerException" /Users/zacharynielsen/LocalServers/ATM10-server-7.0-intel-test/logs/latest.log | tail -20'
+tools/atm10-live-pass.sh npe-count
 ```
 
 The live-pass wrapper also stores a before/after count, which is the normal
 first check. Use the raw grep only when the count changes or a line number is
-needed.
+needed, and use the `host` and `serverDir` printed by `doctor` for that command.
 
 ## Deploy On Computer 6
 

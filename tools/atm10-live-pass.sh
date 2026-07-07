@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DIAG="${ATM10_DIAG_CMD:-tools/atm10-diagnostics.sh}"
-HOST="${ATM10_HOST:-zjn-home-two}"
-SERVER_DIR="${ATM10_SERVER_DIR:-/Users/zacharynielsen/LocalServers/ATM10-server-7.0-intel-test}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tools/atm10-env.sh
+. "$SCRIPT_DIR/atm10-env.sh"
+
+DIAG="${ATM10_DIAG_CMD:-$SCRIPT_DIR/atm10-diagnostics.sh}"
 OUT_ROOT="${ATM10_LIVE_PASS_OUT_DIR:-/tmp/atm10-live-pass}"
 OBSERVE_SECONDS="${ATM10_LIVE_PASS_SECONDS:-120}"
 OBSERVE_INTERVAL="${ATM10_LIVE_PASS_INTERVAL:-20}"
 PING_PRIORITY="${ATM10_PING_PRIORITY:-2}"
 PING_OPTIONS="${ATM10_PING_OPTIONS:-Done,Not now,Need details}"
-SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1)
-if [ -n "${ATM10_SSH_OPTS:-}" ]; then
-  read -r -a SSH_OPTS <<< "$ATM10_SSH_OPTS"
-fi
 
 usage() {
   cat <<'USAGE'
@@ -32,6 +30,8 @@ Commands:
   npe-count   Count current NullPointerException lines in latest.log.
 
 Environment:
+  ATM10_SERVER_OPS_DIR, ATM10_SERVER_REGISTRY, ATM10_HOST_ID
+  ATM10_HOST, ATM10_SERVER_DIR, ATM10_MINECRAFT_PORT, ATM10_SSH_OPTS
   ATM10_LIVE_PASS_OUT_DIR    Output root (default: /tmp/atm10-live-pass)
   ATM10_LIVE_PASS_SECONDS    Default observe duration (default: 120)
   ATM10_LIVE_PASS_INTERVAL   Observe snapshot interval (default: 20)
@@ -74,6 +74,8 @@ write_meta() {
   {
     printf 'time=%s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
     printf 'host=%s\n' "$HOST"
+    printf 'hostId=%s\n' "$ATM10_HOST_ID"
+    printf 'registry=%s\n' "$ATM10_SERVER_REGISTRY"
     printf 'serverDir=%s\n' "$SERVER_DIR"
     printf 'diag=%s\n' "$DIAG"
   } > "$dir/meta.txt"

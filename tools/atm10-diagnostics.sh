@@ -1,19 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HOST="${ATM10_HOST:-zjn-home-two}"
-SERVER_DIR="${ATM10_SERVER_DIR:-/Users/zacharynielsen/LocalServers/ATM10-server-7.0-intel-test}"
-COMPUTER_DIR="${ATM10_COMPUTER_DIR:-$SERVER_DIR/Chem E boys Server - 7.0 test/computercraft/computer/6}"
-SCREEN_SESSION="${ATM10_SCREEN_SESSION:-atm10-intel-main-25566}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tools/atm10-env.sh
+. "$SCRIPT_DIR/atm10-env.sh"
+
 CC_RESTART_DRAIN_MS="${ATM10_CC_RESTART_DRAIN_MS:-120000}"
 CC_RESTART_MAX_STALE_MS="${ATM10_CC_RESTART_MAX_STALE_MS:-90000}"
 CC_RESTART_ALLOW_STALE="${ATM10_CC_RESTART_ALLOW_STALE:-false}"
 INTERVAL="${ATM10_DIAG_INTERVAL:-5}"
 OUT_DIR="${ATM10_DIAG_OUT_DIR:-/tmp/atm10-diagnostics}"
-SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1)
-if [ -n "${ATM10_SSH_OPTS:-}" ]; then
-  read -r -a SSH_OPTS <<< "$ATM10_SSH_OPTS"
-fi
 
 usage() {
   cat <<'USAGE'
@@ -31,8 +27,13 @@ Usage:
   tools/atm10-diagnostics.sh cc-restart [computer_id]  # disabled: unsafe with Advanced Peripherals RS bridge
 
 Environment overrides:
-  ATM10_HOST              SSH host alias (default: zjn-home-two)
+  ATM10_SERVER_OPS_DIR    MC server registry dir (default: ~/Projects/personal/mc-server-ops)
+  ATM10_SERVER_REGISTRY   active-server.json path inside the registry dir
+  ATM10_HOST_ID           registry host id to select (default: active host)
+  ATM10_HOST              SSH host override (default: active host Tailscale IP)
   ATM10_SERVER_DIR        ATM10 server root on the host
+  ATM10_MINECRAFT_PORT    Minecraft listen port (default: registry value or 25566)
+  ATM10_COMPUTER_ID       ComputerCraft computer id (default: 6)
   ATM10_COMPUTER_DIR      ComputerCraft computer directory on the host
   ATM10_SCREEN_SESSION    screen session name for the running server console
   ATM10_CC_RESTART_DRAIN_MS  recent-craft drain window for cc-safety diagnostics (default: 120000)
@@ -310,10 +311,12 @@ doctor_server() {
     return
   fi
 
-  if run_server_remote 'lsof -nP -iTCP:25566 -sTCP:LISTEN >/dev/null 2>&1'; then
-    doctor_ok "Minecraft port 25566 is listening"
+  local port_q
+  port_q="$(quote_remote "$MINECRAFT_PORT")"
+  if run_server_remote "lsof -nP -iTCP:$port_q -sTCP:LISTEN >/dev/null 2>&1"; then
+    doctor_ok "Minecraft port $MINECRAFT_PORT is listening"
   else
-    doctor_fail "Minecraft port 25566 is not listening"
+    doctor_fail "Minecraft port $MINECRAFT_PORT is not listening"
   fi
 
   local procs
@@ -519,7 +522,10 @@ run_doctor() {
   doctor_warnings=0
   echo "# ATM10 readiness doctor"
   date "+time: %Y-%m-%d %H:%M:%S %Z"
+  doctor_info "registry=$ATM10_SERVER_REGISTRY loaded=$ATM10_REGISTRY_LOADED role=$ATM10_REGISTRY_ROLE"
+  doctor_info "hostId=$ATM10_HOST_ID"
   doctor_info "host=$HOST"
+  doctor_info "minecraftPort=$MINECRAFT_PORT"
   doctor_info "serverDir=$SERVER_DIR"
   doctor_info "computerDir=$COMPUTER_DIR"
   echo

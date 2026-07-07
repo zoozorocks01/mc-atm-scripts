@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HOST="${ATM10_HOST:-zjn-home-two}"
-SERVER_DIR="${ATM10_SERVER_DIR:-/Users/zacharynielsen/LocalServers/ATM10-server-7.0-intel-test}"
-COMPUTER_DIR="${ATM10_COMPUTER_DIR:-$SERVER_DIR/Chem E boys Server - 7.0 test/computercraft/computer/6}"
-DIAG="${ATM10_DIAG_CMD:-tools/atm10-diagnostics.sh}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tools/atm10-env.sh
+. "$SCRIPT_DIR/atm10-env.sh"
+
+DIAG="${ATM10_DIAG_CMD:-$SCRIPT_DIR/atm10-diagnostics.sh}"
 SIM="${ATM10_SIM_CMD:-lua tools/atm10-sim.lua}"
 APPROVE_TIMEOUT="${ATM10_APPROVE_TIMEOUT:-120}"
 APPROVE_INTERVAL="${ATM10_APPROVE_INTERVAL:-5}"
-SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1)
-if [ -n "${ATM10_SSH_OPTS:-}" ]; then
-  read -r -a SSH_OPTS <<< "$ATM10_SSH_OPTS"
-fi
 
 usage() {
   cat <<'USAGE'
@@ -30,7 +27,8 @@ Commands:
   deploy-inventory  Copy inventory-source files to the configured CC computer dir.
 
 Environment:
-  ATM10_HOST, ATM10_SERVER_DIR, ATM10_COMPUTER_DIR, ATM10_SSH_OPTS
+  ATM10_SERVER_OPS_DIR, ATM10_SERVER_REGISTRY, ATM10_HOST_ID
+  ATM10_HOST, ATM10_SERVER_DIR, ATM10_COMPUTER_DIR, ATM10_MINECRAFT_PORT, ATM10_SSH_OPTS
   ATM10_DIAG_CMD, ATM10_SIM_CMD, ATM10_APPROVE_TIMEOUT, ATM10_APPROVE_INTERVAL
 USAGE
 }
@@ -89,6 +87,7 @@ run_tests() {
   run_step "lua tests/smoke_sim.lua" lua tests/smoke_sim.lua
   run_step "lua tools/atm10-sim.lua all" lua tools/atm10-sim.lua all
   run_step "bash syntax" bash -n \
+    tools/atm10-env.sh \
     tools/atm10-diagnostics.sh \
     tools/atm10-live-pass.sh \
     tools/atm10-iterate.sh
@@ -209,7 +208,7 @@ approve() {
 }
 
 deploy_inventory() {
-  sftp "$HOST" <<SFTP
+  sftp "${SSH_OPTS[@]}" "$HOST" <<SFTP
 cd "$COMPUTER_DIR"
 put inventory/manager.lua inventory-info
 put inventory/manager-startup.lua startup
