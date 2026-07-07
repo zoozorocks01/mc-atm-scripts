@@ -72,6 +72,15 @@ message). The project's lead still owns the merge and the final call.
 
 ## Handoff
 
+**Reaching each other (K2 workspaces):**
+- Claude runs in the K2 workspace **`mc-atm-scripts`** (the main repo); Codex runs
+  in **`mc-atm-scripts-codex`** (the `codex` worktree).
+- Short/sync: `k2 msg mc-atm-scripts "..."` (Claude ← Codex) or
+  `k2 msg mc-atm-scripts-codex "..."` (Codex ← Claude). Add `--inbox` for long
+  async notes.
+- **Peek before you inject** — `k2 read <workspace>` — since a sync `msg`
+  interrupts the recipient.
+
 - Async handoffs go through `.k2/inbox` (async, any length). Keep the done-note
   format Codex already uses: commit hash, scope, and verification actually run
   (`lua tests/run.lua`, `lua tests/smoke*.lua`, mirror check).
