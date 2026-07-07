@@ -334,6 +334,7 @@ SCENARIOS["auto-quarantines-failed-row"] = {
       items = {
         { name = "minecraft:copper_ingot", amount = 9000, isCraftable = true },
         { name = "alltheores:aluminum_ingot", amount = 1000, isCraftable = true },
+        { name = "alltheores:tin_ingot", amount = 1000, isCraftable = true },
       },
     })
     local runner = sim.new({
@@ -349,6 +350,12 @@ SCENARIOS["auto-quarantines-failed-row"] = {
           ["alltheores:aluminum_ingot"] = {
             name = "alltheores:aluminum_ingot",
             label = "Aluminum Ingot",
+            target = 5000,
+            craftTo = 5000,
+          },
+          ["alltheores:tin_ingot"] = {
+            name = "alltheores:tin_ingot",
+            label = "Tin Ingot",
             target = 5000,
             craftTo = 5000,
           },
@@ -388,14 +395,19 @@ SCENARIOS["auto-quarantines-failed-row"] = {
     local entries = queueEntries(report)
     local copper = entries["minecraft:copper_ingot"]
     local aluminum = entries["alltheores:aluminum_ingot"]
+    local tin = entries["alltheores:tin_ingot"]
     addCheck(checks, reachedSentinel(report), "manager completed one auto quarantine cycle and stopped at the simulator sentinel")
     addCheck(checks, type(copper) == "table" and copper.error == "craft failed"
       and copper.state == "APPROVED",
       "failed copper row remains quarantined for explicit retry or clear")
     addCheck(checks, type(aluminum) == "table" and aluminum.state == "CRAFTING",
       "unrelated aluminum row is allowed to proceed despite the failed copper row")
-    addCheck(checks, #report.crafted == 1 and report.crafted[1].name == "alltheores:aluminum_ingot",
-      "runner fired only the healthy admitted row")
+    addCheck(checks, type(tin) == "table" and tin.state == "CRAFTING",
+      "failed row does not consume one of the bounded runnable auto slots")
+    local fired = {}
+    for _, row in ipairs(report.crafted or {}) do fired[row.name] = true end
+    addCheck(checks, #report.crafted == 2 and fired["alltheores:aluminum_ingot"] and fired["alltheores:tin_ingot"],
+      "runner fired both healthy admitted rows while copper stayed quarantined")
     return checks
   end,
 }

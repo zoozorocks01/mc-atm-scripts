@@ -766,6 +766,15 @@ do
   t.eq(ln4, 0, "autoApprove refreshes existing rows at cap without counting a new approval")
   t.eq(cqueue.get(lq, "auto:a").request, 20, "autoApprove refresh at cap updates existing request")
   t.eq(cqueue.get(lq, "auto:a").priority, 0.8, "autoApprove refresh at cap updates existing priority")
+
+  local fq = cqueue.new()
+  cqueue.approve(fq, { name = "auto:failed", label = "Failed", request = 10 }, 900)
+  cqueue.markError(fq, "auto:failed", 901, "craft failed")
+  local _, fn = cqueue.autoApprove(fq, limitedAutoPlans, 1000, { maxNew = 2, maxQueued = 2 })
+  t.eq(fn, 2, "autoApprove maxQueued ignores failed quarantined rows for runnable capacity")
+  t.check(cqueue.has(fq, "auto:a"), "autoApprove admitted first healthy row despite failed row")
+  t.check(cqueue.has(fq, "auto:b"), "autoApprove admitted second healthy row despite failed row")
+  t.eq(cqueue.get(fq, "auto:failed").error, "craft failed", "autoApprove left failed row quarantined")
 end
 
 q = cqueue.cancel(q, "y")

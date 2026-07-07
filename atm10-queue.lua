@@ -404,8 +404,9 @@ end
 --
 -- opts:
 --   maxNew    : cap absent queue entries admitted by this call
---   maxQueued : cap existing non-manual auto/quota queue depth before admitting
---               absent entries. Existing rows can still refresh/re-arm.
+--   maxQueued : cap existing runnable non-manual auto/quota queue depth before
+--               admitting absent entries. Failed rows stay quarantined but do
+--               not consume runnable capacity. Existing rows can still refresh/re-arm.
 --
 -- Pure: the manager owns the mode gate, the ledger COOLDOWN (which keeps an item
 -- from reading WOULD CRAFT again until its window passes, bounding re-fire), and
@@ -421,7 +422,7 @@ function queue.autoApprove(q, plans, now, opts)
   local queued = 0
   if maxQueued then
     for _, e in pairs(q.entries) do
-      if type(e) == "table" and not queue.isManual(e) then queued = queued + 1 end
+      if type(e) == "table" and not queue.isManual(e) and not e.error then queued = queued + 1 end
     end
   end
   local n = 0
