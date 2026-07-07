@@ -39,6 +39,10 @@ local FILES = {
   touchstate = ".atm10-touchstate", -- latest touch hit-test result for live approval tests
   heartbeat = ".atm10-heartbeat",   -- liveness ping; startup watchdog restarts a hung manager
 }
+local RUNTIME = {
+  statusVersion = 2,
+  approvalMatcher = 2, -- exact output-id approval disambiguates refill rows from compress rows
+}
 -- Cycleable +/- step sizes in the quota editor: by count AND by stacks (a stack
 -- is 64), so big late-game numbers are quick to dial in. {value, label}.
 local STACK = 64
@@ -526,7 +530,10 @@ function ui.writeStatusState(data, now)
 
   local state = {
     at = now,
-    version = 1,
+    version = RUNTIME.statusVersion,
+    runtime = {
+      approvalMatcher = RUNTIME.approvalMatcher,
+    },
     computerId = type(os.getComputerID) == "function" and os.getComputerID() or nil,
     mode = mode,
     page = PAGES[pageIndex],
@@ -613,6 +620,9 @@ end
 local function writePlanState(now, plans, tally)
   local state = stockplan.compactState(plans, { limit = 40 })
   state.at = now
+  state.runtime = {
+    approvalMatcher = RUNTIME.approvalMatcher,
+  }
   state.tally = tally
   pcall(atomicWrite, FILES.planstate, state)
 end
@@ -3069,7 +3079,12 @@ local function consumeApproveRequest(plans, now)
   local requestedAt = tonumber(req.requestedAt) or 0
   if requestedAt <= 0 or (now - requestedAt) > 60000 then
     pcall(fs.delete, FILES.approveRequest)
-    pcall(atomicWrite, FILES.approveResult, { ok = false, at = now, reason = "stale request" })
+    pcall(atomicWrite, FILES.approveResult, {
+      ok = false,
+      at = now,
+      matcher = RUNTIME.approvalMatcher,
+      reason = "stale request",
+    })
     return false
   end
 
@@ -3077,7 +3092,13 @@ local function consumeApproveRequest(plans, now)
   local entry, reason = findApprovalPlan(plans, target)
   pcall(fs.delete, FILES.approveRequest)
   if not entry then
-    pcall(atomicWrite, FILES.approveResult, { ok = false, at = now, target = target, reason = reason })
+    pcall(atomicWrite, FILES.approveResult, {
+      ok = false,
+      at = now,
+      matcher = RUNTIME.approvalMatcher,
+      target = target,
+      reason = reason,
+    })
     print("Approve request failed: " .. tostring(reason))
     return false
   end
@@ -3086,6 +3107,7 @@ local function consumeApproveRequest(plans, now)
   pcall(atomicWrite, FILES.approveResult, {
     ok = true,
     at = now,
+    matcher = RUNTIME.approvalMatcher,
     target = target,
     name = entry.name,
     label = entry.label,

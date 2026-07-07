@@ -407,6 +407,8 @@ if [ -f .atm10-status ]; then
   status_at=$(field_from .atm10-status at)
   status_summary=$(field_from .atm10-status summary | tr -d "\"")
   status_mode=$(field_from .atm10-status mode | tr -d "\"")
+  status_version=$(field_from .atm10-status version)
+  approval_matcher=$(sed -n "s/^[[:space:]]*approvalMatcher[[:space:]]*=[[:space:]]*//p" .atm10-status | head -1 | sed "s/,$//")
   if [ -n "$status_at" ]; then
     age=$(((now_ms - $(as_int "$status_at")) / 1000))
     if [ "$age" -lt 0 ]; then age=0; fi
@@ -414,9 +416,9 @@ if [ -f .atm10-status ]; then
     age=999999
   fi
   if [ "$age" -le 90 ]; then
-    echo "OK status summary fresh ageSec=$age summary=${status_summary:-?} mode=${status_mode:-?}"
+    echo "OK status summary fresh ageSec=$age summary=${status_summary:-?} mode=${status_mode:-?} version=${status_version:-?} approvalMatcher=${approval_matcher:-?}"
   else
-    echo "WARN status summary stale ageSec=$age summary=${status_summary:-?} mode=${status_mode:-?}"
+    echo "WARN status summary stale ageSec=$age summary=${status_summary:-?} mode=${status_mode:-?} version=${status_version:-?} approvalMatcher=${approval_matcher:-?}"
   fi
   if [ -n "$status_summary" ] && [ "$status_summary" != "OK" ]; then
     echo "WARN status summary reports $status_summary"

@@ -46,6 +46,26 @@ heartbeat/loop state, queue/craft state, and whether the key ComputerCraft files
 match this repo. Use `tools/atm10-diagnostics.sh snapshot` when you need the full
 evidence dump.
 
+## Local Iteration
+
+Before touching the live ComputerCraft computer, run the bundled host-side loop:
+
+```bash
+tools/atm10-iterate.sh test
+```
+
+It runs the pure Lua suite, the existing manager smokes, the local simulator
+smoke, a named simulator replay, and shell syntax checks. To replay a focused
+manager scenario without Minecraft:
+
+```bash
+lua tools/atm10-sim.lua approval-aluminum
+```
+
+For the live computer, `tools/atm10-iterate.sh status` prints doctor output plus
+compact approval/queue files, and `tools/atm10-iterate.sh approve <registry-id>`
+writes a manager-owned approval request and polls its result.
+
 ## Shared Baseline
 
 The repo now includes shared baseline modules for the next dashboard/control
