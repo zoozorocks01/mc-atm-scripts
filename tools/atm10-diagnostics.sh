@@ -147,6 +147,8 @@ show_file .atm10-status 160
 show_file .atm10-loopstate 120
 show_file .atm10-craftstate 180
 show_file .atm10-touchstate 120
+show_file .atm10-approve-request 80
+show_file .atm10-approve-result 80
 show_file .atm10-planstate 220
 show_file .atm10-craft-results 180
 show_file .atm10-craft-audit 220
@@ -503,6 +505,7 @@ doctor_file_hashes() {
   compare_cc_file atm10-pattern-give.lua atm10-pattern-give.lua
   compare_cc_file atm10-bridge-probe.lua atm10-bridge-probe
   compare_cc_file atm10-target-probe.lua atm10-target-probe
+  compare_cc_file atm10-approve.lua atm10-approve
   compare_cc_file atm10-patterns.lua atm10-patterns
   compare_cc_file safereboot.lua safereboot
   compare_cc_file reboot-guard.lua reboot

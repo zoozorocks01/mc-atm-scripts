@@ -45,6 +45,7 @@ local roles = {
     files = {
       { remote = "inventory/manager.lua", localName = "inventory-info" },
       { remote = "inventory/manager-startup.lua", localName = "startup" },
+      { remote = "atm10-approve.lua", localName = "atm10-approve" },
       { remote = "atm10-reload.lua", localName = "atm10-reload" },
       { remote = "reboot-guard.lua", localName = "reboot" }, -- shadow `reboot` -> safereboot (manager only)
       { remote = "inventory/config-example.lua", localName = "inventory-config-example" },

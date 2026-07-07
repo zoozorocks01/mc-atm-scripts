@@ -31,6 +31,8 @@ local FILES = {
   craftstate = ".atm10-craftstate", -- drain snapshot read by safereboot (avoids the AP detach-crash)
   drainRequest = ".atm10-drain-request", -- safereboot -> manager request to stop issuing craftItem
   reloadRequest = ".atm10-reload-request", -- atm10-reload asks startup wrapper to stand down
+  approveRequest = ".atm10-approve-request", -- terminal fallback: manager-owned plan approval request
+  approveResult = ".atm10-approve-result",   -- last terminal approval outcome
   planstate = ".atm10-planstate",   -- compact stock-plan snapshot for SSH diagnostics
   loopstate = ".atm10-loopstate",   -- manager scan/render pace metric (is it keeping up?)
   status = ".atm10-status",         -- compact summary for agents/operators to poll over SSH
@@ -3021,6 +3023,67 @@ local function approve(entry)
   print("Approved: " .. tostring(entry.label or entry.name) .. " x" .. tostring(entry.request))
 end
 
+local function normalizeSearch(value)
+  return tostring(value or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function findApprovalPlan(plans, target)
+  target = normalizeSearch(target)
+  if target == "" then return nil, "empty target" end
+
+  local exact, fuzzy = {}, {}
+  for _, p in ipairs(plans or {}) do
+    if type(p) == "table" and p.action == "WOULD CRAFT" and p.name and (tonumber(p.request) or 0) > 0 then
+      local name = normalizeSearch(p.name)
+      local label = normalizeSearch(p.label)
+      if name == target or label == target then
+        exact[#exact + 1] = p
+      elseif name:find(target, 1, true) or label:find(target, 1, true) then
+        fuzzy[#fuzzy + 1] = p
+      end
+    end
+  end
+
+  local candidates = (#exact > 0) and exact or fuzzy
+  if #candidates == 1 then return candidates[1], nil end
+  if #candidates == 0 then return nil, "no matching WOULD CRAFT row" end
+  local labels = {}
+  for i = 1, math.min(#candidates, 5) do labels[#labels + 1] = tostring(candidates[i].label or candidates[i].name) end
+  return nil, "ambiguous target: " .. table.concat(labels, ", ")
+end
+
+local function consumeApproveRequest(plans, now)
+  local req = ui.readSerializedFile(FILES.approveRequest)
+  if type(req) ~= "table" then return false end
+  now = tonumber(now) or nowMs()
+  local requestedAt = tonumber(req.requestedAt) or 0
+  if requestedAt <= 0 or (now - requestedAt) > 60000 then
+    pcall(fs.delete, FILES.approveRequest)
+    pcall(atomicWrite, FILES.approveResult, { ok = false, at = now, reason = "stale request" })
+    return false
+  end
+
+  local target = req.target or req.name or req.label
+  local entry, reason = findApprovalPlan(plans, target)
+  pcall(fs.delete, FILES.approveRequest)
+  if not entry then
+    pcall(atomicWrite, FILES.approveResult, { ok = false, at = now, target = target, reason = reason })
+    print("Approve request failed: " .. tostring(reason))
+    return false
+  end
+
+  approve(entry)
+  pcall(atomicWrite, FILES.approveResult, {
+    ok = true,
+    at = now,
+    target = target,
+    name = entry.name,
+    label = entry.label,
+    request = entry.request,
+  })
+  return true
+end
+
 -- Cancel a queued approval. Removes intent only; the runner crafts at most once
 -- per approval, so a canceled-but-already-requested item just stops being shown.
 local function cancelEntry(entry)
@@ -3483,6 +3546,9 @@ local function refreshAndDraw()
         data.bridgeDegraded = true -- for the (pinned, in-game-visual) header chip
       else
         local craftStart = nowMs()
+        -- Terminal fallback: consume an approval request inside the manager so the
+        -- live in-memory queue remains the single source of truth.
+        consumeApproveRequest(data.stockPlans, craftStart)
         -- in auto mode, enqueue craftable deficits so the runner can maintain quotas
         -- unattended; a no-op in monitor/dry-run/manual (those need a manual tap)
         autoApprovePlans(data.stockPlans)
@@ -3561,6 +3627,7 @@ do
     hmod.sweepTmps(fs, {
       FILES.queue, FILES.managed, FILES.trends, FILES.dismissed, FILES.ledger,
       FILES.loopstate, FILES.planstate, FILES.status, FILES.touchstate,
+      FILES.approveRequest, FILES.approveResult,
       CRAFT_RESULTS.file, CRAFT_RESULTS.auditFile,
     })
   end

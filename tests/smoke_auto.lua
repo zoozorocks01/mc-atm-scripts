@@ -259,8 +259,9 @@ check(files[".atm10-drain-request"] == nil,
 check(taskListCalls >= 1 and perItemCraftingCalls == 0,
   "empty getCraftingTasks snapshot skips per-item isCrafting checks during planning")
 
-local function runManagerWithEvents(label, bridgeHandle, scriptedEvents)
+local function runManagerWithEvents(label, bridgeHandle, scriptedEvents, seedFiles)
   files = { [MANAGED_FILE] = "MANAGED" }
+  for k, v in pairs(seedFiles or {}) do files[k] = v end
   clock = 0
   jobSeq = 1000
   _G.peripheral.wrap = function(n)
@@ -277,6 +278,30 @@ local function runManagerWithEvents(label, bridgeHandle, scriptedEvents)
   end
   print(label)
   return pcall(function() dofile("inventory/manager.lua") end)
+end
+
+-- ---- APPROVE-REQ-1: terminal approval request is consumed by the manager ----
+do
+  local oldSettings = MANAGED_STORE.settings
+  MANAGED_STORE.settings = { modeOverride = "manual" }
+  local okAR, errAR = runManagerWithEvents(
+    "smoke-auto: terminal approval request is manager-owned",
+    fakeBridge(),
+    { { "timer", 1 } },
+    { [".atm10-approve-request"] = textutils.serialize({ target = "zinc", requestedAt = 1 }) })
+  MANAGED_STORE.settings = oldSettings
+  check(okAR == false and tostring(errAR):find(SENTINEL, 1, true) ~= nil,
+    "APPROVE-REQ-1: manager handled the request then stopped: " .. tostring(errAR))
+  local approveResult = textutils.unserialize(files[".atm10-approve-result"])
+  check(type(approveResult) == "table" and approveResult.ok == true
+    and approveResult.name == "alltheores:zinc_ingot",
+    "APPROVE-REQ-1: approval result records the matched WOULD CRAFT row")
+  local approveQueue = textutils.unserialize(files[".atm10-craft-queue"])
+  local approveEntry = approveQueue and approveQueue.entries and approveQueue.entries["alltheores:zinc_ingot"]
+  check(approveEntry and approveEntry.state == "CRAFTING" and approveEntry.jobId == 1001,
+    "APPROVE-REQ-1: request flowed through manager queue and fired one capped craft")
+  check(files[".atm10-approve-request"] == nil,
+    "APPROVE-REQ-1: manager deletes a consumed approval request")
 end
 
 -- ---- TOUCHTRACE-1: plan-row touch persists its hit-test result --------------
