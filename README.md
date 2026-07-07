@@ -55,10 +55,12 @@ tools/atm10-iterate.sh test
 ```
 
 It runs the pure Lua suite, the existing manager smokes, the local simulator
-smoke, a named simulator replay, and shell syntax checks. To replay a focused
-manager scenario without Minecraft:
+smoke, every named simulator replay, and shell syntax checks. To replay focused
+manager scenarios without Minecraft:
 
 ```bash
+lua tools/atm10-sim.lua list
+lua tools/atm10-sim.lua all
 lua tools/atm10-sim.lua approval-aluminum
 ```
 

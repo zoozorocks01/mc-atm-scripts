@@ -87,7 +87,7 @@ run_tests() {
   run_step "lua tests/smoke.lua" lua tests/smoke.lua
   run_step "lua tests/smoke_auto.lua" lua tests/smoke_auto.lua
   run_step "lua tests/smoke_sim.lua" lua tests/smoke_sim.lua
-  run_step "lua tools/atm10-sim.lua approval-aluminum" lua tools/atm10-sim.lua approval-aluminum
+  run_step "lua tools/atm10-sim.lua all" lua tools/atm10-sim.lua all
   run_step "bash syntax" bash -n \
     tools/atm10-diagnostics.sh \
     tools/atm10-live-pass.sh \

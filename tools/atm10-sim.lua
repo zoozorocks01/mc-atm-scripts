@@ -3,16 +3,16 @@
 --
 -- Examples:
 --   lua tools/atm10-sim.lua list
---   lua tools/atm10-sim.lua approval-aluminum
+--   lua tools/atm10-sim.lua all
 --   lua tools/atm10-sim.lua approval-aluminum alltheores:aluminum_ingot
 
 package.path = "./tests/?.lua;./lib/?.lua;" .. package.path
 
-local sim = require("sim.manager_sim")
+local scenarios = require("sim.scenarios")
 
 local function sortedKeys(tbl)
   local keys = {}
-  for k in pairs(tbl) do keys[#keys + 1] = k end
+  for k in pairs(tbl or {}) do keys[#keys + 1] = k end
   table.sort(keys)
   return keys
 end
@@ -34,95 +34,79 @@ local function dumpValue(value, indent)
   end
 end
 
-local scenarios = {}
+local function serialized(report, path)
+  return report and report.runner and report.runner:getSerializedFile(path) or nil
+end
 
-scenarios["approval-aluminum"] = function(target)
-  target = target or "alltheores:aluminum_ingot"
-  local bridge = sim.bridge({
-    items = {
-      { name = "alltheores:aluminum_ingot", amount = 1000, isCraftable = true },
-      { name = "alltheores:aluminum_dust", amount = 5000, isCraftable = false },
-      { name = "alltheores:tiny_aluminum_dust", amount = 12000, isCraftable = false },
-      { name = "minecraft:iron_ingot", amount = 800000, isCraftable = false },
-    },
-  })
-  local runner = sim.new({
-    bridge = bridge,
-    managedStore = {
-      items = {
-        ["alltheores:aluminum_ingot"] = {
-          name = "alltheores:aluminum_ingot",
-          label = "Aluminum Ingot",
-          target = 5000,
-          craftTo = 5000,
-        },
-        ["alltheores:aluminum_dust"] = {
-          name = "alltheores:aluminum_dust",
-          label = "Aluminum Dust",
-          target = 0,
-          craftTo = 1,
-          ceiling = 1000,
-          into = { name = "alltheores:aluminum_ingot", label = "Aluminum Ingot" },
-          ratio = 1,
-        },
-      },
-      settings = { modeOverride = "manual" },
-    },
-    approveRequest = { target = target, requestedAt = 1 },
-    events = { { "timer", 1 } },
-  })
+local function printChecks(report)
+  for _, c in ipairs(report.checks or {}) do
+    print(string.format("  %s %s", c.ok and "ok:" or "FAIL:", c.msg))
+  end
+end
 
-  local result = runner:run()
-  local reachedSentinel = result.ok == false and tostring(result.err):find(result.sentinel, 1, true) ~= nil
-  print("scenario: approval-aluminum")
-  print("target: " .. tostring(target))
-  print("cycleStoppedAtSentinel: " .. tostring(reachedSentinel))
-  if not reachedSentinel then print("error: " .. tostring(result.err)) end
+local function printReport(report)
+  print("scenario: " .. tostring(report.name))
+  if report.description then print("description: " .. report.description) end
+  print("target: " .. tostring(report.target or ""))
+  print("ok: " .. tostring(report.ok == true))
+  printChecks(report)
 
   print("")
   print("approveResult:")
-  dumpValue(runner:getSerializedFile(".atm10-approve-result") or {})
+  dumpValue(serialized(report, ".atm10-approve-result") or {})
 
   print("")
   print("queueEntries:")
-  local queue = runner:getSerializedFile(".atm10-craft-queue")
-  dumpValue((queue and queue.entries) or {})
+  local q = serialized(report, ".atm10-craft-queue")
+  dumpValue((q and q.entries) or {})
+
+  print("")
+  print("craftResults:")
+  dumpValue(serialized(report, ".atm10-craft-results") or {})
 
   print("")
   print("crafted:")
-  dumpValue(result.crafted)
-
-  local approveResult = runner:getSerializedFile(".atm10-approve-result")
-  local queueEntry = queue and queue.entries and queue.entries["alltheores:aluminum_ingot"]
-  return reachedSentinel
-    and type(approveResult) == "table"
-    and approveResult.ok == true
-    and type(queueEntry) == "table"
-    and queueEntry.key == "alltheores:aluminum_ingot"
+  dumpValue(report.crafted or {})
 end
 
 local function usage()
   print("Usage:")
   print("  lua tools/atm10-sim.lua list")
+  print("  lua tools/atm10-sim.lua all")
   print("  lua tools/atm10-sim.lua <scenario> [args...]")
   print("")
   print("Scenarios:")
-  for _, name in ipairs(sortedKeys(scenarios)) do print("  " .. name) end
+  for _, name in ipairs(scenarios.names()) do
+    local spec = scenarios.get(name)
+    print("  " .. name .. " - " .. tostring(spec and spec.description or ""))
+  end
 end
 
-local scenario = arg[1] or "list"
-if scenario == "list" or scenario == "help" or scenario == "--help" then
+local command = arg[1] or "list"
+if command == "list" or command == "help" or command == "--help" then
   usage()
   os.exit(0)
 end
 
-local fn = scenarios[scenario]
-if not fn then
-  usage()
-  os.exit(2)
+if command == "all" then
+  local failed = 0
+  for _, name in ipairs(scenarios.names()) do
+    local report = scenarios.run(name, {})
+    printReport(report)
+    print("")
+    if not report.ok then failed = failed + 1 end
+  end
+  os.exit(failed == 0 and 0 or 1)
 end
 
 local args = {}
 for i = 2, #arg do args[#args + 1] = arg[i] end
-local ok = fn(table.unpack(args))
-os.exit(ok and 0 or 1)
+local report, err = scenarios.run(command, args)
+if not report then
+  print(tostring(err))
+  usage()
+  os.exit(2)
+end
+
+printReport(report)
+os.exit(report.ok and 0 or 1)

@@ -131,9 +131,11 @@ function M.bridge(opts)
   end
   bridge.isItemCraftable = bridge.isCraftable
   bridge.getCraftingTasks = function(...) return deepcopy(dynamic(opts.tasks, bridge, ...) or {}) end
-  bridge.getCraftingTask = function(id, ...)
-    local jobs = dynamic(opts.jobs, bridge, ...) or {}
-    return jobs[id] or jobs[tostring(id)]
+  if opts.getCraftingTask ~= false then
+    bridge.getCraftingTask = function(id, ...)
+      local jobs = dynamic(opts.jobs, bridge, ...) or {}
+      return jobs[id] or jobs[tostring(id)]
+    end
   end
   bridge.isItemCrafting = function(arg, ...)
     local name = type(arg) == "table" and arg.name or arg
