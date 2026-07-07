@@ -35,6 +35,16 @@ Routing default (from the global rules): interactive / live / judgment → Claud
 specifiable, test-checkable, no-back-and-forth → Codex. Either may hand off when
 the other clearly fits better.
 
+**Mutual help (both directions).** Leading a project does not mean going solo.
+Either agent can pull the other in when the other's edge fits, and neither should
+push through a task that clearly suits the other:
+- Codex → Claude: live/interactive debugging, a judgment call, or a diff review
+  before deploy.
+- Claude → Codex: a scoped, test-checkable chunk (a feature, a refactor, a test
+  suite) that needs no back-and-forth.
+The one who asks states what they need and why (a `.k2/inbox` note or a direct
+message). The project's lead still owns the merge and the final call.
+
 ## Git protocol (prevents the fork-divergence that happened)
 
 - `main` is always the single source of truth.

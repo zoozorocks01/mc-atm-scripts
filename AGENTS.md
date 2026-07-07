@@ -8,6 +8,11 @@ Full model: [`docs/COLLABORATION.md`](docs/COLLABORATION.md). The essentials:
 - **Codex is the scoped builder** — bounded sub-tasks with a test/smoke done-gate,
   on branch `codex`. Does not own the live loop; does not reconcile divergent
   branches solo (surface the conflict and hand back).
+- **Either agent may pull the other in.** Leading is not going solo. Codex should
+  request Claude for live/interactive moments, judgment calls, or a diff review
+  before deploy; Claude should hand Codex scoped, test-checkable chunks. Whoever
+  asks states what they need and why (a `.k2/inbox` note or a direct message). The
+  lead still owns the merge.
 
 ## Git
 - `main` is the single source of truth. Codex rebases `codex` onto `main` before
