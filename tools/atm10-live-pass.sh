@@ -17,6 +17,8 @@ usage() {
 Usage:
   tools/atm10-live-pass.sh preflight
   tools/atm10-live-pass.sh observe [seconds]
+  tools/atm10-live-pass.sh auto-soak-request [seconds]
+  tools/atm10-live-pass.sh auto-soak-observe [seconds]
   tools/atm10-live-pass.sh ask-action <title> <body>
   tools/atm10-live-pass.sh npe-count
 
@@ -26,12 +28,17 @@ creates a K2 feedback item for Zach.
 Commands:
   preflight   Run doctor, snapshot, and a server-log NPE baseline.
   observe     Capture snapshots for an observation window, then run doctor.
+  auto-soak-request
+              Run preflight, then ask Zach to start a bounded auto-mode soak.
+  auto-soak-observe
+              Observe a bounded auto-mode soak, then ask Zach to return manual.
   ask-action  Ping Zach through K2 feedback with a specific in-game request.
   npe-count   Count current NullPointerException lines in latest.log.
 
 Environment:
   ATM10_SERVER_OPS_DIR, ATM10_SERVER_REGISTRY, ATM10_HOST_ID
   ATM10_HOST, ATM10_SERVER_DIR, ATM10_MINECRAFT_PORT, ATM10_SSH_OPTS
+  ATM10_AUTO_SOAK_SECONDS    Default auto soak duration (default: 300)
   ATM10_LIVE_PASS_OUT_DIR    Output root (default: /tmp/atm10-live-pass)
   ATM10_LIVE_PASS_SECONDS    Default observe duration (default: 120)
   ATM10_LIVE_PASS_INTERVAL   Observe snapshot interval (default: 20)
@@ -153,6 +160,37 @@ ask_action() {
     --body "$body"
 }
 
+auto_soak_seconds() {
+  local seconds="${1:-${ATM10_AUTO_SOAK_SECONDS:-300}}"
+  case "$seconds" in
+    ""|*[!0-9]*) printf 'auto soak seconds must be numeric, got: %s\n' "$seconds" >&2; exit 2 ;;
+  esac
+  printf '%s\n' "$seconds"
+}
+
+auto_soak_request() {
+  local seconds
+  seconds="$(auto_soak_seconds "${1:-}")"
+  preflight
+  ask_action \
+    "ATM10 action needed: start bounded auto soak" \
+    "Preflight passed. On computer 6, tap the mode chip once to arm AUTO, then tap the same chip again to enter auto. Do not approve, clear, or edit anything else. Leave it in auto for ${seconds}s while Codex observes. If anything looks wrong, tap the mode chip until it shows manual and reply Need details. Codex next runs: tools/atm10-live-pass.sh auto-soak-observe ${seconds}"
+  printf '\nPING: Auto-soak request sent. After Zach confirms auto is on, run:\n'
+  printf 'tools/atm10-live-pass.sh auto-soak-observe %s\n' "$seconds"
+}
+
+auto_soak_observe() {
+  local seconds
+  seconds="$(auto_soak_seconds "${1:-}")"
+  observe "$seconds"
+  ask_action \
+    "ATM10 action needed: return manager to manual" \
+    "The bounded auto observation window is complete. On computer 6, tap the mode chip until it shows manual, then reply Done. Codex will run one final status check."
+  printf '\nPING: Auto-soak observation complete. Asked Zach to return the manager to manual.\n'
+  printf 'After Zach confirms manual mode, run:\n'
+  printf 'tools/atm10-iterate.sh status\n'
+}
+
 case "${1:-preflight}" in
   preflight)
     preflight
@@ -160,6 +198,14 @@ case "${1:-preflight}" in
   observe)
     shift
     observe "${1:-$OBSERVE_SECONDS}"
+    ;;
+  auto-soak-request)
+    shift
+    auto_soak_request "${1:-}"
+    ;;
+  auto-soak-observe)
+    shift
+    auto_soak_observe "${1:-}"
     ;;
   ask-action)
     shift

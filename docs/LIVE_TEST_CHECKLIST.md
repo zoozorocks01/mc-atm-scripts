@@ -38,6 +38,25 @@ Then observe for a short, bounded window:
 tools/atm10-live-pass.sh observe 120
 ```
 
+For the first bounded auto-mode proof, keep the same safety boundary but use the
+named wrapper:
+
+```bash
+tools/atm10-live-pass.sh auto-soak-request 300
+```
+
+After Zach confirms auto is on at computer 6:
+
+```bash
+tools/atm10-live-pass.sh auto-soak-observe 300
+```
+
+After Zach confirms the mode is back to manual, run:
+
+```bash
+tools/atm10-iterate.sh status
+```
+
 For longer play-test capture, `tools/atm10-diagnostics.sh watch-log` is still
 available and writes timestamped snapshots under `/tmp/atm10-diagnostics`.
 

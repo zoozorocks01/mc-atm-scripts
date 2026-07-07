@@ -74,6 +74,18 @@ Then Codex observes the result:
 tools/atm10-live-pass.sh observe 120
 ```
 
+For the first bounded auto-mode proof, use the dedicated two-phase wrapper:
+
+```bash
+tools/atm10-live-pass.sh auto-soak-request 300
+tools/atm10-live-pass.sh auto-soak-observe 300
+```
+
+The request phase runs preflight and asks Zach to explicitly turn auto on at
+computer 6. The observe phase captures the bounded window, reruns doctor, then
+asks Zach to return the manager to manual. The wrapper never changes mode from
+the host side.
+
 The wrapper is deliberately narrower than a control system. Direct command
 mailboxes and broader automation should wait until this stability loop is
 boring and repeatable.
@@ -132,10 +144,12 @@ tools/atm10-diagnostics.sh doctor
    in-game actions.
 4. Codex runs `tools/atm10-live-pass.sh observe 120` while Zach performs that
    one action.
-5. Codex patches/tests/commits fixes locally only when the evidence points to a
+5. For auto-mode proof, Codex uses `auto-soak-request` then
+   `auto-soak-observe`; Zach owns the in-game mode toggle both directions.
+6. Codex patches/tests/commits fixes locally only when the evidence points to a
    repo bug.
-6. Zach approves push.
-7. Zach runs the short deploy command set on computer 6.
+7. Zach approves push.
+8. Zach runs the short deploy command set on computer 6.
 
 Preferred deploy command set:
 
