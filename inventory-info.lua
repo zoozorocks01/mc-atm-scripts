@@ -1702,9 +1702,6 @@ local function processCraftQueue(now, plans)
     -- Unattended safety: failed quota rows require an explicit retry/clear before
     -- they can fire again, even in auto mode.
     holdFailed = true,
-    -- If any row has failed, hold the whole quota queue so auto-soak leftovers do
-    -- not keep firing after the first bad route.
-    holdWhenAnyFailed = true,
     -- A1: live source amount for a job's craftFrom reserve (getItems is TTL-cached, cheap)
     resolve = function(name) local it = findStoredItem(getItems(), name); return it and itemAmount(it) or 0 end,
     isCrafting = function(name) return isItemCrafting(name, { verifyEmpty = true }) end,
@@ -1884,9 +1881,9 @@ local function autoApprovePlans(plans)
   if effectiveMode() ~= control.MODE_AUTO then return end
   if type(plans) ~= "table" then return end
   craftQueue = craftQueue or loadQueue()
-  -- Fail-stop: unattended auto must not keep discovering/firing more routes after
-  -- any queue row has already failed. The operator can inspect, retry, or clear.
-  if cqueue.failureCount(craftQueue) > 0 then return end
+  -- Failed rows remain quarantined by the runner (holdFailed=true) and count
+  -- against maxQueued below, so auto can continue unrelated work only while the
+  -- small bounded backlog still has free capacity.
   local autoSlots = math.max(1, math.floor(tonumber(config.stockKeeper.maxCraftsPerCycle) or 1))
   local _, n = cqueue.autoApprove(craftQueue, plans, nowMs(), {
     maxNew = autoSlots,

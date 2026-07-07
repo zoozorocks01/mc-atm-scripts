@@ -12,6 +12,7 @@ local ORDER = {
   "approval-stale-request",
   "ap-failure-progress",
   "auto-admission-bounded",
+  "auto-quarantines-failed-row",
 }
 
 local function contains(text, needle)
@@ -322,6 +323,79 @@ SCENARIOS["auto-admission-bounded"] = {
     addCheck(checks, #report.crafted == 2, "runner fires only the admitted auto rows in that cycle")
     addCheck(checks, type(statusFile) == "table" and statusFile.plan and statusFile.plan.wouldCraftCount == 6,
       "sim still had more deficits available than auto admitted")
+    return checks
+  end,
+}
+
+SCENARIOS["auto-quarantines-failed-row"] = {
+  description = "Auto mode holds a failed row but keeps unrelated work moving within the bounded backlog.",
+  run = function()
+    local bridge = sim.bridge({
+      items = {
+        { name = "minecraft:copper_ingot", amount = 9000, isCraftable = true },
+        { name = "alltheores:aluminum_ingot", amount = 1000, isCraftable = true },
+      },
+    })
+    local runner = sim.new({
+      bridge = bridge,
+      managedStore = {
+        items = {
+          ["minecraft:copper_ingot"] = {
+            name = "minecraft:copper_ingot",
+            label = "Copper Ingot",
+            target = 12000,
+            craftTo = 12000,
+          },
+          ["alltheores:aluminum_ingot"] = {
+            name = "alltheores:aluminum_ingot",
+            label = "Aluminum Ingot",
+            target = 5000,
+            craftTo = 5000,
+          },
+        },
+        settings = { modeOverride = "auto" },
+      },
+      config = {
+        mode = "auto",
+        allowAutocraft = true,
+        stockKeeper = { enabled = true, maxCraftsPerCycle = 2, maxBridgeRequest = 32 },
+      },
+      queue = {
+        entries = {
+          ["minecraft:copper_ingot"] = {
+            key = "minecraft:copper_ingot",
+            name = "minecraft:copper_ingot",
+            label = "Copper Ingot",
+            state = "APPROVED",
+            request = 4096,
+            approvedAt = 1,
+            triedAt = 1,
+            error = "craft failed",
+          },
+        },
+      },
+      events = { { "timer", 1 } },
+    })
+    local result = runner:run()
+    return {
+      runner = runner,
+      result = result,
+      crafted = result.crafted,
+    }
+  end,
+  checks = function(report)
+    local checks = {}
+    local entries = queueEntries(report)
+    local copper = entries["minecraft:copper_ingot"]
+    local aluminum = entries["alltheores:aluminum_ingot"]
+    addCheck(checks, reachedSentinel(report), "manager completed one auto quarantine cycle and stopped at the simulator sentinel")
+    addCheck(checks, type(copper) == "table" and copper.error == "craft failed"
+      and copper.state == "APPROVED",
+      "failed copper row remains quarantined for explicit retry or clear")
+    addCheck(checks, type(aluminum) == "table" and aluminum.state == "CRAFTING",
+      "unrelated aluminum row is allowed to proceed despite the failed copper row")
+    addCheck(checks, #report.crafted == 1 and report.crafted[1].name == "alltheores:aluminum_ingot",
+      "runner fired only the healthy admitted row")
     return checks
   end,
 }
