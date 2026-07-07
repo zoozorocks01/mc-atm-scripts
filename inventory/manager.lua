@@ -114,6 +114,7 @@ local craftQueue = nil
 local craftResults = nil -- name -> { ok, reason, at } (QUICK-5); nil = not yet loaded from disk
 local managedStore = nil
 local itemsByName = {}      -- name -> item, rebuilt each scan (avoids per-item bridge.getItem)
+local craftableItemsByName = {} -- name -> true, rebuilt from getCraftableItems each scan
 local craftableCache = {}   -- name -> { v = bool, at = ms } (TTL'd, see constants)
 local craftingCache = {}    -- name -> { v = bool, at = ms }
 local lastData = nil
@@ -1164,6 +1165,7 @@ end
 
 local function isCraftable(registryName, item)
   if type(item) == "table" and item.isCraftable ~= nil then return item.isCraftable == true end
+  if craftableItemsByName[registryName] == true then return true end
 
   local cached = craftableCache[registryName]
   if cached then
@@ -1906,6 +1908,7 @@ local function scan()
   local scanned = {}
 
   itemsByName = {} -- rebuilt each scan so findStoredItem is a local lookup
+  craftableItemsByName = {}
   for _, item in pairs(items) do
     local amount = itemAmount(item)
     unique = unique + 1
@@ -1913,6 +1916,9 @@ local function scan()
     if item.isCraftable then craftableCount = craftableCount + 1 end
     if item.name then itemsByName[item.name] = item end
     scanned[#scanned + 1] = item
+  end
+  for _, item in pairs(call(bridge, "getCraftableItems") or {}) do
+    if type(item) == "table" and item.name then craftableItemsByName[item.name] = true end
   end
   markPhase("indexItemsMs")
   lastUnique = unique -- remember a good read so the next empty read is caught as stale
