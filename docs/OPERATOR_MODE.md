@@ -59,6 +59,25 @@ baseline into one timestamped folder under `/tmp/atm10-live-pass`. It is
 read-only and does not start crafts, clear queues, flip auto mode, reboot
 ComputerCraft, or write to the server.
 
+## In-game chat relay (two-way; preferred for live back-and-forth)
+
+Adopted 2026-07-08 at Zach's request; applies to ALL agents in these workspaces.
+When Zach is in-game, talk to him through the game instead of hoping he watches
+a terminal:
+
+- **Outbound:** `tools/atm10-diagnostics.sh chat "one line"` — whispers
+  `ATM10_CHAT_PLAYER` (default `Zoozorocks` = Zach) via the server console,
+  tagged with `ATM10_CHAT_FROM` (default `Claude`; Codex should set `Codex`).
+  One short line; say exactly what to do or answer.
+- **Inbound:** `tools/atm10-diagnostics.sh chat-log [lines]` — recent player
+  chat from the server log. Zach answers in normal chat; poll after asking.
+- **Players:** `Zoozorocks` = Zach (operator). `aa_juggernaut` = Seth (friend,
+  not an operator — never task him).
+- **HARD BOUNDARY:** console access is for chat only (`tell`, `list`). Any
+  other server command (gamemode / op / stop / give / restart / ...) still
+  needs Zach's explicit approval per the shared rules; `cc-restart` stays
+  disabled.
+
 When the only missing piece is a human in-game action, Codex pings Zach through
 K2 feedback instead of burying the request in terminal output:
 

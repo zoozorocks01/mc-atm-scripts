@@ -25,6 +25,8 @@ Usage:
   tools/atm10-diagnostics.sh cc-dump [computer_id]
   tools/atm10-diagnostics.sh cc-turn-on [computer_id]
   tools/atm10-diagnostics.sh cc-restart [computer_id]  # disabled: unsafe with Advanced Peripherals RS bridge
+  tools/atm10-diagnostics.sh chat <message>       # whisper the operator in-game (one line)
+  tools/atm10-diagnostics.sh chat-log [lines]     # read recent player chat from the server log
 
 Environment overrides:
   ATM10_SERVER_OPS_DIR    MC server registry dir (default: ~/Projects/personal/mc-server-ops)
@@ -39,6 +41,8 @@ Environment overrides:
   ATM10_CC_RESTART_DRAIN_MS  recent-craft drain window for cc-safety diagnostics (default: 120000)
   ATM10_CC_RESTART_MAX_STALE_MS  max trusted heartbeat/craftstate age (default: 90000)
   ATM10_CC_RESTART_ALLOW_STALE=true  emergency only: bypass stale cc-safety refusal after independently confirming no crafts
+  ATM10_CHAT_PLAYER       in-game player the chat command whispers (default: Zoozorocks)
+  ATM10_CHAT_FROM         sender tag shown in chat whispers (default: Claude; Codex sets Codex)
   ATM10_DIAG_INTERVAL     watch interval seconds (default: 5)
   ATM10_DIAG_OUT_DIR      save/watch-log output dir (default: /tmp/atm10-diagnostics)
   ATM10_SSH_OPTS          extra ssh options (default: batch mode, 8s connect timeout)
@@ -593,6 +597,29 @@ case "${1:-snapshot}" in
     screen_stuff "computercraft turn-on $computer_id"
     screen_stuff "computercraft dump $computer_id"
     printf 'Sent computercraft turn-on %s and dump to %s\n' "$computer_id" "$SCREEN_SESSION"
+    ;;
+  chat)
+    # In-game relay, outbound half (docs/OPERATOR_MODE.md "In-game chat relay").
+    # Whispers the OPERATOR (ATM10_CHAT_PLAYER) via the server console. Console
+    # use here is CHAT ONLY -- tell/list; any other server command still needs
+    # explicit human approval.
+    shift
+    chat_msg="$*"
+    if [ -z "$chat_msg" ]; then
+      printf 'chat requires a message, e.g. tools/atm10-diagnostics.sh chat "GO - watch the smelter"\n' >&2
+      exit 2
+    fi
+    case "$chat_msg" in
+      *$'\n'*|*$'\r'*) printf 'chat messages must be a single line\n' >&2; exit 2 ;;
+    esac
+    chat_player="${ATM10_CHAT_PLAYER:-Zoozorocks}"
+    screen_stuff "tell $chat_player [$( echo "${ATM10_CHAT_FROM:-Claude}" )] $chat_msg"
+    printf 'Whispered %s via %s\n' "$chat_player" "$SCREEN_SESSION"
+    ;;
+  chat-log)
+    chat_lines="${2:-15}"
+    case "$chat_lines" in ""|*[!0-9]*) chat_lines=15 ;; esac
+    run_server_remote "grep -E '] \[Server thread/INFO] \[net.minecraft.server.MinecraftServer/]: <' logs/latest.log | tail -$chat_lines"
     ;;
   cc-restart)
     computer_id="${2:-6}"
