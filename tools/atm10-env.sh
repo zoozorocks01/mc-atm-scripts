@@ -61,13 +61,18 @@ atm10_registry_hostname="$(atm10_registry_value_or_empty "$atm10_registry_prefix
 atm10_registry_tailscale_ip="$(atm10_registry_value_or_empty "$atm10_registry_prefix.tailscale_ip")"
 atm10_registry_server_dir="$(atm10_registry_value_or_empty "$atm10_registry_prefix.server_dir")"
 atm10_registry_minecraft_port="$(atm10_registry_value_or_empty "$atm10_registry_prefix.minecraft_port")"
+atm10_registry_screen_session="$(atm10_registry_value_or_empty "$atm10_registry_prefix.screen_session")"
 
 ATM10_HOST_ID="${atm10_registry_host_id:-${ATM10_HOST_ID:-unknown}}"
 HOST="${ATM10_HOST:-${atm10_registry_tailscale_ip:-${atm10_registry_hostname:-$ATM10_DEFAULT_HOST}}}"
 SERVER_DIR="${ATM10_SERVER_DIR:-${atm10_registry_server_dir:-$ATM10_DEFAULT_SERVER_DIR}}"
 MINECRAFT_PORT="${ATM10_MINECRAFT_PORT:-${atm10_registry_minecraft_port:-25566}}"
 COMPUTER_DIR="${ATM10_COMPUTER_DIR:-$SERVER_DIR/$ATM10_WORLD_NAME/computercraft/computer/$ATM10_COMPUTER_ID}"
-SCREEN_SESSION="${ATM10_SCREEN_SESSION:-atm10-intel-main-25566}"
+case "$ATM10_HOST_ID" in
+  macpro) atm10_default_screen_session="atm10-macpro-main-$MINECRAFT_PORT" ;;
+  *) atm10_default_screen_session="atm10-intel-main-$MINECRAFT_PORT" ;;
+esac
+SCREEN_SESSION="${ATM10_SCREEN_SESSION:-${atm10_registry_screen_session:-$atm10_default_screen_session}}"
 
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1)
 if [ -n "${ATM10_SSH_OPTS:-}" ]; then
