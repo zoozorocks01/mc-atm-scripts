@@ -17,6 +17,7 @@ Usage:
   tools/atm10-iterate.sh sim [scenario] [args...]
   tools/atm10-iterate.sh status
   tools/atm10-iterate.sh approve <target> [timeoutSec]
+  tools/atm10-iterate.sh soak [durationSec] [maxPerCycle]
   tools/atm10-iterate.sh deploy-inventory
 
 Commands:
@@ -24,6 +25,10 @@ Commands:
   sim               Run a local manager simulator scenario (default: approval-aluminum).
   status            Print live doctor plus the compact approval/queue files.
   approve           Write a manager-owned live approval request and poll its result.
+  soak              Request a bounded fail-stop auto soak (manual base only) and
+                    poll the report. The manager clamps duration (30s..15m), holds
+                    ALL quota work on the first failure, and always reverts to
+                    manual by itself (deadline, failure, mode change, or restart).
   deploy-inventory  Copy inventory-source files to the configured CC computer dir.
 
 Environment:
@@ -115,6 +120,8 @@ show_file() {
 }
 show_file .atm10-approve-request 60
 show_file .atm10-approve-result 80
+show_file .atm10-soakstate 40
+show_file .atm10-soak-report 40
 echo
 echo "## queue compact"
 if [ -f .atm10-craft-queue ]; then
@@ -207,6 +214,93 @@ approve() {
   printf '\nnpeBefore=%s\nnpeAfter=%s\n' "$before" "$after"
 }
 
+write_soak_request() {
+  local requested_at="$1"
+  local duration_ms="$2"
+  local max_per_cycle="$3"
+  local payload
+  payload="$(printf '{\n  requestedAt = %s,\n  durationMs = %s,\n' "$requested_at" "$duration_ms")"
+  if [ -n "$max_per_cycle" ]; then
+    payload="$payload$(printf '  maxPerCycle = %s,\n' "$max_per_cycle")"
+  fi
+  payload="$payload}"
+  printf '%s\n' "$payload" | ssh "${SSH_OPTS[@]}" "$HOST" \
+    "cd $remote_dir && cat > .atm10-soak-request.tmp && mv .atm10-soak-request.tmp .atm10-soak-request"
+}
+
+# A soak report is "ours" when its end/rejection stamp is not older than our
+# request. endedAt marks a finished/interrupted soak, at marks a rejection.
+poll_soak_report() {
+  local requested_at="$1"
+  run_remote "REQUESTED_AT=$(quote_remote "$requested_at")"'
+stamp=0
+if [ -f .atm10-soak-report ]; then
+  for field in endedAt at; do
+    v=$(sed -n "s/^[[:space:]]*${field}[[:space:]]*=[[:space:]]*//p" .atm10-soak-report | head -1 | sed "s/[,.].*$//")
+    case "$v" in ""|*[!0-9]*) v=0 ;; esac
+    if [ "$v" -gt "$stamp" ]; then stamp="$v"; fi
+  done
+fi
+if [ "$stamp" -ge "$REQUESTED_AT" ]; then
+  cat .atm10-soak-report
+else
+  if [ -f .atm10-soakstate ]; then
+    fired=$(sed -n "s/^[[:space:]]*fired[[:space:]]*=[[:space:]]*//p" .atm10-soakstate | head -1 | sed "s/,$//")
+    echo "running fired=${fired:-?}"
+  else
+    echo "pending"
+  fi
+fi
+'
+}
+
+soak() {
+  local duration_sec="${1:-300}"
+  local max_per_cycle="${2:-}"
+  case "$duration_sec" in
+    ""|*[!0-9]*) printf 'durationSec must be numeric, got: %s\n' "$duration_sec" >&2; exit 2 ;;
+  esac
+  if [ -n "$max_per_cycle" ]; then
+    case "$max_per_cycle" in
+      *[!0-9]*) printf 'maxPerCycle must be numeric, got: %s\n' "$max_per_cycle" >&2; exit 2 ;;
+    esac
+  fi
+
+  printf 'Preflight doctor before requesting a live soak...\n'
+  "$DIAG" doctor
+
+  local before request_at start output timeout
+  before="$(npe_count)"
+  request_at="$(remote_now_ms)"
+  timeout=$(( duration_sec + 120 ))
+  printf '\nWriting soak request durationSec=%s maxPerCycle=%s requestedAt=%s\n' \
+    "$duration_sec" "${max_per_cycle:-config}" "$request_at"
+  write_soak_request "$request_at" "$(( duration_sec * 1000 ))" "$max_per_cycle"
+
+  start="$(date +%s)"
+  while true; do
+    output="$(poll_soak_report "$request_at")"
+    case "$output" in
+      pending|running*)
+        if [ $(( $(date +%s) - start )) -ge "$timeout" ]; then
+          printf '\nTimed out waiting for .atm10-soak-report newer than %s\n' "$request_at" >&2
+          compact_live_files
+          exit 1
+        fi
+        printf '%s ' "$output"
+        sleep "$APPROVE_INTERVAL"
+        ;;
+      *)
+        printf '\n## soak report\n%s\n' "$output"
+        break
+        ;;
+    esac
+  done
+
+  compact_live_files
+  printf '\nnpeBefore=%s\nnpeAfter=%s\n' "$before" "$(npe_count)"
+}
+
 deploy_inventory() {
   sftp "${SSH_OPTS[@]}" "$HOST" <<SFTP
 cd "$COMPUTER_DIR"
@@ -252,6 +346,10 @@ case "${1:-test}" in
   approve)
     shift
     approve "${1:-}" "${2:-$APPROVE_TIMEOUT}"
+    ;;
+  soak)
+    shift
+    soak "${1:-300}" "${2:-}"
     ;;
   deploy-inventory)
     deploy_inventory

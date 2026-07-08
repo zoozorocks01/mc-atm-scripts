@@ -38,6 +38,9 @@ local FILES = {
   status = ".atm10-status",         -- compact summary for agents/operators to poll over SSH
   touchstate = ".atm10-touchstate", -- latest touch hit-test result for live approval tests
   heartbeat = ".atm10-heartbeat",   -- liveness ping; startup watchdog restarts a hung manager
+  soakRequest = ".atm10-soak-request", -- agent -> manager: run a bounded fail-stop auto soak
+  soakState = ".atm10-soakstate",   -- manager-owned while a soak runs; boot treats leftovers as an interrupted soak
+  soakReport = ".atm10-soak-report", -- last soak outcome (end OR rejection) for agent polling
 }
 local RUNTIME = {
   statusVersion = 2,
@@ -505,8 +508,11 @@ function ui.writeStatusState(data, now)
   data = type(data) == "table" and data or {}
   now = tonumber(now) or nowMs()
   local hasData = next(data) ~= nil
-  local override = managedStore and managed.getSetting(managedStore, "modeOverride")
-  local mode = (override and control.normalizeMode(override) == override) and override or (config.mode or "manual")
+  -- effectiveMode() is declared later in the file, so it is not an upvalue here;
+  -- ui.baseMode resolves through the ui table at call time. Same soak rule: a
+  -- running soak reports as auto so agents see the mode the gate actually uses.
+  local mode = ui.baseMode and ui.baseMode() or (config.mode or "manual")
+  if ui.soak then mode = control.MODE_AUTO end
 
   local q = ui.queueStatus(data.craftQueue)
   local plan = {
@@ -557,6 +563,17 @@ function ui.writeStatusState(data, now)
     demand = { fallingBehind = {}, sourceMore = {} },
     loop = {},
   }
+  -- Agents drive a soak entirely through files: request in, this block + the
+  -- soak report out. secondsLeft lets a poller size its wait without clock math.
+  if ui.soak then
+    state.soak = {
+      running = true,
+      startedAt = ui.soak.startedAt,
+      endsAt = ui.soak.endsAt,
+      secondsLeft = math.max(0, math.ceil(((tonumber(ui.soak.endsAt) or now) - now) / 1000)),
+      fired = ui.soak.fired or 0,
+    }
+  end
 
   local ok, monlib = pcall(require, "atm10-monitor")
   if ok and monlib then
@@ -1400,13 +1417,22 @@ local function recordCraftRequest(name, amount, now)
   writeLedger(ledger)
 end
 
--- The active control mode: an operator override set from the console (persisted
+-- The persisted control mode: an operator override set from the console (kept
 -- in the managed store so it survives reboot + isn't clobbered by loadConfig)
--- takes precedence over the config file. This is what the gate actually sees.
-local function effectiveMode()
+-- takes precedence over the config file. SOAK reads this to decide whether the
+-- base is still manual; everything else should ask effectiveMode().
+function ui.baseMode()
   local override = managed.getSetting(managedStore, "modeOverride")
   if override and control.normalizeMode(override) == override then return override end
   return config.mode or "manual"
+end
+
+-- What the gate actually sees. A running soak is a bounded auto excursion from a
+-- manual base: it overrides the mode WITHOUT touching the persisted override, so
+-- a restart (or the soak ending) lands back in manual with nothing to undo.
+local function effectiveMode()
+  if ui.soak then return control.MODE_AUTO end
+  return ui.baseMode()
 end
 
 function ui.writeTouchState(x, y, result, entry)
@@ -1690,8 +1716,10 @@ local function processCraftQueue(now, plans)
     mode = effectiveMode(),
     now = now,
     cooldownMs = (tonumber(stock.cooldownSeconds) or 300) * 1000,
-    -- rate-limit ACTUAL bridge requests per cycle (the plan display is uncapped)
-    maxPerCycle = tonumber(stock.maxCraftsPerCycle) or 2,
+    -- rate-limit ACTUAL bridge requests per cycle (the plan display is uncapped);
+    -- a soak's own cap may only TIGHTEN this, never widen it
+    maxPerCycle = math.min(tonumber(stock.maxCraftsPerCycle) or 2,
+      ui.soak and tonumber(ui.soak.maxPerCycle) or math.huge),
     -- AP/RS can accept a large craftItem call and then show no active task; cap each
     -- bridge call so stock rows drain through conservative batches.
     maxBridgeRequest = tonumber(stock.maxBridgeRequest) or 32,
@@ -1702,6 +1730,9 @@ local function processCraftQueue(now, plans)
     -- Unattended safety: failed quota rows require an explicit retry/clear before
     -- they can fire again, even in auto mode.
     holdFailed = true,
+    -- During a soak the bar is stricter: ONE failure anywhere holds every quota
+    -- row in this same cycle; processSoak then formally ends the soak next cycle.
+    holdWhenAnyFailed = ui.soak ~= nil,
     -- A1: live source amount for a job's craftFrom reserve (getItems is TTL-cached, cheap)
     resolve = function(name) local it = findStoredItem(getItems(), name); return it and itemAmount(it) or 0 end,
     isCrafting = function(name) return isItemCrafting(name, { verifyEmpty = true }) end,
@@ -1722,6 +1753,12 @@ local function processCraftQueue(now, plans)
   end
   if #(summary.completed or {}) > 0 then saveQueue(craftQueue) end
   if summary.changed then saveQueue(craftQueue) end
+  -- Soak accounting: the report's fired count = bridge requests the soak issued.
+  -- Persisted each change so a mid-soak restart's report still carries it.
+  if ui.soak and #(summary.requested or {}) > 0 then
+    ui.soak.fired = (ui.soak.fired or 0) + #summary.requested
+    pcall(atomicWrite, FILES.soakState, ui.soak)
+  end
 
   tasks = craftingCache.__tasks
   if not tasks or (now - (tasks.at or 0)) >= TTL.crafting then
@@ -1881,15 +1918,78 @@ local function autoApprovePlans(plans)
   if effectiveMode() ~= control.MODE_AUTO then return end
   if type(plans) ~= "table" then return end
   craftQueue = craftQueue or loadQueue()
-  -- Failed rows remain quarantined by the runner (holdFailed=true) and count
-  -- against maxQueued below, so auto can continue unrelated work only while the
-  -- small bounded backlog still has free capacity.
+  -- The settled auto failure policy (docs/DECISIONS.md #1): failed rows are
+  -- quarantined by the runner (holdFailed=true) but EXCLUDED from the runnable
+  -- cap here, so healthy work keeps its bounded slots while failures wait for an
+  -- explicit retry/clear. During a soak, holdWhenAnyFailed additionally halts
+  -- everything on the first failure.
   local autoSlots = math.max(1, math.floor(tonumber(config.stockKeeper.maxCraftsPerCycle) or 1))
+  if ui.soak and tonumber(ui.soak.maxPerCycle) then
+    autoSlots = math.min(autoSlots, math.max(1, math.floor(tonumber(ui.soak.maxPerCycle))))
+  end
   local _, n = cqueue.autoApprove(craftQueue, plans, nowMs(), {
     maxNew = autoSlots,
     maxQueued = autoSlots,
   })
   if n > 0 then saveQueue(craftQueue) end
+end
+
+-- SOAK lifecycle (docs/DECISIONS.md #2): an agent writes .atm10-soak-request and
+-- the manager runs a bounded fail-stop auto window, then reverts to manual on its
+-- own. Called every scan cycle before the craft phase:
+--   * running -> end-check (queue failure / operator mode change / deadline);
+--     on end: write the report, delete the soak state, drop back to manual.
+--   * not running -> consume a pending request. Start gates: fresh request, base
+--     mode manual, no drain in progress, bridge not degraded, no failed rows.
+--     A rejected request writes the report with the reason so the agent sees WHY.
+-- Boot handles the remaining path: leftover soak state = interrupted soak ->
+-- report "manager restart" and stay manual. Every exit lands in manual.
+function ui.processSoak(now, draining, degraded)
+  if ui.soak then
+    craftQueue = craftQueue or loadQueue()
+    local failures = cqueue.failureCount(craftQueue)
+    local reason = control.soakEndReason(ui.soak, {
+      now = now,
+      failures = failures,
+      baseMode = ui.baseMode(),
+    })
+    if reason then
+      pcall(atomicWrite, FILES.soakReport, {
+        ok = reason == "deadline",
+        reason = reason,
+        startedAt = ui.soak.startedAt,
+        endedAt = now,
+        fired = ui.soak.fired or 0,
+        failures = failures,
+      })
+      pcall(fs.delete, FILES.soakState)
+      ui.soak = nil
+      print("SOAK ended: " .. reason)
+    end
+    return
+  end
+
+  if not fs.exists(FILES.soakRequest) then return end
+  local req = ui.readSerializedFile(FILES.soakRequest)
+  pcall(fs.delete, FILES.soakRequest)
+  local spec, blocked = control.soakSpec(req, now)
+  if spec and draining then blocked = "drain in progress" end
+  if spec and degraded then blocked = "bridge degraded" end
+  if spec and ui.baseMode() ~= control.MODE_MANUAL then
+    blocked = "mode is " .. tostring(ui.baseMode()) .. " (soak starts from manual only)"
+  end
+  if spec and not blocked then
+    craftQueue = craftQueue or loadQueue()
+    if cqueue.failureCount(craftQueue) > 0 then blocked = "queue has failed rows" end
+  end
+  if blocked then
+    pcall(atomicWrite, FILES.soakReport, { ok = false, reason = blocked, at = now })
+    print("SOAK rejected: " .. blocked)
+    return
+  end
+  ui.soak = spec
+  pcall(atomicWrite, FILES.soakState, spec)
+  print(("SOAK started: %ds window"):format(math.ceil((spec.endsAt - now) / 1000)))
 end
 
 local function scan()
@@ -3580,6 +3680,12 @@ local function refreshAndDraw()
       -- resume on the bridge's first (still-settling) clean read -- it auto-resumes
       -- once the bridge has been stably clean (no manual clear).
       local drain = ui.drainRequest()
+      -- SOAK runs every cycle (not just the healthy craft phase) so its end
+      -- conditions -- failure, operator mode change, deadline -- are honored even
+      -- while a drain or a degraded bridge is holding crafts. Starting, however,
+      -- is gated on this cycle being healthy (neither draining nor degraded).
+      ui.processSoak(nowMs(), drain ~= nil,
+        craftingCache.__bridge ~= nil and craftingCache.__bridge.allowFire == false)
       if drain then
         data.drainRequested = true
         ui.writeDrainAck(nowMs())
@@ -3670,11 +3776,28 @@ do
       FILES.queue, FILES.managed, FILES.trends, FILES.dismissed, FILES.ledger,
       FILES.loopstate, FILES.planstate, FILES.status, FILES.touchstate,
       FILES.approveRequest, FILES.approveResult,
+      FILES.soakState, FILES.soakReport,
       CRAFT_RESULTS.file, CRAFT_RESULTS.auditFile,
     })
   end
   pcall(fs.delete, FILES.drainRequest)
   pcall(fs.delete, FILES.reloadRequest)
+  -- A soak interrupted by a restart must NEVER resume as auto: report it and boot
+  -- into whatever the persisted base mode says (a soak never touches that, so a
+  -- manual-base soak always comes back manual). A pre-boot request file is of
+  -- unknown age/intent -- agents must ask a LIVE manager (fresh heartbeat) only.
+  if fs.exists(FILES.soakState) then
+    local s = ui.readSerializedFile(FILES.soakState)
+    pcall(atomicWrite, FILES.soakReport, {
+      ok = false,
+      reason = "manager restart",
+      startedAt = type(s) == "table" and s.startedAt or nil,
+      fired = type(s) == "table" and (s.fired or 0) or nil,
+      endedAt = nowMs(),
+    })
+    pcall(fs.delete, FILES.soakState)
+  end
+  pcall(fs.delete, FILES.soakRequest)
 end
 
 -- TOUCH-DECOUPLE: the heavy RS scan (refreshAndDraw -> bridge.getItems over a huge

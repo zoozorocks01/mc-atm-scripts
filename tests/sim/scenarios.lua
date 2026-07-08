@@ -13,6 +13,9 @@ local ORDER = {
   "ap-failure-progress",
   "auto-admission-bounded",
   "auto-quarantines-failed-row",
+  "soak-request-bounded-window",
+  "soak-fail-stop-reverts",
+  "soak-restart-stays-manual",
 }
 
 local function contains(text, needle)
@@ -408,6 +411,166 @@ SCENARIOS["auto-quarantines-failed-row"] = {
     for _, row in ipairs(report.crafted or {}) do fired[row.name] = true end
     addCheck(checks, #report.crafted == 2 and fired["alltheores:aluminum_ingot"] and fired["alltheores:tin_ingot"],
       "runner fired both healthy admitted rows while copper stayed quarantined")
+    return checks
+  end,
+}
+
+-- Shared setup for the SOAK scenarios: a MANUAL base with n craftable deficits
+-- and the stock keeper enabled, so the only thing that can make auto fire is the
+-- agent-requested soak window itself.
+local function soakWorld(n)
+  local items, managedItems = {}, {}
+  for i = 1, n do
+    local name = "test:soak_item_" .. i
+    items[#items + 1] = { name = name, amount = 0, isCraftable = true }
+    managedItems[name] = { name = name, label = "Soak Item " .. i, target = 4096, craftTo = 4096 }
+  end
+  return {
+    bridge = sim.bridge({ items = items }),
+    managedStore = { items = managedItems, settings = { modeOverride = "manual" } },
+    config = {
+      mode = "manual",
+      allowAutocraft = true,
+      stockKeeper = { enabled = true, maxCraftsPerCycle = 2, maxBridgeRequest = 32 },
+    },
+  }
+end
+
+-- Event helper: write a FRESH soak request mid-run (boot intentionally deletes a
+-- pre-boot request, so a live agent writes while the manager runs), then hand the
+-- loop a scan timer so the same cycle consumes it.
+local function soakRequestEvent(opts)
+  return function(s)
+    local req = { requestedAt = s.clock, durationMs = 600000 }
+    for k, v in pairs(opts or {}) do req[k] = v end
+    s:setSerializedFile(".atm10-soak-request", req)
+    return { "timer", 99 }
+  end
+end
+
+SCENARIOS["soak-request-bounded-window"] = {
+  description = "Agent soak request runs bounded auto from a manual base and stays within its per-cycle cap.",
+  run = function()
+    local world = soakWorld(3)
+    local runner = sim.new({
+      bridge = world.bridge,
+      managedStore = world.managedStore,
+      config = world.config,
+      events = {
+        { "timer", 1 },                        -- manual cycle: nothing may fire
+        soakRequestEvent({ maxPerCycle = 1 }), -- agent asks; soak starts + fires 1
+        { "timer", 2 },                        -- first job closes (vanished-ok)
+        { "timer", 3 },                        -- freed slot admits + fires the next
+      },
+    })
+    local result = runner:run()
+    return { runner = runner, result = result, crafted = result.crafted }
+  end,
+  checks = function(report)
+    local checks = {}
+    local statusFile = serialized(report, ".atm10-status")
+    local soakState = serialized(report, ".atm10-soakstate")
+    addCheck(checks, reachedSentinel(report), "manager completed the scripted soak cycles and stopped at the simulator sentinel")
+    addCheck(checks, #report.crafted == 2,
+      "soak fired exactly one craft per healthy cycle (2 of 3 deficits), not the whole backlog")
+    addCheck(checks, #report.crafted == 2 and report.crafted[1].name ~= report.crafted[2].name,
+      "each bounded soak fire went to a different deficit item")
+    addCheck(checks, type(statusFile) == "table" and statusFile.mode == "auto",
+      "status reports the soak's effective auto mode for agent polling")
+    addCheck(checks, type(statusFile) == "table" and type(statusFile.soak) == "table"
+      and statusFile.soak.running == true and statusFile.soak.fired == 2,
+      "status carries the running soak block with the fired count")
+    addCheck(checks, type(soakState) == "table" and (tonumber(soakState.endsAt) or 0) > 0,
+      "manager persisted the running soak state for restart detection")
+    addCheck(checks, report.result.files[".atm10-soak-report"] == nil,
+      "no soak report is written while the window is still running")
+    addCheck(checks, report.result.files[".atm10-soak-request"] == nil,
+      "the consumed soak request file is deleted")
+    return checks
+  end,
+}
+
+SCENARIOS["soak-fail-stop-reverts"] = {
+  description = "First failed row ends the soak, reverts to manual, and reports the failure -- not the clock.",
+  run = function()
+    local world = soakWorld(2)
+    local runner = sim.new({
+      bridge = world.bridge,
+      managedStore = world.managedStore,
+      config = world.config,
+      events = {
+        { "timer", 1 },                        -- manual cycle: nothing may fire
+        soakRequestEvent({ maxPerCycle = 1 }), -- soak starts + fires item 1 (job 1001)
+        { "rs_crafting", true, 1001, "craft failed" }, -- AP reports the job failed
+        { "timer", 2 },                        -- end-check sees the failure -> revert
+      },
+    })
+    local result = runner:run()
+    return { runner = runner, result = result, crafted = result.crafted }
+  end,
+  checks = function(report)
+    local checks = {}
+    local entries = queueEntries(report)
+    local failed = entries["test:soak_item_1"]
+    local soakReport = serialized(report, ".atm10-soak-report")
+    local statusFile = serialized(report, ".atm10-status")
+    addCheck(checks, reachedSentinel(report), "manager completed the scripted fail-stop cycles and stopped at the simulator sentinel")
+    addCheck(checks, #report.crafted == 1 and report.crafted[1].name == "test:soak_item_1",
+      "only the pre-failure craft fired; the second deficit never got a request")
+    addCheck(checks, type(failed) == "table" and failed.state == "APPROVED" and failed.error ~= nil,
+      "the failed row stays quarantined for explicit retry or clear")
+    addCheck(checks, entries["test:soak_item_2"] == nil,
+      "no new work was admitted once the failure ended the soak")
+    addCheck(checks, type(soakReport) == "table" and soakReport.ok == false
+      and soakReport.reason == "queue failure" and soakReport.fired == 1,
+      "soak report names the queue failure (fail-stop), not the deadline")
+    addCheck(checks, report.result.files[".atm10-soakstate"] == nil,
+      "soak state is cleared when the soak ends")
+    addCheck(checks, type(statusFile) == "table" and statusFile.mode == "manual"
+      and statusFile.soak == nil,
+      "manager reverted to the manual base with no soak block in status")
+    addCheck(checks, type(statusFile) == "table" and statusFile.summary == "QUEUE_WARN",
+      "status summary warns about the failed row left in the queue")
+    return checks
+  end,
+}
+
+SCENARIOS["soak-restart-stays-manual"] = {
+  description = "A manager restart mid-soak reports the interruption and boots manual; pre-boot request files are ignored.",
+  run = function()
+    local world = soakWorld(1)
+    local runner = sim.new({
+      bridge = world.bridge,
+      managedStore = world.managedStore,
+      config = world.config,
+      files = {
+        -- as if the manager died mid-soak with a huge window left...
+        [".atm10-soakstate"] = { requestedAt = 1, startedAt = 1, endsAt = 1e12, fired = 3 },
+        -- ...and some agent left a request lying around before boot
+        [".atm10-soak-request"] = { requestedAt = 1, durationMs = 600000 },
+      },
+      events = { { "timer", 1 }, { "timer", 2 } },
+    })
+    local result = runner:run()
+    return { runner = runner, result = result, crafted = result.crafted }
+  end,
+  checks = function(report)
+    local checks = {}
+    local soakReport = serialized(report, ".atm10-soak-report")
+    local statusFile = serialized(report, ".atm10-status")
+    addCheck(checks, reachedSentinel(report), "manager booted, ran two manual cycles, and stopped at the simulator sentinel")
+    addCheck(checks, type(soakReport) == "table" and soakReport.ok == false
+      and soakReport.reason == "manager restart" and soakReport.fired == 3,
+      "boot reports the interrupted soak with its fired count")
+    addCheck(checks, report.result.files[".atm10-soakstate"] == nil,
+      "boot clears the leftover soak state")
+    addCheck(checks, report.result.files[".atm10-soak-request"] == nil,
+      "boot deletes a pre-boot soak request instead of honoring it")
+    addCheck(checks, #report.crafted == 0,
+      "no craft fired: the interrupted soak did NOT resume as auto")
+    addCheck(checks, type(statusFile) == "table" and statusFile.mode == "manual"
+      and statusFile.soak == nil,
+      "manager is back on its manual base with no soak block")
     return checks
   end,
 }

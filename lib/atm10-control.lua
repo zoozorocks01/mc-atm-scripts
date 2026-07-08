@@ -327,6 +327,60 @@ function control.drainRequestFresh(data, now, ttlMs)
   return ((tonumber(now) or 0) - ts) <= ttl
 end
 
+-- SOAK: a bounded, fail-stop unattended-auto window an agent can request over the
+-- file channel (.atm10-soak-request) without an operator at the monitor. The point
+-- is to PROVE auto is trustworthy in small doses: the manager runs auto with the
+-- runner's holdWhenAnyFailed fail-stop, then always reverts to manual on its own.
+-- Every exit path ends in manual: the deadline passes, any queue row fails, the
+-- operator changes mode, or the manager restarts (boot clears the soak state).
+-- A soak may only START from manual -- it is an excursion from a safe base, never
+-- a way to switch a misbehaving auto base back on.
+control.SOAK_REQUEST_TTL_MS = 60000        -- request older than this is stale
+control.SOAK_MIN_MS = 30000                -- floor: shorter proves nothing
+control.SOAK_MAX_MS = 15 * 60 * 1000       -- hard cap on any requested window
+control.SOAK_DEFAULT_MS = 5 * 60 * 1000
+
+-- Validate + clamp an agent-written soak request into a running-soak spec.
+-- data = { requestedAt = ms (manager clock), durationMs?, maxPerCycle?, note? }
+-- Returns spec { requestedAt, startedAt, endsAt, maxPerCycle?, note?, fired = 0 }
+-- or nil, reason. Freshness is required so a leftover file from a dead agent
+-- can never start an unattended window later.
+function control.soakSpec(data, now)
+  if type(data) ~= "table" then return nil, "invalid request" end
+  now = tonumber(now) or 0
+  local requestedAt = tonumber(data.requestedAt)
+  if not requestedAt or requestedAt <= 0 then return nil, "missing requestedAt" end
+  if (now - requestedAt) > control.SOAK_REQUEST_TTL_MS then return nil, "stale request" end
+  local duration = tonumber(data.durationMs) or control.SOAK_DEFAULT_MS
+  duration = math.max(control.SOAK_MIN_MS, math.min(control.SOAK_MAX_MS, duration))
+  local maxPerCycle = tonumber(data.maxPerCycle)
+  if maxPerCycle then maxPerCycle = math.max(1, math.floor(maxPerCycle)) end
+  return {
+    requestedAt = requestedAt,
+    startedAt = now,
+    endsAt = now + duration,
+    maxPerCycle = maxPerCycle,
+    note = type(data.note) == "string" and data.note or nil,
+    fired = 0,
+  }
+end
+
+-- Why must a running soak end right now? Returns a reason string, or nil to keep
+-- going. Checked every scan cycle. Order matters: a queue failure ends the soak
+-- even if the deadline also passed (the report must name the failure, not the
+-- clock), and an operator mode change always wins over waiting out the window.
+--   state = { now = ms, failures = n (cqueue.failureCount), baseMode = mode }
+function control.soakEndReason(soak, state)
+  if type(soak) ~= "table" then return "invalid soak" end
+  state = state or {}
+  if (tonumber(state.failures) or 0) > 0 then return "queue failure" end
+  if state.baseMode ~= nil and state.baseMode ~= control.MODE_MANUAL then
+    return "mode " .. tostring(state.baseMode)
+  end
+  if (tonumber(state.now) or 0) >= (tonumber(soak.endsAt) or 0) then return "deadline" end
+  return nil
+end
+
 function control.craftJobSettled(job)
   if job == nil then return true end
   if type(job) ~= "table" then

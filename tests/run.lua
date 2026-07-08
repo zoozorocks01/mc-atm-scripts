@@ -24,6 +24,53 @@ local health = require("atm10-health")
 local pgive = require("atm10-pattern-give")
 
 -- ---------------------------------------------------------------------------
+print("control (bounded agent soak: spec validation + end reasons)")
+-- Own do-scope near the top (main chunk approaches the 200-local limit).
+-- Biting: a wrong clamp or TTL lets an agent request an unbounded unattended
+-- window; a wrong end-reason order misreports WHY a soak stopped.
+do
+  local NOW = 5000000
+
+  -- soakSpec: validation + clamping
+  local spec = control.soakSpec({ requestedAt = NOW - 1000 }, NOW)
+  t.check(spec ~= nil, "soakSpec: fresh request with defaults is accepted")
+  t.eq(spec.startedAt, NOW, "soakSpec: startedAt is the manager's now, not the request time")
+  t.eq(spec.endsAt, NOW + control.SOAK_DEFAULT_MS, "soakSpec: missing duration gets the default window")
+  t.eq(spec.fired, 0, "soakSpec: fired counter starts at zero")
+
+  local _, reason = control.soakSpec(nil, NOW)
+  t.eq(reason, "invalid request", "soakSpec: non-table request is rejected")
+  _, reason = control.soakSpec({}, NOW)
+  t.eq(reason, "missing requestedAt", "soakSpec: request without requestedAt is rejected")
+  _, reason = control.soakSpec({ requestedAt = NOW - control.SOAK_REQUEST_TTL_MS - 1 }, NOW)
+  t.eq(reason, "stale request", "soakSpec: request older than the TTL is rejected")
+
+  spec = control.soakSpec({ requestedAt = NOW, durationMs = 1 }, NOW)
+  t.eq(spec.endsAt, NOW + control.SOAK_MIN_MS, "soakSpec: too-short duration clamps UP to the floor")
+  spec = control.soakSpec({ requestedAt = NOW, durationMs = 1e12 }, NOW)
+  t.eq(spec.endsAt, NOW + control.SOAK_MAX_MS, "soakSpec: huge duration clamps DOWN to the hard cap")
+  spec = control.soakSpec({ requestedAt = NOW, maxPerCycle = 0.4 }, NOW)
+  t.eq(spec.maxPerCycle, 1, "soakSpec: fractional/zero maxPerCycle clamps to at least 1")
+  spec = control.soakSpec({ requestedAt = NOW }, NOW)
+  t.eq(spec.maxPerCycle, nil, "soakSpec: absent maxPerCycle stays nil (config cap rules)")
+
+  -- soakEndReason: reason priority + the keep-running case
+  local soak = { startedAt = NOW, endsAt = NOW + 60000 }
+  t.eq(control.soakEndReason(soak, { now = NOW + 1000, failures = 0, baseMode = "manual" }), nil,
+    "soakEndReason: healthy running soak inside its window keeps going")
+  t.eq(control.soakEndReason(soak, { now = NOW + 1000, failures = 1, baseMode = "manual" }), "queue failure",
+    "soakEndReason: any failed queue row ends the soak (fail-stop)")
+  t.eq(control.soakEndReason(soak, { now = NOW + 999999, failures = 2, baseMode = "manual" }), "queue failure",
+    "soakEndReason: failure beats deadline when both hold (report names the failure)")
+  t.eq(control.soakEndReason(soak, { now = NOW + 1000, failures = 0, baseMode = "monitor" }), "mode monitor",
+    "soakEndReason: operator mode change ends the soak immediately")
+  t.eq(control.soakEndReason(soak, { now = NOW + 60000, failures = 0, baseMode = "manual" }), "deadline",
+    "soakEndReason: window expiry ends the soak")
+  t.eq(control.soakEndReason(nil, { now = NOW }), "invalid soak",
+    "soakEndReason: a corrupt soak state ends rather than running unbounded")
+end
+
+-- ---------------------------------------------------------------------------
 print("monitor (HEALTH page derivation)")
 -- Placed here near the top because run.lua's main chunk approaches Lua's 200-local
 -- limit by the end. Own do-scope. Biting: a wrong stuck-timer, craftable split, or
