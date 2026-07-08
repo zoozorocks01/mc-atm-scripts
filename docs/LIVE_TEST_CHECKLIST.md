@@ -4,6 +4,11 @@ Use this for the next computer 6 in-game pass after GitHub `main` is updated.
 This checklist is intentionally short and ordered so the first failure tells us
 where to stop.
 
+Pre-deploy gate: `tools/atm10-iterate.sh test` must be green first — it runs the
+unit suite, all smokes, and the failure-injection sim scenarios. The simulator
+discovers failure modes; this live pass only confirms. If the live pass surfaces
+a failure the sim lacks, add the reproducing scenario before fixing.
+
 ## Baseline Before Touching Computer 6
 
 From this repo:
@@ -38,20 +43,24 @@ Then observe for a short, bounded window:
 tools/atm10-live-pass.sh observe 120
 ```
 
-For the first bounded auto-mode proof, keep the same safety boundary but use the
-named wrapper:
+For a bounded auto-mode proof, request a manager-owned soak — no operator action
+needed in either direction (`docs/DECISIONS.md` #2):
 
 ```bash
-tools/atm10-live-pass.sh auto-soak-request 300
+tools/atm10-iterate.sh soak 300 1
 ```
 
-After Zach confirms auto is on at computer 6:
+The manager only starts a soak from a manual base with a healthy bridge, no
+drain, and no failed rows — otherwise `.atm10-soak-report` records the rejection
+reason. During the soak it runs auto with hold-everything-on-first-failure, then
+reverts to manual by itself (deadline, failure, operator mode tap, or restart).
+The command polls `.atm10-soak-report` and prints it when the window ends.
 
-```bash
-tools/atm10-live-pass.sh auto-soak-observe 300
-```
+(Fallback if the soak channel is not deployed yet: the old two-phase
+`tools/atm10-live-pass.sh auto-soak-request/auto-soak-observe` flow, with Zach
+toggling the mode.)
 
-After Zach confirms the mode is back to manual, run:
+After the report lands, run:
 
 ```bash
 tools/atm10-iterate.sh status

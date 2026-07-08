@@ -70,20 +70,40 @@ message). The project's lead still owns the merge and the final call.
 - Old `~/Documents/Codex/.../work/` paths are temporary compat symlinks for
   retired Codex sessions; remove them at the next storage-audit pass.
 
+## Policy changes carry their reasoning (added 2026-07-08)
+
+The 2026-07-07 queue-failure work revised one policy five times in an afternoon
+with bare-subject commits — the end state was fine, but the WHY lived nowhere.
+Rule going forward:
+
+- Any change to **craft-gating, queue admission, failure handling, or mode/soak
+  lifecycle** ships with its rationale: a real commit body (root cause + chosen
+  policy), or an entry in `docs/DECISIONS.md` for anything policy-shaped.
+- **The simulator discovers; the live pass confirms.** The pre-deploy gate for
+  policy changes is `tools/atm10-iterate.sh test` (unit suite + all smokes + the
+  failure-injection sim scenarios). If a live pass surfaces a failure mode the
+  sim lacks, FIRST add the scenario that reproduces it, then fix — one live pass
+  to confirm, not five to discover.
+- For bounded live proof of auto behavior, use the agent-driven soak channel
+  (`tools/atm10-iterate.sh soak`, DECISIONS.md #2) instead of asking Zach to
+  toggle modes.
+
 ## Handoff
 
-**Reaching each other (K2 workspaces):**
+**Reaching each other (K2, evaluation-phase posture — revised 2026-07-08):**
 - Claude runs in the K2 workspace **`mc-atm-scripts`** (the main repo); Codex runs
   in **`mc-atm-scripts-codex`** (the `codex` worktree).
-- Short/sync: `k2 msg mc-atm-scripts "..."` (Claude ← Codex) or
-  `k2 msg mc-atm-scripts-codex "..."` (Codex ← Claude). Add `--inbox` for long
-  async notes.
-- **Peek before you inject** — `k2 read <workspace>` — since a sync `msg`
-  interrupts the recipient.
+- **`.k2/inbox` notes are the primary channel** (async, any length). Sync
+  injection (`k2 msg` without `--inbox`) is OFF for agent→agent use during the
+  evaluation phase: its screen-scrape delivery false-fails, duplicates, and
+  spawns stray sessions when a pane sits on a menu. If something is urgent
+  enough to interrupt, write the inbox note and let Zach (who types directly
+  into panes) decide to interrupt. Revisit when K2's delivery has proven itself.
 
 - Async handoffs go through `.k2/inbox` (async, any length). Keep the done-note
   format Codex already uses: commit hash, scope, and verification actually run
   (`lua tests/run.lua`, `lua tests/smoke*.lua`, mirror check).
-- Claude relays and reviews; the human is not the relay.
+- Claude relays and reviews; the human is not the relay for work products (git
+  is the handoff bus) — Zach is only the sync-interrupt path above.
 - "Done" means the gate command was run and its output is in the note — not
   "should work."

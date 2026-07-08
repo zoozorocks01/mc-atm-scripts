@@ -31,5 +31,17 @@ Full model: [`docs/COLLABORATION.md`](docs/COLLABORATION.md). The essentials:
 ## Done
 - "Done" = `lua tests/run.lua` (+ relevant smokes) run and output pasted. Not
   "should work."
+- **Policy changes** (craft-gating, queue admission, failure handling, mode/soak
+  lifecycle) gate on `tools/atm10-iterate.sh test` and ship with their rationale —
+  a real commit body or a `docs/DECISIONS.md` entry. The sim discovers; the live
+  pass confirms (add the reproducing scenario BEFORE fixing a live-found bug).
+- Bounded live auto proof = the agent-driven soak channel
+  (`tools/atm10-iterate.sh soak`, `docs/DECISIONS.md` #2), not asking Zach to
+  toggle modes.
+
+## K2 (evaluation phase)
+- `.k2/inbox` notes are the agent↔agent channel. No sync `k2 msg` injection
+  between agents (screen-scrape delivery is unreliable); Zach is the only
+  sync-interrupt path.
 
 Global rules still apply: `~/Projects/SHARED_AGENT_RULES.md`.

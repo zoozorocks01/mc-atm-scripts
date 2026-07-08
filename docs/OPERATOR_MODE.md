@@ -74,25 +74,28 @@ Then Codex observes the result:
 tools/atm10-live-pass.sh observe 120
 ```
 
-For the first bounded auto-mode proof, use the dedicated two-phase wrapper:
+For a bounded auto-mode proof, use the manager-owned soak channel — no operator
+action needed in either direction (`docs/DECISIONS.md` #2):
 
 ```bash
-tools/atm10-live-pass.sh auto-soak-request 300
-tools/atm10-live-pass.sh auto-soak-observe 300
+tools/atm10-iterate.sh soak 300 1
 ```
 
-The request phase runs preflight and asks Zach to explicitly turn auto on at
-computer 6. The observe phase captures the bounded window, reruns doctor, then
-asks Zach to return the manager to manual. The wrapper never changes mode from
-the host side.
+The manager starts a soak only from a manual base (fresh request, healthy
+bridge, no drain, no failed rows — rejections land in `.atm10-soak-report` with
+the reason), runs auto with hold-everything-on-first-failure for the clamped
+window (30s..15m), and always reverts to manual by itself: deadline, first
+failure, operator mode tap, or manager restart. During a soak the mode chip
+reads AUTO; tapping it kills the soak immediately. The old two-phase
+`auto-soak-request`/`auto-soak-observe` wrapper remains as the fallback when the
+soak channel is not yet deployed.
 
-Auto mode is fail-stop around queue failures: once any queue row records an
-error, the manager stops adding new auto approvals and failed rows stay held
-until an operator explicitly retries or clears them.
-
-The wrapper is deliberately narrower than a control system. Direct command
-mailboxes and broader automation should wait until this stability loop is
-boring and repeatable.
+The settled auto failure policy (`docs/DECISIONS.md` #1): failed rows are
+quarantined individually — they never re-fire until explicitly retried or
+cleared — and are excluded from the bounded runnable slots, so healthy quota
+work keeps moving. Only during a soak does one failure hold ALL quota work
+(that is the point of a soak: prove trustworthiness, then stop at the first
+sign it isn't).
 
 For live monitoring while Zach plays:
 
@@ -148,8 +151,8 @@ tools/atm10-diagnostics.sh doctor
    in-game actions.
 4. Codex runs `tools/atm10-live-pass.sh observe 120` while Zach performs that
    one action.
-5. For auto-mode proof, Codex uses `auto-soak-request` then
-   `auto-soak-observe`; Zach owns the in-game mode toggle both directions.
+5. For auto-mode proof, run `tools/atm10-iterate.sh soak 300 1` (manager-owned,
+   auto-reverting; Zach is informed, not required).
 6. Codex patches/tests/commits fixes locally only when the evidence points to a
    repo bug.
 7. Zach approves push.
