@@ -71,6 +71,76 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+print("queue (late-progress reconcile: order-independent failure recovery)")
+-- Own do-scope near the top (main chunk approaches the 200-local limit).
+-- Biting: a wrong snapshot/cap lets unrelated stock inflow un-quarantine rows
+-- without bound, or a delivered batch stays latched forever (the live bug).
+do
+  local NOW = 9000000
+
+  local function failedRow(q)
+    cqueue.approve(q, { name = "t:item", request = 4096, amount = 1000 }, NOW)
+    cqueue.markCrafting(q, "t:item", NOW, 32, 777)
+    cqueue.failJobId(q, 777, NOW + 20000, "craft failed", { ["t:item"] = 1000 })
+    return q.entries["t:item"]
+  end
+
+  -- failJobId stamps the failure-time snapshot only when amounts are known
+  local q = cqueue.new()
+  local e = failedRow(q)
+  t.eq(e.failedRequest, 32, "failJobId snapshots the failed batch size")
+  t.eq(e.failedAmount, 1000, "failJobId snapshots the stock level at failure time")
+  q = cqueue.new()
+  cqueue.approve(q, { name = "t:item", request = 4096, amount = 1000 }, NOW)
+  cqueue.markCrafting(q, "t:item", NOW, 32, 778)
+  cqueue.failJobId(q, 778, NOW + 20000, "craft failed")
+  t.eq(q.entries["t:item"].failedRequest, nil, "failJobId without amounts leaves no snapshot")
+
+  -- late delivery clears the error, credits capped at the failed batch
+  q = cqueue.new()
+  failedRow(q)
+  local _, cleared = cqueue.reconcileFailedRows(q, { ["t:item"] = 1100 }, NOW + 40000, 600000)
+  t.eq(#cleared, 1, "reconcile clears a row whose failed batch delivered late")
+  t.eq(cleared[1].made, 32, "credit is capped at the failed batch, not the raw stock delta")
+  e = q.entries["t:item"]
+  t.eq(e.error, nil, "late progress clears the latched error")
+  t.eq(e.request, 4064, "late progress reduces the remaining request by the batch")
+  t.eq(e.failedRequest, nil, "the consumed snapshot is removed (no double credit)")
+  t.eq(e.triedAt, nil, "late progress releases the failed-craft backoff")
+
+  -- no stock gain -> row stays quarantined untouched
+  q = cqueue.new()
+  failedRow(q)
+  _, cleared = cqueue.reconcileFailedRows(q, { ["t:item"] = 990 }, NOW + 40000, 600000)
+  t.eq(#cleared, 0, "no gain, no clear: a genuinely failed row stays quarantined")
+  t.check(q.entries["t:item"].error ~= nil, "quarantine error survives a no-gain reconcile")
+
+  -- expired snapshot stops watching but keeps the quarantine
+  q = cqueue.new()
+  failedRow(q)
+  _, cleared = cqueue.reconcileFailedRows(q, { ["t:item"] = 1100 }, NOW + 700000, 600000)
+  t.eq(#cleared, 0, "a delivery later than the expiry window is not credited")
+  e = q.entries["t:item"]
+  t.check(e.error ~= nil and e.failedRequest == nil,
+    "expiry drops the snapshot but keeps the error for the operator")
+
+  -- a NEW attempt invalidates the previous failure's snapshot (double-credit guard)
+  q = cqueue.new()
+  failedRow(q)
+  cqueue.markCrafting(q, "t:item", NOW + 30000, 32, 779)
+  t.eq(q.entries["t:item"].failedRequest, nil, "markCrafting clears the stale failure snapshot")
+
+  -- delivery that completes the whole remaining request removes the row
+  q = cqueue.new()
+  cqueue.approve(q, { name = "t:item", request = 20, amount = 1000 }, NOW)
+  cqueue.markCrafting(q, "t:item", NOW, 32, 780)
+  cqueue.failJobId(q, 780, NOW + 20000, "craft failed", { ["t:item"] = 1000 })
+  _, cleared = cqueue.reconcileFailedRows(q, { ["t:item"] = 1032 }, NOW + 40000, 600000)
+  t.eq(#cleared, 1, "full-request late delivery reconciles")
+  t.eq(q.entries["t:item"], nil, "a fully-satisfied row is removed from the queue")
+end
+
+-- ---------------------------------------------------------------------------
 print("monitor (HEALTH page derivation)")
 -- Placed here near the top because run.lua's main chunk approaches Lua's 200-local
 -- limit by the end. Own do-scope. Biting: a wrong stuck-timer, craftable split, or

@@ -175,6 +175,9 @@ function queue.markCrafting(q, name, now, inflightRequest, jobId)
   end
   if jobId ~= nil then e.jobId = jobId end
   e.error = nil
+  -- A new attempt invalidates any previous failure's late-progress snapshot:
+  -- stock gained from here on belongs to THIS batch, not the failed one.
+  e.failedRequest, e.failedAmount, e.failedAt = nil, nil, nil
   return q
 end
 
@@ -227,6 +230,8 @@ local function applyStockProgress(q, key, e, amountsByName, now)
     e.inflightRequest = nil
     e.jobId = nil
     e.error = nil
+    -- progress consumed; a stale failure snapshot must not credit again later
+    e.failedRequest, e.failedAmount, e.failedAt = nil, nil, nil
   else
     q.entries[key] = nil
   end
@@ -250,7 +255,7 @@ function queue.completeJobId(q, jobId)
   return q, e, key
 end
 
-function queue.failJobId(q, jobId, now, reason)
+function queue.failJobId(q, jobId, now, reason, amountsByName)
   local key, e = queue.findByJobId(q, jobId)
   if not e then return q, nil, nil end
   local original = copyEntry(e, key)
@@ -261,6 +266,21 @@ function queue.failJobId(q, jobId, now, reason)
   e.craftingStartedAt = nil
   e.inflightRequest = nil
   e.jobId = nil
+  -- Late-progress snapshot (docs/DECISIONS.md #3): AP can report "craft failed"
+  -- for a job whose items land seconds LATER. Freeze the batch size and the
+  -- stock level AT failure time so reconcileFailedRows can credit the late
+  -- delivery. Deliberately separate fields from e.amount: auto-mode's plan
+  -- refresh (copyPlanFields) overwrites e.amount every scan, which would bake
+  -- the late gain into the baseline and hide it.
+  local batch = math.max(0, math.floor(tonumber(original.inflightRequest) or 0))
+  if batch > 0 and type(amountsByName) == "table" then
+    local cur = tonumber(amountsByName[e.name] or amountsByName[key])
+    if cur then
+      e.failedRequest = batch
+      e.failedAmount = cur
+      e.failedAt = tonumber(now) or 0
+    end
+  end
   return q, original, key
 end
 
@@ -343,6 +363,52 @@ function queue.reconcileInactiveCrafting(q, activeByName, amountsByName, now, gr
     end
   end
   return q, stale, progressed
+end
+
+-- Late-progress reconcile (docs/DECISIONS.md #3): clear a quarantined row whose
+-- failed batch DID deliver, just after the failure event was processed. Uses the
+-- failure-time snapshot (failedAmount/failedRequest, stamped by failJobId), NOT
+-- e.amount -- auto-mode's plan refresh overwrites e.amount every scan. Credit is
+-- capped at the failed batch, so unrelated stock inflow can unlatch a row by at
+-- most one batch (the same ambiguity AP-EVENT-3 progress already accepts; a
+-- genuinely broken row just fails again on its next fire and re-latches).
+-- Snapshots older than maxAgeMs expire without clearing the error (a delivery
+-- that late is indistinguishable from ordinary production).
+-- Returns q, cleared: { {key, name, made, remaining} } for audit/results.
+function queue.reconcileFailedRows(q, amountsByName, now, maxAgeMs)
+  q = queue.normalize(q)
+  amountsByName = type(amountsByName) == "table" and amountsByName or {}
+  now = tonumber(now) or 0
+  local cleared = {}
+  for key, e in pairs(q.entries) do
+    if type(e) == "table" and e.state == queue.APPROVED and e.error
+      and tonumber(e.failedRequest) and tonumber(e.failedAmount) then
+      if maxAgeMs and (now - (tonumber(e.failedAt) or 0)) > maxAgeMs then
+        e.failedRequest, e.failedAmount, e.failedAt = nil, nil, nil
+      else
+        local current = tonumber(amountsByName[e.name] or amountsByName[key])
+        local made = 0
+        if current and current > tonumber(e.failedAmount) then
+          made = math.min(math.floor(current - e.failedAmount), math.floor(e.failedRequest))
+        end
+        if made > 0 then
+          local remaining = math.max(0, math.floor(tonumber(e.request) or 0) - made)
+          cleared[#cleared + 1] = { key = key, name = e.name, made = made, remaining = remaining }
+          if remaining > 0 then
+            e.request = remaining
+            e.amount = current
+            e.approvedAt = now
+            e.triedAt = nil -- release the failed-craft backoff with the error
+            e.error = nil
+            e.failedRequest, e.failedAmount, e.failedAt = nil, nil, nil
+          else
+            q.entries[key] = nil
+          end
+        end
+      end
+    end
+  end
+  return q, cleared
 end
 
 -- How long a failed entry still has to wait before the runner's failed-craft

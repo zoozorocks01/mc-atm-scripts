@@ -16,6 +16,7 @@ local ORDER = {
   "soak-request-bounded-window",
   "soak-fail-stop-reverts",
   "soak-restart-stays-manual",
+  "late-progress-clears-failed-row",
 }
 
 local function contains(text, needle)
@@ -571,6 +572,69 @@ SCENARIOS["soak-restart-stays-manual"] = {
     addCheck(checks, type(statusFile) == "table" and statusFile.mode == "manual"
       and statusFile.soak == nil,
       "manager is back on its manual base with no soak block")
+    return checks
+  end,
+}
+
+SCENARIOS["late-progress-clears-failed-row"] = {
+  description = "A delivery that lands AFTER the failure event still clears the quarantined row (order-independence).",
+  run = function()
+    -- Live repro (AP 0.7.61b, 2026-07-08): AP fires "craft failed" ~20s in, the
+    -- items land seconds LATER. In-window gain is absorbed by progressJobId;
+    -- this covers the late case. AUTO mode on purpose: autoApprove refreshes
+    -- e.amount (the progress baseline) every scan, so the reconcile must rely
+    -- on the failure-time snapshot, not the live baseline.
+    local arrived = false
+    local bridge = sim.bridge({
+      getCraftingTask = false,
+      items = function()
+        return {
+          { name = "test:late_item", amount = arrived and 1032 or 1000, isCraftable = true },
+        }
+      end,
+    })
+    local runner = sim.new({
+      bridge = bridge,
+      managedStore = {
+        items = {
+          ["test:late_item"] = { name = "test:late_item", label = "Late Item", target = 5000, craftTo = 5000 },
+        },
+        settings = { modeOverride = "auto" },
+      },
+      config = {
+        mode = "auto",
+        allowAutocraft = true,
+        stockKeeper = { enabled = true, maxCraftsPerCycle = 1, maxBridgeRequest = 32 },
+      },
+      events = {
+        { "timer", 1 },                                -- auto-approves + fires (job 1001)
+        { "rs_crafting", true, 1001, "craft failed" }, -- failure lands FIRST, no stock gain yet
+        function(s)                                    -- ...the delivery arrives after
+          arrived = true
+          return { "timer", 2 }                        -- next scan reconciles the late gain
+        end,
+      },
+    })
+    local result = runner:run()
+    return { runner = runner, result = result, crafted = result.crafted }
+  end,
+  checks = function(report)
+    local checks = {}
+    local entries = queueEntries(report)
+    local entry = entries["test:late_item"]
+    local results = serialized(report, ".atm10-craft-results")
+    addCheck(checks, reachedSentinel(report), "manager completed the fail-then-deliver cycles and stopped at the simulator sentinel")
+    addCheck(checks, #report.crafted == 1, "exactly one bridge request fired before the failure")
+    addCheck(checks, type(entry) == "table" and entry.state == "APPROVED" and entry.error == nil,
+      "late delivery cleared the latched error (row healthy again, no operator retry needed)")
+    addCheck(checks, type(entry) == "table" and entry.failedRequest == nil and entry.failedAmount == nil,
+      "reconcile consumed the failure-time snapshot (no double-credit ammunition left)")
+    addCheck(checks, type(results) == "table" and results["test:late_item"]
+      and results["test:late_item"].ok == true,
+      "late delivery recorded an OK result for diagnostics")
+    addCheck(checks, hasAudit(report, function(event)
+      return event.kind == "late_progress" and event.name == "test:late_item" and event.amount == 32
+    end), "audit records late_progress with the credited batch size")
     return checks
   end,
 }

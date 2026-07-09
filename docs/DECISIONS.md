@@ -87,3 +87,39 @@ to manual by itself.
 `soak-fail-stop-reverts`, `soak-restart-stays-manual`; `tests/run.lua` soak
 unit tests. Live driver: `tools/atm10-iterate.sh soak [durationSec]
 [maxPerCycle]`.
+
+## 3. Late-progress reconcile: order-independent failure recovery (2026-07-08)
+
+**What was happening.** AP (0.7.61b) reports "craft failed" for jobs whose
+items land seconds LATER (verified live: job 1092 "failed" then delivered +36).
+When the delivery beat the failure event, `progressJobId` absorbed it; when it
+arrived after, `failJobId` had already latched the error and cleared the jobId,
+so nothing could ever reconcile the row — it stayed quarantined until a human
+retried, and any running soak fail-stopped on a craft that actually worked.
+Arrival order changed the outcome; policy said it shouldn't.
+
+**Policy.** Progress clears a failure regardless of arrival order, with the
+same one-batch ambiguity AP-EVENT-3 already accepts:
+- `failJobId` freezes a **failure-time snapshot** (`failedRequest` = the batch,
+  `failedAmount` = stock at failure). Deliberately separate from `e.amount`:
+  auto-mode's plan refresh overwrites `e.amount` every scan and would hide the
+  late gain.
+- Each scan, `reconcileFailedRows` credits stock gained since the snapshot,
+  **capped at the failed batch**, clearing the error/backoff and reducing the
+  request. Unrelated inflow can thus unlatch a row by at most one batch — a
+  genuinely broken row re-fails on its next fire and re-latches.
+- Snapshots expire after 10 minutes (a delivery that late is indistinguishable
+  from normal production); expiry keeps the quarantine, only stops watching.
+- A new fire (`markCrafting`) or an in-window progress credit invalidates any
+  older snapshot, so one delivery can never be credited twice.
+- Soaks stay strictly fail-stop: a bogus failure whose delivery lands after the
+  soak's next end-check still ends the soak (correctly conservative); the row
+  then self-clears so the NEXT soak isn't blocked.
+
+**Enforced in** `lib/atm10-queue.lua` (`failJobId`, `markCrafting`,
+`applyStockProgress`, `reconcileFailedRows`), manager (`handleCraftEvent`,
+`pollCraftJobCompletion`, the scan reconcile block, audit kind
+`late_progress`).
+
+**Gated by** sim scenario `late-progress-clears-failed-row` (written first,
+red against the pre-fix code); `tests/run.lua` reconcile unit tests.

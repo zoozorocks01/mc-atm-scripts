@@ -1575,7 +1575,8 @@ function ui.handleCraftEvent(errorFlag, jobId, message)
   end
   if ui.craftEventFailed(errorFlag, msg) then
     local reason = ui.craftFailureReason(msg)
-    local _, progressedEntry, _, made = cqueue.progressJobId(craftQueue, jobId, ui.currentAmountsByName(), now)
+    local amounts = ui.currentAmountsByName()
+    local _, progressedEntry, _, made = cqueue.progressJobId(craftQueue, jobId, amounts, now)
     if progressedEntry then
       saveQueue(craftQueue)
       ui.recordCraftProgress(progressedEntry, now, "job_progress", jobId, made, reason)
@@ -1584,7 +1585,8 @@ function ui.handleCraftEvent(errorFlag, jobId, message)
       print("Craft progress +" .. tostring(made) .. " despite " .. tostring(reason) .. ": " .. tostring(progressedEntry.name))
       return
     end
-    local _, entry = cqueue.failJobId(craftQueue, jobId, now, reason)
+    -- amounts also stamps the late-progress snapshot (DECISIONS.md #3)
+    local _, entry = cqueue.failJobId(craftQueue, jobId, now, reason, amounts)
     if entry then
       saveQueue(craftQueue)
       ui.recordCraftOutcome(entry, false, reason, now, "job_failed", jobId)
@@ -1622,13 +1624,14 @@ function ui.pollCraftJobCompletion(now, tasks)
       if ok then
         if ui.jobFailed(job) then
           local reason = ui.jobReason(job, "craft failed")
-          local _, progressedEntry, _, made = cqueue.progressJobId(craftQueue, jobId, ui.currentAmountsByName(), now)
+          local amounts = ui.currentAmountsByName()
+          local _, progressedEntry, _, made = cqueue.progressJobId(craftQueue, jobId, amounts, now)
           if progressedEntry then
             ui.recordCraftProgress(progressedEntry, now, "job_progress", jobId, made, reason, tasks)
             changed = changed + 1
             print("Craft progress +" .. tostring(made) .. " despite " .. tostring(reason) .. ": " .. tostring(progressedEntry.name))
           else
-            local _, entry = cqueue.failJobId(craftQueue, jobId, now, reason)
+            local _, entry = cqueue.failJobId(craftQueue, jobId, now, reason, amounts)
             if entry then
               ui.recordCraftOutcome(entry, false, reason, now, "job_failed", jobId, tasks)
               changed = changed + 1
@@ -1795,6 +1798,22 @@ local function processCraftQueue(now, plans)
         appendAudit({ kind = "stale", key = e.key, name = e.name, request = e.request, ok = false, reason = e.error })
         print("Craft stale (" .. e.error .. "): " .. tostring(e.name))
       end
+    end
+    cqueue.pruneResults(craftResults, CRAFT_RESULTS.max)
+    saveCraftResults(craftResults)
+  end
+  -- Late-progress reconcile (DECISIONS.md #3): a quarantined row whose failed
+  -- batch delivered AFTER its failure event was processed gets its error
+  -- cleared here, credited against the failure-time snapshot. 10min expiry:
+  -- deliveries later than that are indistinguishable from normal production.
+  local _, lateCleared = cqueue.reconcileFailedRows(craftQueue, amountsByName, now, 600000)
+  if #lateCleared > 0 then
+    saveQueue(craftQueue)
+    ensureCraftResults()
+    for _, c in ipairs(lateCleared) do
+      cqueue.recordResult(craftResults, c.name, true, nil, now)
+      appendAudit({ kind = "late_progress", key = c.key, name = c.name, amount = c.made, ok = true })
+      print("Craft late progress +" .. tostring(c.made) .. ": " .. tostring(c.name))
     end
     cqueue.pruneResults(craftResults, CRAFT_RESULTS.max)
     saveCraftResults(craftResults)
