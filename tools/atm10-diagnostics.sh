@@ -190,7 +190,11 @@ validate_computer_id() {
 screen_stuff() {
   local command payload
   command="$1"
-  payload="$(quote_remote "$(printf '%s\r' "$command")")"
+  # Leading \r flushes any half-typed line stuck in the console input (observed
+  # 2026-07-09: a stuck partial line silently ate every subsequent command for
+  # 10 minutes). A flushed partial becomes a harmless "Unknown command" error;
+  # a silently-eaten command is a lost whisper or a lost cc-dump.
+  payload="$(quote_remote "$(printf '\r%s\r' "$command")")"
   run_server_remote "export SCREENDIR=$server_dir/.screen; screen -S $screen_session -p 0 -X stuff $payload"
 }
 
