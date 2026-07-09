@@ -365,6 +365,53 @@ function control.soakSpec(data, now)
   }
 end
 
+-- PRODUCTION LINES (docs/DECISIONS.md #4): the script-controlled on/off decision
+-- for a continuous machine line (e.g. an RS Exporter feeding a smelter bank).
+-- The manager computes this every scan from live stock and broadcasts it; a
+-- tiny actuator computer turns it into a redstone signal. Hysteresis so the
+-- line doesn't flap at the threshold: turn ON below `low`, stay on until stock
+-- reaches `high`, then OFF until it dips below `low` again. A feedstock floor
+-- (floorItem/floorMin) overrides everything -- the line never draws its input
+-- below the reserve Zach wants kept for other recipes.
+--   line  = { item, low, high?, floorItem?, floorMin? }  (high defaults to low)
+--   state = { amounts = {name->count}, prevOn = bool }
+-- Returns on(bool), reason(string) -- reason is for the status file / dashboard.
+function control.lineDecision(line, state)
+  if type(line) ~= "table" or type(line.item) ~= "string" then
+    return false, "invalid line config"
+  end
+  state = state or {}
+  local amounts = type(state.amounts) == "table" and state.amounts or {}
+  local low = tonumber(line.low)
+  if not low then return false, "invalid low threshold" end
+  local high = math.max(low, tonumber(line.high) or low)
+
+  if line.floorItem then
+    local floorMin = tonumber(line.floorMin) or 0
+    local feed = tonumber(amounts[line.floorItem])
+    -- Unknown feedstock reads as empty: a line must never run blind through
+    -- a scan gap and eat below the reserve.
+    if (feed or 0) <= floorMin then
+      return false, "feedstock at reserve floor"
+    end
+  end
+
+  local stock = tonumber(amounts[line.item])
+  if stock == nil then
+    -- Item not visible this scan (bridge hiccup): hold the previous decision
+    -- OFF-biased -- an already-off line stays off; an on line also stops,
+    -- because running on stale data is how reserves get eaten.
+    return false, "stock unreadable"
+  end
+
+  if state.prevOn then
+    if stock >= high then return false, "target reached" end
+    return true, "filling to target"
+  end
+  if stock < low then return true, "below target" end
+  return false, "at target"
+end
+
 -- Why must a running soak end right now? Returns a reason string, or nil to keep
 -- going. Checked every scan cycle. Order matters: a queue failure ends the soak
 -- even if the deadline also passed (the report must name the failure, not the

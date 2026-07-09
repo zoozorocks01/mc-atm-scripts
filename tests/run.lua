@@ -24,6 +24,45 @@ local health = require("atm10-health")
 local pgive = require("atm10-pattern-give")
 
 -- ---------------------------------------------------------------------------
+print("control (production-line decision: hysteresis + feedstock floor)")
+-- Own do-scope near the top (main chunk approaches the 200-local limit).
+-- Biting: wrong hysteresis flaps the exporter at the threshold; a wrong floor
+-- check lets a line eat the dust reserve Zach explicitly wants kept.
+do
+  local LINE = { name = "aluminum", item = "test:ingot", low = 100, high = 120,
+    floorItem = "test:dust", floorMin = 500 }
+
+  local function decide(stock, dust, prevOn)
+    return control.lineDecision(LINE, {
+      amounts = { ["test:ingot"] = stock, ["test:dust"] = dust },
+      prevOn = prevOn,
+    })
+  end
+
+  t.eq(decide(50, 9999, false), true, "line turns ON below low")
+  t.eq(decide(100, 9999, false), false, "line stays OFF at low when it was off (hysteresis)")
+  t.eq(decide(110, 9999, true), true, "running line keeps filling between low and high")
+  t.eq(decide(120, 9999, true), false, "running line stops at high")
+  t.eq(decide(119, 9999, true), true, "running line still on just under high")
+  t.eq(decide(50, 500, false), false, "feedstock at the floor keeps the line OFF even when starving")
+  t.eq(decide(50, 400, true), false, "feedstock under the floor stops a RUNNING line")
+  local on, reason = control.lineDecision(LINE, { amounts = { ["test:dust"] = 9999 }, prevOn = true })
+  t.eq(on, false, "unreadable stock stops the line (never run blind)")
+  t.eq(reason, "stock unreadable", "unreadable stock is named for the status file")
+  on = control.lineDecision({ item = "test:ingot" }, { amounts = {} })
+  t.eq(on, false, "missing low threshold refuses to run")
+  on = control.lineDecision({ name = "x", low = 5 }, { amounts = {} })
+  t.eq(on, false, "missing item id refuses to run")
+  -- high defaults to low: pure on/off at a single threshold still behaves
+  t.eq(control.lineDecision({ item = "test:ingot", low = 100 },
+    { amounts = { ["test:ingot"] = 99 }, prevOn = false }), true,
+    "high defaults to low (single-threshold mode turns on)")
+  t.eq(control.lineDecision({ item = "test:ingot", low = 100 },
+    { amounts = { ["test:ingot"] = 100 }, prevOn = true }), false,
+    "high defaults to low (single-threshold mode turns off at the line)")
+end
+
+-- ---------------------------------------------------------------------------
 print("control (bounded agent soak: spec validation + end reasons)")
 -- Own do-scope near the top (main chunk approaches the 200-local limit).
 -- Biting: a wrong clamp or TTL lets an agent request an unbounded unattended
@@ -2671,7 +2710,7 @@ local luaFiles = {
   "inventory/config.lua", "inventory/config-example.lua",
   "power/display.lua", "power/probe.lua",
   "atm10-update.lua", "safereboot.lua", "atm10-reload.lua", "atm10-bridge-probe.lua",
-  "atm10-target-probe.lua", "atm10-patterns.lua",
+  "atm10-target-probe.lua", "atm10-patterns.lua", "atm10-line.lua",
   "reboot-guard.lua",
   "inventory/manager-startup.lua", "inventory-startup.lua",
   "inventory/remote-startup.lua", "inventory-remote-startup.lua",

@@ -563,6 +563,9 @@ function ui.writeStatusState(data, now)
     demand = { fallingBehind = {}, sourceMore = {} },
     loop = {},
   }
+  -- Production line states (DECISIONS #4) for agent/operator polling.
+  if ui.lineStates and next(ui.lineStates) then state.lines = ui.lineStates end
+
   -- Agents drive a soak entirely through files: request in, this block + the
   -- soak report out. secondsLeft lets a poller size its wait without clock math.
   if ui.soak then
@@ -2310,6 +2313,31 @@ local function broadcast(data)
     categorySummaries = data.categorySummaries,
     craftQueue = data.craftQueue,
   }
+
+  -- Production lines (docs/DECISIONS.md #4): compute the script-controlled
+  -- on/off state for each configured line from live stock and ship it in this
+  -- same broadcast -- the atm10-line actuator computers listen for it. States
+  -- are remembered on ui.lineStates for hysteresis and for the status file.
+  if type(config.lines) == "table" then
+    ui.lineStates = ui.lineStates or {}
+    local lineAmounts = {}
+    for name, it in pairs(itemsByName or {}) do lineAmounts[name] = itemAmount(it) end
+    local lines = {}
+    for _, line in ipairs(config.lines) do
+      local key = tostring(line.name or line.item)
+      local prev = ui.lineStates[key]
+      local on, reason = control.lineDecision(line, {
+        amounts = lineAmounts,
+        prevOn = prev and prev.on or false,
+      })
+      ui.lineStates[key] = {
+        on = on, reason = reason, item = line.item,
+        stock = lineAmounts[line.item], at = nowMs(),
+      }
+      lines[key] = ui.lineStates[key]
+    end
+    payload.lines = lines
+  end
 
   -- The viewer broadcast is a strictly-secondary, best-effort path. rednet.broadcast
   -- can throw if the modem was closed/removed mid-run; that transient must NOT abort

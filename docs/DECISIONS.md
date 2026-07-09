@@ -123,3 +123,36 @@ same one-batch ambiguity AP-EVENT-3 already accepts:
 
 **Gated by** sim scenario `late-progress-clears-failed-row` (written first,
 red against the pre-fix code); `tests/run.lua` reconcile unit tests.
+
+## 4. Script-controlled production lines (2026-07-09)
+
+**What was happening.** High-drain commodity metals (aluminum first: starved
+to zero twice in two days) don't fit on-demand RS crafting — 32-per-batch
+through AP's flaky job layer can't outrun consumption, and a bare always-on
+RS Exporter is ungoverned (Zach's catch: it would eat the 6.2M-dust reserve
+that other recipes need). Zach's requirement, verbatim intent: *the script
+controls things; he's happy to build hardware; it has to work.*
+
+**Policy.** Two-tier dust→ingot architecture:
+- **High-rate tier (continuous lines):** an RS Exporter (redstone mode
+  active-with-signal) feeds a smelter; the MANAGER decides on/off per line
+  each scan — `control.lineDecision`: hysteresis (ON below `low`, off at
+  `high`), a feedstock floor the line never draws below, and OFF on unreadable
+  stock (never run blind). Decisions ride the existing rednet broadcast
+  (`payload.lines`) and the status file (`status.lines`). A tiny actuator
+  computer (`atm10-line.lua`, one per machine bank, `<line>:<side>` args)
+  converts them to redstone, with a **dead-man switch**: manager silent >30s →
+  all lines OFF. No AP, no patterns, no craftItem anywhere in the loop.
+- **Low-rate tier (unchanged):** dust→ingot processing patterns in crafters
+  that each SIT ON a smelter, batch-fired by quotas. AP's false-failure noise
+  on this leg is absorbed by DECISIONS #3's reconcile.
+- Lines are **earned by drain** (dashboard FALLING-BEHIND is the graduation
+  signal), configured in `inventory-config` `lines = {...}` — thresholds live
+  in config, not in block GUIs (RS device settings have no API; the script
+  owns flow, the operator owns topology).
+
+**Enforced in** `lib/atm10-control.lua` (`lineDecision`), manager broadcast +
+status blocks, `atm10-line.lua` actuator, `inventory-config-example.lua`.
+
+**Gated by** `tests/run.lua` line-decision unit tests (hysteresis, floor,
+blind-stock, single-threshold) + compile check of the actuator.

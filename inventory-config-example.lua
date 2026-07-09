@@ -39,6 +39,18 @@ return {
   -- on a very large network. Touch input stays responsive regardless.
   refreshSeconds = 5,
 
+  -- Production lines (docs/DECISIONS.md #4): script-controlled continuous
+  -- machine lines. The manager decides on/off per line each scan (hysteresis:
+  -- ON below `low`, stays on until `high`) and broadcasts it; an atm10-line
+  -- actuator computer near the machines turns that into a redstone signal that
+  -- gates the line's RS Exporter (exporter redstone mode: active-with-signal).
+  -- `floorItem`/`floorMin` = feedstock reserve the line must never eat below.
+  -- lines = {
+  --   { name = "aluminum", item = "alltheores:aluminum_ingot",
+  --     low = 100000, high = 110000,
+  --     floorItem = "alltheores:aluminum_dust", floorMin = 500000 },
+  -- },
+
   itemDefaults = {
     handling = "unmanaged",
   },
