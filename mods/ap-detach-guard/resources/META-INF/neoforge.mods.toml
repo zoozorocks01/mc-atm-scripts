@@ -5,9 +5,9 @@ issueTrackerURL = "https://github.com/zoozorocks01/mc-atm-scripts/issues"
 
 [[mods]]
 modId = "apdetachguard"
-version = "1.0.0"
+version = "1.1.0"
 displayName = "AP Detach Guard"
-description = '''Server-crash guard for AdvancedPeripherals: catches the NotAttachedException fired when a computer detaches while an RS Bridge craft job is pending. Uncaught, that exception escapes into the server tick and crashes the whole server. Remove once fixed upstream.'''
+description = '''Server-crash guards for AdvancedPeripherals. 1) Catches the NotAttachedException fired when a computer detaches while an RS Bridge craft job is pending (uncaught, it crashes the whole server tick). 2) Null-guards RSApi.getCraftingTasks against poisoned craft jobs whose RS task reference was invalidated (uncaught, every bridge status call NPEs and craft jobs die falsely). Remove once fixed upstream.'''
 
 [[dependencies.apdetachguard]]
 modId = "advancedperipherals"

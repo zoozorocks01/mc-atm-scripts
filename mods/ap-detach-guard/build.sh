@@ -11,22 +11,27 @@
 set -eu
 
 cd "$(dirname "$0")"
-VERSION="1.0.0"
+VERSION="1.1.0"
 LIBS="${APDG_LIBS:-libs}"
 JBIN="${JAVA_HOME:-/usr/local/opt/openjdk@21}/bin"
 
 AP_JAR=$(ls "$LIBS"/AdvancedPeripherals-*.jar | head -1)
 CC_JAR=$(ls "$LIBS"/cc-tweaked-*.jar | head -1)
 MIXIN_JAR=$(ls "$LIBS"/*mixin*.jar | head -1)
+# RSApiGetTasksMixin compiles against Refined Storage API types (Network,
+# TaskStatus, AutocraftingNetworkComponent) — ship refinedstorage-neoforge and
+# refined-types alongside the other jars.
+RS_JAR=$(ls "$LIBS"/refinedstorage-neoforge-*.jar | head -1)
+RT_JAR=$(ls "$LIBS"/refined-types-*.jar 2>/dev/null | head -1 || true)
 
 rm -rf build/classes build/jar
 mkdir -p build/classes
 # -proc:none: sponge-mixin bundles a refmap annotation processor that needs ASM;
 # we use remap=false string targets, so no refmap and no processor.
 "$JBIN/javac" --release 21 -proc:none \
-  -cp "$AP_JAR:$CC_JAR:$MIXIN_JAR" \
+  -cp "$AP_JAR:$CC_JAR:$MIXIN_JAR:$RS_JAR${RT_JAR:+:$RT_JAR}" \
   -d build/classes \
-  src/dev/zjn/apdetachguard/mixin/BasicCraftJobMixin.java
+  src/dev/zjn/apdetachguard/mixin/*.java
 
 mkdir -p build/jar
 cp -R build/classes/. build/jar/
