@@ -18,6 +18,36 @@ runs struggled, not because of bad judgment but because of four fixable causes:
 Fix 1 is done: the repo now lives at `~/Projects/personal/mc-atm-scripts`
 (local-only, no TCC block). The rest is the contract below.
 
+## Rescope toward Codex leadership (Zach's direction, 2026-07-09)
+
+This is a personal project, and Zach wants Codex carrying the larger role here
+(matching the global personal/work domain lean). Staged so trust transfers on
+evidence, not on a flag day:
+
+**Phase 1 — now:** Codex gains live-loop clearance alongside its builder role:
+deploys, restart-night execution, live verification, soak driving, and the
+in-game relay. Claude still reviews `main` merges of policy-class code and
+remains the escalation for hard diagnosis/design.
+
+**Phase 2 — after Codex has run one clean restart-night plus ~a week of live
+ops without a reverted incident:** Codex leads the project day-to-day and owns
+`main`; Claude becomes the consulted reviewer (policy-class diffs, gnarly
+debugging, architecture), pulled in by Codex or Zach.
+
+**Prerequisite to start Phase 1 (plumbing, not paperwork):** Codex needs a
+reliable presence — a K2 workspace or equivalent for server management so it
+is reachable during live windows (its desktop session slept through several
+live moments on 2026-07-08). Until that exists, live windows default to
+whichever agent is awake.
+
+**Invariant, regardless of who leads:** the safety rails are role-agnostic —
+`tools/atm10-iterate.sh test` as the gate, rationale on policy changes
+(DECISIONS.md), chat-only console boundary, soak/fail-stop invariants, and
+confirm-first on destructive or outward-facing actions. The lead inherits the
+rails; the rails do not bend to the lead.
+
+The role text below remains accurate for Phase 0/1 reviews and as history.
+
 ## Roles
 
 **Claude leads the live loop.** Anything that touches the running base or needs

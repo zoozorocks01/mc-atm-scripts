@@ -3,8 +3,14 @@
 Full model: [`docs/COLLABORATION.md`](docs/COLLABORATION.md). The essentials:
 
 ## Roles
+- **Rescope in progress (2026-07-09, see COLLABORATION.md):** Codex is being
+  staged toward project lead — Phase 1 grants it live-loop clearance (deploy,
+  restarts, soaks, live verification); Phase 2 (after a clean restart-night +
+  ~a week of live ops) hands it `main` and day-to-day lead, with Claude as
+  consulted reviewer. Safety rails are role-agnostic and transfer intact.
 - **Claude leads the live loop** (safereboot/drain, AP-detach, queue lifecycle,
-  deploy, review before deploy) and owns `main` + all merges into it.
+  deploy, review before deploy) and owns `main` + all merges into it — until
+  the rescope's Phase 2 lands.
 - **Codex is the scoped builder** — bounded sub-tasks with a test/smoke done-gate,
   on branch `codex`. Does not own the live loop; does not reconcile divergent
   branches solo (surface the conflict and hand back).
