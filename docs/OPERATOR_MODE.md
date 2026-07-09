@@ -199,6 +199,26 @@ dashboard shows a `[DRAINING]` chip while a drain is live). A stale reload flag
 is ignored and deleted by the startup wrapper, so an aborted reload can never
 make the wrapper exit on a later, unrelated program stop.
 
+Live gotchas learned 2026-07-08 (each cost real debugging time):
+
+- **Running a CC program from computer 6's terminal (probe, patterns) means
+  Ctrl+T first — which KILLS the manager.** Restart it with `startup` when done,
+  or the heartbeat goes stale and host-side approvals refuse to fire.
+- **AP's RS-bridge job list can get poisoned** (a job whose RS task reference is
+  invalidated — e.g., pattern edits while a job is alive). Symptom: every
+  `getCraftingTasks` call logs a `NullPointerException` in the server log
+  (`RSCraftJob.getCraftingTask() is null` at `RSApi.getCraftingTasks`), the
+  manager sees `activeCraftCount=0` forever, and every `craftItem` job dies at
+  ~20s with "craft failed" while nothing physically moves. **Fix: `safereboot`
+  computer 6** — detaching the bridge purges the job list. Permanent fix =
+  extend `mods/ap-detach-guard` with a null-guard (pending) + upstream report.
+- **A pattern inserted into a crafter that joined the network later stays
+  invisible to RS.** Pop the pattern out and back in to force re-index; verify
+  with `atm10-target-probe <ids>` (the pattern-matches section must list it).
+- **AP fires "craft failed" events for jobs that actually deliver** (items land
+  seconds later). The manager's progress reconciliation absorbs the in-window
+  case; late arrivals can still latch a row error (hardening pending).
+
 Host-side console commands:
 
 - `tools/atm10-diagnostics.sh cc-dump 6` is read-only and safe.
