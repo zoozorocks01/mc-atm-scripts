@@ -33,6 +33,10 @@ Full model: [`docs/COLLABORATION.md`](docs/COLLABORATION.md). The essentials:
 - Repo lives at `~/Projects/personal/mc-atm-scripts` (+ `-codex` worktree on branch
   `codex`). Both are outside `~/Documents`, so the `workspace-write` sandbox writes
   in place. **Never work from `/private/tmp` clones.**
+- **Times: always report in Zach's local Mountain Time, marked "MT".** The server
+  host (macpro) runs US Central — everything it stamps (latest.log, chat-log,
+  snapshot `time:`) is 1h ahead of MT; convert before reporting. Quote raw log
+  lines verbatim, then give the MT time in prose.
 
 ## Done
 - "Done" = `lua tests/run.lua` (+ relevant smokes) run and output pasted. Not
