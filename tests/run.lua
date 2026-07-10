@@ -383,6 +383,19 @@ do
     "activeCraftSnapshot: indexes live AP bridge_id/resource shape")
   t.eq(snap.byName["alltheores:zinc_block"].progressPct, 25,
     "activeCraftSnapshot: converts fractional completion to percent")
+  local persisted, truncated = control.persistedCraftTasks({
+    count = 3,
+    tasks = {
+      snap.tasks[1],
+      { name = "minecraft:gold_ingot", id = 88, progressPct = 50, raw = "drop me" },
+      { name = "minecraft:iron_ingot", id = 89 },
+    },
+  }, 2)
+  t.eq(#persisted, 2, "persistedCraftTasks: caps diagnostic task rows")
+  t.eq(truncated, 1, "persistedCraftTasks: reports omitted live tasks")
+  t.eq(persisted[1].bridgeId, 77, "persistedCraftTasks: keeps normalized task identity")
+  t.eq(persisted[2].progressPct, 50, "persistedCraftTasks: keeps normalized progress")
+  t.eq(persisted[2].raw, nil, "persistedCraftTasks: drops unexpected raw task data")
   local snap2 = control.activeCraftSnapshot({ isItemCrafting = function(a) return a.name == "x" end }, { "x", "y" })
   t.eq(snap2.count, 1, "activeCraftSnapshot: fallback counts crafting names")
   t.check(snap2.byName.x ~= nil and snap2.byName.y == nil,

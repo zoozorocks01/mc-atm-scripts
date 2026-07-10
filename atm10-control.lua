@@ -667,6 +667,35 @@ function control.activeCraftSnapshot(bridge, fallbackNames)
   return snap
 end
 
+-- Bound the task details persisted in .atm10-craftstate. The live snapshot stays
+-- complete for planner decisions; this projection is diagnostics-only and keeps
+-- the drain-state file small even if RS exposes a large task list.
+-- Returns: rows, omittedCount.
+function control.persistedCraftTasks(snapshot, limit)
+  limit = math.max(0, math.floor(tonumber(limit) or 32))
+  local source = type(snapshot) == "table" and snapshot.tasks or nil
+  if type(source) ~= "table" then return {}, 0 end
+
+  local rows = {}
+  for i = 1, math.min(#source, limit) do
+    local task = source[i]
+    if type(task) == "table" then
+      rows[#rows + 1] = {
+        name = task.name,
+        label = task.label,
+        id = task.id,
+        bridgeId = task.bridgeId,
+        crafted = task.crafted,
+        quantity = task.quantity,
+        completion = task.completion,
+        progressPct = task.progressPct,
+      }
+    end
+  end
+  local total = tonumber(type(snapshot) == "table" and snapshot.count or nil) or #source
+  return rows, math.max(0, math.floor(total) - #rows)
+end
+
 -- Count wrapper kept for safereboot and old callers.
 -- Returns: count (number), method (string: the source used / "no-bridge" / "none").
 function control.activeCraftCount(bridge, fallbackNames)
