@@ -45,6 +45,9 @@ return {
   -- actuator computer near the machines turns that into a redstone signal that
   -- gates the line's RS Exporter (exporter redstone mode: active-with-signal).
   -- `floorItem`/`floorMin` = feedstock reserve the line must never eat below.
+  -- Start the actuator with its manager ID, e.g.:
+  --   atm10-line --manager 42 aluminum:back copper:left
+  -- (42 is the manager computer's ID; put atm10-control.lua beside atm10-line.)
   -- lines = {
   --   { name = "aluminum", item = "alltheores:aluminum_ingot",
   --     low = 100000, high = 110000,

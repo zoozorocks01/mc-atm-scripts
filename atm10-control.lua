@@ -412,6 +412,66 @@ function control.lineDecision(line, state)
   return false, "at target"
 end
 
+-- Validate the operator-owned continuous-line configuration before the manager
+-- sends it to an actuator. A bad config must fail closed (all line outputs OFF),
+-- not silently merge two lines or accept a negative reserve.
+function control.validateLines(lines)
+  if type(lines) ~= "table" then return false, "lines must be a table" end
+  local seen = {}
+  for index, line in ipairs(lines) do
+    if type(line) ~= "table" then return false, "line " .. index .. " is not a table" end
+    if type(line.item) ~= "string" or line.item == "" then
+      return false, "line " .. index .. " has no item"
+    end
+    local low = tonumber(line.low)
+    if not low or low < 0 then return false, "line " .. index .. " has invalid low" end
+    local high = line.high == nil and low or tonumber(line.high)
+    if not high or high < low then return false, "line " .. index .. " has invalid high" end
+    if line.floorItem ~= nil and (type(line.floorItem) ~= "string" or line.floorItem == "") then
+      return false, "line " .. index .. " has invalid floor item"
+    end
+    if line.floorMin ~= nil and (not line.floorItem or (tonumber(line.floorMin) or -1) < 0) then
+      return false, "line " .. index .. " has invalid floor minimum"
+    end
+    local key = line.name or line.item
+    if type(key) ~= "string" or key == "" then return false, "line " .. index .. " has invalid name" end
+    if seen[key] then return false, "duplicate line " .. key end
+    seen[key] = true
+  end
+  return true
+end
+
+-- Validate a compact manager -> actuator packet. Sender, source, session,
+-- sequence, and sentAt are all required: a stale rednet packet must never
+-- re-enable an exporter after the manager has gone quiet or restarted.
+-- Returns accepted(bool), nextState|reason. nextState is deliberately small so
+-- the actuator can retain only the replay-protection fields it needs.
+function control.linePacketAccept(previous, packet, senderId, managerId, now, maxAgeMs)
+  previous = type(previous) == "table" and previous or {}
+  local expected = tonumber(managerId)
+  now, maxAgeMs = tonumber(now), tonumber(maxAgeMs)
+  if not expected or not now or not maxAgeMs or maxAgeMs <= 0 then return false, "bad local packet policy" end
+  if tonumber(senderId) ~= expected then return false, "sender not manager" end
+  if type(packet) ~= "table" or packet.kind ~= "line_state" then return false, "bad packet" end
+  if tonumber(packet.source) ~= expected then return false, "source not manager" end
+
+  local session, sequence, sentAt = tonumber(packet.session), tonumber(packet.sequence), tonumber(packet.sentAt)
+  if not session or session <= 0 or session % 1 ~= 0 then return false, "bad session" end
+  if not sequence or sequence <= 0 or sequence % 1 ~= 0 then return false, "bad sequence" end
+  if not sentAt or sentAt <= 0 then return false, "bad sentAt" end
+  if sentAt > now + maxAgeMs then return false, "packet clock ahead" end
+  if now - sentAt > maxAgeMs then return false, "stale packet" end
+
+  if previous.session == session then
+    if sequence <= (tonumber(previous.sequence) or 0) then return false, "replayed sequence" end
+    if sentAt < (tonumber(previous.sentAt) or 0) then return false, "older packet" end
+  elseif previous.session ~= nil and sentAt <= (tonumber(previous.sentAt) or 0) then
+    return false, "older session packet"
+  end
+
+  return true, { session = session, sequence = sequence, sentAt = sentAt }
+end
+
 -- Why must a running soak end right now? Returns a reason string, or nil to keep
 -- going. Checked every scan cycle. Order matters: a queue failure ends the soak
 -- even if the deadline also passed (the report must name the failure, not the

@@ -60,6 +60,39 @@ do
   t.eq(control.lineDecision({ item = "test:ingot", low = 100 },
     { amounts = { ["test:ingot"] = 100 }, prevOn = true }), false,
     "high defaults to low (single-threshold mode turns off at the line)")
+
+  local valid, why = control.validateLines({ LINE })
+  t.eq(valid, true, "valid line config is accepted")
+  valid, why = control.validateLines({ LINE, { name = "aluminum", item = "test:other", low = 1 } })
+  t.eq(valid, false, "duplicate line name is rejected")
+  t.eq(why, "duplicate line aluminum", "duplicate line reason is explicit")
+  valid, why = control.validateLines({ { name = "bad", item = "test:x", low = 10, high = 9 } })
+  t.eq(valid, false, "line high below low is rejected")
+
+  local packet = { kind = "line_state", source = 42, session = 101, sequence = 1, sentAt = 100000 }
+  local accepted, state = control.linePacketAccept({}, packet, 42, 42, 100100, 30000)
+  t.eq(accepted, true, "first manager packet is accepted")
+  t.eq(state.sequence, 1, "accepted packet records its sequence")
+  accepted, why = control.linePacketAccept(state, packet, 42, 42, 100200, 30000)
+  t.eq(accepted, false, "same sequence is rejected as a replay")
+  t.eq(why, "replayed sequence", "replay rejection is explicit")
+  packet.sequence, packet.sentAt = 2, 100300
+  accepted, state = control.linePacketAccept(state, packet, 42, 42, 100400, 30000)
+  t.eq(accepted, true, "newer sequence from manager is accepted")
+  accepted, why = control.linePacketAccept(state, packet, 99, 42, 100500, 30000)
+  t.eq(accepted, false, "foreign rednet sender is rejected")
+  packet.source, packet.sequence, packet.sentAt = 99, 3, 100600
+  accepted, why = control.linePacketAccept(state, packet, 42, 42, 100700, 30000)
+  t.eq(accepted, false, "forged packet source is rejected")
+  packet.source, packet.session, packet.sequence, packet.sentAt = 42, 102, 1, 100800
+  accepted, state = control.linePacketAccept(state, packet, 42, 42, 100900, 30000)
+  t.eq(accepted, true, "newer manager session can restart its sequence")
+  packet.session, packet.sequence, packet.sentAt = 101, 99, 100700
+  accepted, why = control.linePacketAccept(state, packet, 42, 42, 100950, 30000)
+  t.eq(accepted, false, "older session packet cannot re-enable a line")
+  packet.session, packet.sequence, packet.sentAt = 103, 1, 1
+  accepted, why = control.linePacketAccept(state, packet, 42, 42, 100000, 30000)
+  t.eq(accepted, false, "stale packet is rejected")
 end
 
 -- ---------------------------------------------------------------------------

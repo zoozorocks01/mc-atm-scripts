@@ -5,32 +5,56 @@
 -- decision into a redstone output that gates that line's RS Exporter.
 --
 -- Usage (in the mini computer's shell, or its startup file):
---   atm10-line <line>:<side> [<line>:<side> ...]
---   e.g.  atm10-line aluminum:back copper:left
+--   atm10-line --manager <manager-computer-id> <line>:<side> [<line>:<side> ...]
+--   e.g.  atm10-line --manager 42 aluminum:back copper:left
 -- Line names must match `config.lines[].name` in the manager's inventory-config.
+-- Keep atm10-control.lua beside this program; it validates packets before a
+-- redstone output can change.
 --
 -- DEAD-MAN SWITCH: if no fresh manager broadcast arrives within STALE_MS, every
 -- output goes OFF. A dead or unreachable manager can never leave a line running
 -- unattended -- same fail-safe philosophy as the safereboot drain flag.
 
-local PROTOCOL = "atm10-inventory-v1" -- the manager's existing broadcast protocol
-local STALE_MS = 30000                -- outputs drop OFF beyond this silence
+local PROTOCOL = "atm10-lines-v1"
+local STALE_MS = 30000 -- outputs drop OFF beyond this silence
 local VALID_SIDES = { top = true, bottom = true, left = true, right = true, front = true, back = true }
 
+local ok, control = pcall(require, "atm10-control")
+if not ok then
+  print("atm10-line: missing atm10-control.lua; staying OFF")
+  return
+end
+
 local args = { ... }
-if #args == 0 then
-  print("usage: atm10-line <line>:<side> [<line>:<side> ...]")
-  print("e.g.   atm10-line aluminum:back copper:left")
+local managerId
+if args[1] == "--manager" then
+  managerId = math.floor(tonumber(args[2]) or -1)
+  table.remove(args, 1)
+  table.remove(args, 1)
+end
+if not managerId or managerId < 0 or #args == 0 then
+  print("usage: atm10-line --manager <manager-computer-id> <line>:<side> [...]")
+  print("e.g.   atm10-line --manager 42 aluminum:back copper:left")
   return
 end
 
 local outputs = {}
+local seenLines, seenSides = {}, {}
 for _, spec in ipairs(args) do
   local line, side = tostring(spec):match("^([^:]+):(%a+)$")
   if not line or not VALID_SIDES[side] then
     print("bad spec '" .. tostring(spec) .. "' (want <line>:<side>, side one of top/bottom/left/right/front/back)")
     return
   end
+  if seenLines[line] then
+    print("duplicate line '" .. line .. "' - each line gets one output")
+    return
+  end
+  if seenSides[side] then
+    print("duplicate side '" .. side .. "' - one redstone output cannot gate two lines")
+    return
+  end
+  seenLines[line], seenSides[side] = true, true
   outputs[#outputs + 1] = { line = line, side = side, on = false }
 end
 
@@ -65,26 +89,39 @@ end
 
 -- Fail-safe boot posture: everything OFF until the first fresh broadcast.
 apply(true)
-print("atm10-line: listening for manager broadcasts (" .. PROTOCOL .. ")")
+print("atm10-line: listening for manager " .. managerId .. " (" .. PROTOCOL .. ")")
 local lastHeard = 0
+local packetState = {}
+local watchdogTimer
+
+local function armWatchdog()
+  if watchdogTimer and os.cancelTimer then os.cancelTimer(watchdogTimer) end
+  watchdogTimer = os.startTimer(math.max(1, math.ceil(STALE_MS / 1000)))
+end
+
+armWatchdog()
 
 while true do
-  local timer = os.startTimer(5)
   local event, p1, p2, p3 = os.pullEvent()
   if event == "rednet_message" and p3 == PROTOCOL and type(p2) == "table" and type(p2.lines) == "table" then
-    lastHeard = nowMs()
-    local changed = false
-    for _, o in ipairs(outputs) do
-      local st = p2.lines[o.line]
-      local want = (type(st) == "table" and st.on == true) or false
-      local reason = (type(st) == "table" and st.reason)
-        or (st == nil and "line not in manager config" or nil)
-      if want ~= o.on or reason ~= o.reason then changed = true end
-      o.on, o.reason = want, reason
+    local heardAt = nowMs()
+    local accepted, nextState = control.linePacketAccept(packetState, p2, p1, managerId, heardAt, STALE_MS)
+    if accepted then
+      packetState, lastHeard = nextState, heardAt
+      armWatchdog()
+      local changed = false
+      for _, o in ipairs(outputs) do
+        local st = p2.lines[o.line]
+        local want = (type(st) == "table" and st.on == true) or false
+        local reason = (type(st) == "table" and st.reason)
+          or (st == nil and "line not in manager config" or nil)
+        if want ~= o.on or reason ~= o.reason then changed = true end
+        o.on, o.reason = want, reason
+      end
+      if changed then apply() end
     end
-    if changed then apply() end
-  elseif event == "timer" and p1 == timer then
-    if lastHeard > 0 and (nowMs() - lastHeard) > STALE_MS then
+  elseif event == "timer" and p1 == watchdogTimer then
+    if lastHeard > 0 and (nowMs() - lastHeard) >= STALE_MS then
       local anyOn = false
       for _, o in ipairs(outputs) do anyOn = anyOn or o.on end
       for _, o in ipairs(outputs) do o.on, o.reason = false, "manager silent (dead-man)" end
@@ -94,5 +131,6 @@ while true do
       end
       lastHeard = 0 -- report once, stay off until broadcasts resume
     end
+    armWatchdog()
   end
 end

@@ -138,11 +138,13 @@ controls things; he's happy to build hardware; it has to work.*
   active-with-signal) feeds a smelter; the MANAGER decides on/off per line
   each scan — `control.lineDecision`: hysteresis (ON below `low`, off at
   `high`), a feedstock floor the line never draws below, and OFF on unreadable
-  stock (never run blind). Decisions ride the existing rednet broadcast
-  (`payload.lines`) and the status file (`status.lines`). A tiny actuator
-  computer (`atm10-line.lua`, one per machine bank, `<line>:<side>` args)
-  converts them to redstone, with a **dead-man switch**: manager silent >30s →
-  all lines OFF. No AP, no patterns, no craftItem anywhere in the loop.
+  stock (never run blind). Decisions ride a compact `atm10-lines-v1` packet
+  every scan; the larger viewer snapshot keeps `payload.lines` only for
+  dashboards and is rate-limited. A tiny actuator computer (`atm10-line.lua`,
+  one per machine bank, `--manager <id> <line>:<side>` args) validates the
+  sender, manager source, session, sequence, and timestamp before it converts
+  anything to redstone. It has a **dead-man switch**: manager silent >30s → all
+  lines OFF. No AP, no patterns, no craftItem anywhere in the loop.
 - **Low-rate tier (unchanged):** dust→ingot processing patterns in crafters
   that each SIT ON a smelter, batch-fired by quotas. AP's false-failure noise
   on this leg is absorbed by DECISIONS #3's reconcile.
@@ -154,5 +156,5 @@ controls things; he's happy to build hardware; it has to work.*
 **Enforced in** `lib/atm10-control.lua` (`lineDecision`), manager broadcast +
 status blocks, `atm10-line.lua` actuator, `inventory-config-example.lua`.
 
-**Gated by** `tests/run.lua` line-decision unit tests (hysteresis, floor,
-blind-stock, single-threshold) + compile check of the actuator.
+**Gated by** `tests/run.lua` line-decision/packet unit tests (hysteresis,
+floor, blind-stock, replay, sender, session) + compile check of the actuator.
