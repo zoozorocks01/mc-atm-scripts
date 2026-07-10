@@ -61,6 +61,16 @@ do
     { amounts = { ["test:ingot"] = 100 }, prevOn = true }), false,
     "high defaults to low (single-threshold mode turns off at the line)")
 
+  local calls = {}
+  local amounts = control.lineAmounts(LINE, function(name)
+    calls[#calls + 1] = name
+    return ({ ["test:ingot"] = 88, ["test:dust"] = 600, ["test:unrelated"] = 999999 })[name]
+  end)
+  t.eq(amounts["test:ingot"], 88, "line projection reads the configured product")
+  t.eq(amounts["test:dust"], 600, "line projection reads the configured feedstock")
+  t.eq(amounts["test:unrelated"], nil, "line projection never copies unrelated grid items")
+  t.eq(#calls, 2, "line projection performs only the product/floor reads")
+
   local valid, why = control.validateLines({ LINE })
   t.eq(valid, true, "valid line config is accepted")
   valid, why = control.validateLines({ LINE, { name = "aluminum", item = "test:other", low = 1 } })
@@ -68,6 +78,16 @@ do
   t.eq(why, "duplicate line aluminum", "duplicate line reason is explicit")
   valid, why = control.validateLines({ { name = "bad", item = "test:x", low = 10, high = 9 } })
   t.eq(valid, false, "line high below low is rejected")
+
+  valid, why = control.validateLineOutputs({
+    { line = "aluminum", side = "back" }, { line = "copper", side = "back" },
+  })
+  t.eq(valid, false, "duplicate actuator side is rejected")
+  t.eq(why, "duplicate side back", "duplicate actuator side is named")
+  valid, why = control.validateLineOutputs({
+    { line = "aluminum", side = "back" }, { line = "aluminum", side = "left" },
+  })
+  t.eq(valid, false, "duplicate actuator line is rejected")
 
   local packet = { kind = "line_state", source = 42, session = 101, sequence = 1, sentAt = 100000 }
   local accepted, state = control.linePacketAccept({}, packet, 42, 42, 100100, 30000)
@@ -93,6 +113,22 @@ do
   packet.session, packet.sequence, packet.sentAt = 103, 1, 1
   accepted, why = control.linePacketAccept(state, packet, 42, 42, 100000, 30000)
   t.eq(accepted, false, "stale packet is rejected")
+
+  local onPacket = { kind = "line_state", source = 42, session = 200, sequence = 1, sentAt = 200000,
+    lines = { aluminum = { on = true } } }
+  accepted, state = control.linePacketAccept({}, onPacket, 42, 42, 200100, 30000)
+  t.eq(accepted, true, "initial ON packet is accepted")
+  local offPacket = { kind = "line_state", source = 42, session = 200, sequence = 2, sentAt = 200200,
+    lines = { aluminum = { on = false } } }
+  accepted, state = control.linePacketAccept(state, offPacket, 42, 42, 200300, 30000)
+  t.eq(accepted, true, "newer OFF packet is accepted")
+  accepted, why = control.linePacketAccept(state, onPacket, 42, 42, 200400, 30000)
+  t.eq(accepted, false, "stale ON after newer OFF is rejected")
+  t.eq(why, "replayed sequence", "stale ON cannot overwrite the newer OFF")
+
+  t.eq(control.lineWatchdogExpired(0, 30000, 30000), false, "boot remains OFF without a manager packet")
+  t.eq(control.lineWatchdogExpired(100000, 129999, 30000), false, "fresh manager state keeps its decision")
+  t.eq(control.lineWatchdogExpired(100000, 130000, 30000), true, "dead-man expiry requires all line outputs OFF")
 end
 
 -- ---------------------------------------------------------------------------

@@ -2291,13 +2291,10 @@ local function broadcast(data)
       local nextStates = {}
       for _, line in ipairs(config.lines) do
         local key = line.name or line.item
-        local amounts = {}
-        local item = itemsByName and itemsByName[line.item]
-        amounts[line.item] = item and itemAmount(item) or nil
-        if line.floorItem then
-          item = itemsByName and itemsByName[line.floorItem]
-          amounts[line.floorItem] = item and itemAmount(item) or nil
-        end
+        local amounts = control.lineAmounts(line, function(name)
+          local item = itemsByName and itemsByName[name]
+          return item and itemAmount(item) or nil
+        end)
         local prev = ui.lineStates[key]
         local on, lineReason = control.lineDecision(line, {
           amounts = amounts,

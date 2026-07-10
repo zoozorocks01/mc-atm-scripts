@@ -17,7 +17,6 @@
 
 local PROTOCOL = "atm10-lines-v1"
 local STALE_MS = 30000 -- outputs drop OFF beyond this silence
-local VALID_SIDES = { top = true, bottom = true, left = true, right = true, front = true, back = true }
 
 local ok, control = pcall(require, "atm10-control")
 if not ok then
@@ -26,6 +25,15 @@ if not ok then
 end
 
 local args = { ... }
+local function failClosedSpecs(specs)
+  local sides = {}
+  for _, spec in ipairs(specs or {}) do
+    local _, side = tostring(spec):match("^([^:]+):(%a+)$")
+    if side and control.LINE_SIDES[side] then sides[side] = true end
+  end
+  for side in pairs(sides) do pcall(rs.setOutput, side, false) end
+end
+
 local managerId
 if args[1] == "--manager" then
   managerId = math.floor(tonumber(args[2]) or -1)
@@ -33,29 +41,31 @@ if args[1] == "--manager" then
   table.remove(args, 1)
 end
 if not managerId or managerId < 0 or #args == 0 then
+  failClosedSpecs(args)
   print("usage: atm10-line --manager <manager-computer-id> <line>:<side> [...]")
   print("e.g.   atm10-line --manager 42 aluminum:back copper:left")
   return
 end
 
 local outputs = {}
-local seenLines, seenSides = {}, {}
+local function failClosed()
+  for _, output in ipairs(outputs) do pcall(rs.setOutput, output.side, false) end
+end
+
 for _, spec in ipairs(args) do
   local line, side = tostring(spec):match("^([^:]+):(%a+)$")
-  if not line or not VALID_SIDES[side] then
+  if not line or not control.LINE_SIDES[side] then
+    failClosed()
     print("bad spec '" .. tostring(spec) .. "' (want <line>:<side>, side one of top/bottom/left/right/front/back)")
     return
   end
-  if seenLines[line] then
-    print("duplicate line '" .. line .. "' - each line gets one output")
-    return
-  end
-  if seenSides[side] then
-    print("duplicate side '" .. side .. "' - one redstone output cannot gate two lines")
-    return
-  end
-  seenLines[line], seenSides[side] = true, true
   outputs[#outputs + 1] = { line = line, side = side, on = false }
+end
+local topologyOK, topologyReason = control.validateLineOutputs(outputs)
+if not topologyOK then
+  failClosed()
+  print("invalid line topology: " .. tostring(topologyReason) .. " (all configured outputs OFF)")
+  return
 end
 
 local function openModem()
@@ -121,7 +131,7 @@ while true do
       if changed then apply() end
     end
   elseif event == "timer" and p1 == watchdogTimer then
-    if lastHeard > 0 and (nowMs() - lastHeard) >= STALE_MS then
+    if control.lineWatchdogExpired(lastHeard, nowMs(), STALE_MS) then
       local anyOn = false
       for _, o in ipairs(outputs) do anyOn = anyOn or o.on end
       for _, o in ipairs(outputs) do o.on, o.reason = false, "manager silent (dead-man)" end

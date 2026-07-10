@@ -412,6 +412,22 @@ function control.lineDecision(line, state)
   return false, "at target"
 end
 
+-- Project exactly the two stock values a continuous line can consume: its
+-- output item and (when configured) its feedstock floor. The manager passes a
+-- resolver over its current scan index, so line control never copies or scans
+-- the entire RS grid just to make a two-boolean decision.
+function control.lineAmounts(line, resolve)
+  local amounts = {}
+  if type(line) ~= "table" or type(resolve) ~= "function" then return amounts end
+  if type(line.item) == "string" and line.item ~= "" then
+    amounts[line.item] = resolve(line.item)
+  end
+  if type(line.floorItem) == "string" and line.floorItem ~= "" then
+    amounts[line.floorItem] = resolve(line.floorItem)
+  end
+  return amounts
+end
+
 -- Validate the operator-owned continuous-line configuration before the manager
 -- sends it to an actuator. A bad config must fail closed (all line outputs OFF),
 -- not silently merge two lines or accept a negative reserve.
@@ -439,6 +455,36 @@ function control.validateLines(lines)
     seen[key] = true
   end
   return true
+end
+
+-- One redstone output may gate one line only. Keep this validation shared and
+-- pure so the actuator can fail closed before it accepts any control packet.
+control.LINE_SIDES = { top = true, bottom = true, left = true, right = true, front = true, back = true }
+
+function control.validateLineOutputs(outputs)
+  if type(outputs) ~= "table" or #outputs == 0 then return false, "no line outputs" end
+  local seenLines, seenSides = {}, {}
+  for index, output in ipairs(outputs) do
+    if type(output) ~= "table" then return false, "output " .. index .. " is not a table" end
+    local line, side = output.line, output.side
+    if type(line) ~= "string" or line == "" then return false, "output " .. index .. " has no line" end
+    if type(side) ~= "string" or not control.LINE_SIDES[side] then
+      return false, "output " .. index .. " has invalid side"
+    end
+    if seenLines[line] then return false, "duplicate line " .. line end
+    if seenSides[side] then return false, "duplicate side " .. side end
+    seenLines[line], seenSides[side] = true, true
+  end
+  return true
+end
+
+-- The actuator starts OFF and calls this only after it has heard a valid packet.
+-- Equality is expired: a manager exactly one stale window silent must not retain
+-- an ON exporter for another timer turn.
+function control.lineWatchdogExpired(lastHeard, now, staleMs)
+  lastHeard, now, staleMs = tonumber(lastHeard), tonumber(now), tonumber(staleMs)
+  if not lastHeard or not now or not staleMs or staleMs <= 0 then return false end
+  return lastHeard > 0 and now - lastHeard >= staleMs
 end
 
 -- Validate a compact manager -> actuator packet. Sender, source, session,
