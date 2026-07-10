@@ -39,12 +39,20 @@ return {
   -- on a very large network. Touch input stays responsive regardless.
   refreshSeconds = 5,
 
+  -- Minimum seconds between full viewer-snapshot broadcasts (the whole-grid
+  -- sort feeding remote displays). Line-control packets are unaffected: they
+  -- go every scan. Default 15.
+  -- viewerSeconds = 15,
+
   -- Production lines (docs/DECISIONS.md #4): script-controlled continuous
   -- machine lines. The manager decides on/off per line each scan (hysteresis:
   -- ON below `low`, stays on until `high`) and broadcasts it; an atm10-line
   -- actuator computer near the machines turns that into a redstone signal that
   -- gates the line's RS Exporter (exporter redstone mode: active-with-signal).
   -- `floorItem`/`floorMin` = feedstock reserve the line must never eat below.
+  -- Start the actuator with its manager ID, e.g.:
+  --   atm10-line --manager 42 aluminum:back copper:left
+  -- (42 is the manager computer's ID; put atm10-control.lua beside atm10-line.)
   -- lines = {
   --   { name = "aluminum", item = "alltheores:aluminum_ingot",
   --     low = 100000, high = 110000,

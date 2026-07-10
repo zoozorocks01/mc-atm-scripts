@@ -412,6 +412,112 @@ function control.lineDecision(line, state)
   return false, "at target"
 end
 
+-- Project exactly the two stock values a continuous line can consume: its
+-- output item and (when configured) its feedstock floor. The manager passes a
+-- resolver over its current scan index, so line control never copies or scans
+-- the entire RS grid just to make a two-boolean decision.
+function control.lineAmounts(line, resolve)
+  local amounts = {}
+  if type(line) ~= "table" or type(resolve) ~= "function" then return amounts end
+  if type(line.item) == "string" and line.item ~= "" then
+    amounts[line.item] = resolve(line.item)
+  end
+  if type(line.floorItem) == "string" and line.floorItem ~= "" then
+    amounts[line.floorItem] = resolve(line.floorItem)
+  end
+  return amounts
+end
+
+-- Validate the operator-owned continuous-line configuration before the manager
+-- sends it to an actuator. A bad config must fail closed (all line outputs OFF),
+-- not silently merge two lines or accept a negative reserve.
+function control.validateLines(lines)
+  if type(lines) ~= "table" then return false, "lines must be a table" end
+  local seen = {}
+  for index, line in ipairs(lines) do
+    if type(line) ~= "table" then return false, "line " .. index .. " is not a table" end
+    if type(line.item) ~= "string" or line.item == "" then
+      return false, "line " .. index .. " has no item"
+    end
+    local low = tonumber(line.low)
+    if not low or low < 0 then return false, "line " .. index .. " has invalid low" end
+    local high = line.high == nil and low or tonumber(line.high)
+    if not high or high < low then return false, "line " .. index .. " has invalid high" end
+    if line.floorItem ~= nil and (type(line.floorItem) ~= "string" or line.floorItem == "") then
+      return false, "line " .. index .. " has invalid floor item"
+    end
+    if line.floorMin ~= nil and (not line.floorItem or (tonumber(line.floorMin) or -1) < 0) then
+      return false, "line " .. index .. " has invalid floor minimum"
+    end
+    local key = line.name or line.item
+    if type(key) ~= "string" or key == "" then return false, "line " .. index .. " has invalid name" end
+    if seen[key] then return false, "duplicate line " .. key end
+    seen[key] = true
+  end
+  return true
+end
+
+-- One redstone output may gate one line only. Keep this validation shared and
+-- pure so the actuator can fail closed before it accepts any control packet.
+control.LINE_SIDES = { top = true, bottom = true, left = true, right = true, front = true, back = true }
+
+function control.validateLineOutputs(outputs)
+  if type(outputs) ~= "table" or #outputs == 0 then return false, "no line outputs" end
+  local seenLines, seenSides = {}, {}
+  for index, output in ipairs(outputs) do
+    if type(output) ~= "table" then return false, "output " .. index .. " is not a table" end
+    local line, side = output.line, output.side
+    if type(line) ~= "string" or line == "" then return false, "output " .. index .. " has no line" end
+    if type(side) ~= "string" or not control.LINE_SIDES[side] then
+      return false, "output " .. index .. " has invalid side"
+    end
+    if seenLines[line] then return false, "duplicate line " .. line end
+    if seenSides[side] then return false, "duplicate side " .. side end
+    seenLines[line], seenSides[side] = true, true
+  end
+  return true
+end
+
+-- The actuator starts OFF and calls this only after it has heard a valid packet.
+-- Equality is expired: a manager exactly one stale window silent must not retain
+-- an ON exporter for another timer turn.
+function control.lineWatchdogExpired(lastHeard, now, staleMs)
+  lastHeard, now, staleMs = tonumber(lastHeard), tonumber(now), tonumber(staleMs)
+  if not lastHeard or not now or not staleMs or staleMs <= 0 then return false end
+  return lastHeard > 0 and now - lastHeard >= staleMs
+end
+
+-- Validate a compact manager -> actuator packet. Sender, source, session,
+-- sequence, and sentAt are all required: a stale rednet packet must never
+-- re-enable an exporter after the manager has gone quiet or restarted.
+-- Returns accepted(bool), nextState|reason. nextState is deliberately small so
+-- the actuator can retain only the replay-protection fields it needs.
+function control.linePacketAccept(previous, packet, senderId, managerId, now, maxAgeMs)
+  previous = type(previous) == "table" and previous or {}
+  local expected = tonumber(managerId)
+  now, maxAgeMs = tonumber(now), tonumber(maxAgeMs)
+  if not expected or not now or not maxAgeMs or maxAgeMs <= 0 then return false, "bad local packet policy" end
+  if tonumber(senderId) ~= expected then return false, "sender not manager" end
+  if type(packet) ~= "table" or packet.kind ~= "line_state" then return false, "bad packet" end
+  if tonumber(packet.source) ~= expected then return false, "source not manager" end
+
+  local session, sequence, sentAt = tonumber(packet.session), tonumber(packet.sequence), tonumber(packet.sentAt)
+  if not session or session <= 0 or session % 1 ~= 0 then return false, "bad session" end
+  if not sequence or sequence <= 0 or sequence % 1 ~= 0 then return false, "bad sequence" end
+  if not sentAt or sentAt <= 0 then return false, "bad sentAt" end
+  if sentAt > now + maxAgeMs then return false, "packet clock ahead" end
+  if now - sentAt > maxAgeMs then return false, "stale packet" end
+
+  if previous.session == session then
+    if sequence <= (tonumber(previous.sequence) or 0) then return false, "replayed sequence" end
+    if sentAt < (tonumber(previous.sentAt) or 0) then return false, "older packet" end
+  elseif previous.session ~= nil and sentAt <= (tonumber(previous.sentAt) or 0) then
+    return false, "older session packet"
+  end
+
+  return true, { session = session, sequence = sequence, sentAt = sentAt }
+end
+
 -- Why must a running soak end right now? Returns a reason string, or nil to keep
 -- going. Checked every scan cycle. Order matters: a queue failure ends the soak
 -- even if the deadline also passed (the report must name the failure, not the
