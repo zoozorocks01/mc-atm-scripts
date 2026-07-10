@@ -158,3 +158,38 @@ status blocks, `atm10-line.lua` actuator, `inventory-config-example.lua`.
 
 **Gated by** `tests/run.lua` line-decision/packet unit tests (hysteresis,
 floor, blind-stock, replay, sender, session) + compile check of the actuator.
+
+## 5. Same-output pattern priority and block-unpacking fallback (2026-07-10)
+
+**What was happening.** Block→ingot patterns shared outputs with dust→ingot
+processing patterns and, for some metals, essence→ingot crafting patterns. With
+those routes installed without an explicit ordering, RS could choose an
+undesired source path; the block-unpacking patterns were removed live because
+they were interfering with normal ingot production.
+
+**Policy.** Keep block→ingot available, but only as an isolated last-resort
+route:
+
+- Put all block→ingot patterns in one dedicated fallback Autocrafter. Do not
+  mix them back into the preferred dust/essence banks.
+- Give every pattern that produces the same ingot an explicit priority ladder.
+  Start with dust→ingot at `20`, an intentionally approved secondary route
+  (for example essence→ingot) at `10`, and block→ingot fallback at `0`.
+- The exact numbers are not meaningful; their ordering is. Any new same-output
+  route must be placed deliberately in this ladder rather than inheriting an
+  equal/default priority.
+- Keep the manager's compression-pair guard. Autocrafter priority selects the
+  RS recipe; it does not authorize ingot↔block quota thrash.
+
+This matches Refined Storage 2's documented behavior: the highest-priority
+pattern for a shared output is tried first, and lower-priority patterns are
+checked when higher-priority routes lack resources.
+
+**Live acceptance (pending; operator action).** With a preferred route's inputs
+available, one ingot request must show that route/machine in the Autocrafting
+Monitor. With those inputs intentionally unavailable and a source block in
+storage, one bounded request must fall through to the dedicated block bank.
+No bulk retry sweep is part of this test.
+
+**Reference.** Refined Storage 2 feature overview:
+<https://refinedmods.com/refined-storage/news/20250308-whats-new-in-refined-storage-2.html>.

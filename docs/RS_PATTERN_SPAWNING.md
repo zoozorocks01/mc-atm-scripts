@@ -22,6 +22,22 @@ That's it. RS reads the recipe grid and figures out what it makes.
 
 ---
 
+## Placement rule for block→ingot patterns
+
+Block→ingot patterns are fallback supply routes, not peers of normal ingot
+production. Keep them together in one dedicated Autocrafter at the lowest
+same-output priority. Preferred dust→ingot processing Autocrafters use a higher
+priority; an intentionally retained secondary route such as essence→ingot sits
+between them. See `docs/DECISIONS.md` #5 for the current `20 / 10 / 0` starting
+ladder and its bounded live acceptance test.
+
+Do not slot block→ingot patterns into the normal crafting or smelter banks.
+Refined Storage 2 tries the highest-priority same-output pattern first and only
+falls through when that route lacks resources, which lets unpacking remain
+available without competing equally with the preferred production path.
+
+---
+
 ## ⛔ What does NOT work (learned the hard way)
 
 - **Writing the pattern NBT directly into the autocrafter block entity** (`/data

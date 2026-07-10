@@ -1896,9 +1896,12 @@ local function processCraftQueue(now, plans)
       wouldAmount = wouldAmount + (tonumber(p.request) or 0)
     end
   end
+  local activeTasks, activeTasksTruncated = control.persistedCraftTasks(tasks)
   writeCraftState(now, #inflight, craftingNames, {
     activeCraftMethod = tasks and tasks.method,
     activeCraftCount = tasks and tasks.count or #inflight,
+    activeTasks = activeTasks,
+    activeTasksTruncated = activeTasksTruncated,
     queueApproved = qApproved,
     queueCrafting = qCrafting,
     queueFailed = qFailed,

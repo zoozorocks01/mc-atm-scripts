@@ -311,8 +311,38 @@ do
     "AUTO-FAILSTOP-1: auto did not retry or add crafts while queue has a failure")
   local heldQueue = textutils.unserialize(files[".atm10-craft-queue"])
   local held = heldQueue and heldQueue.entries and heldQueue.entries["alltheores:zinc_ingot"]
-  check(held and held.error == "craft failed" and held.state == "APPROVED",
+check(held and held.error == "craft failed" and held.state == "APPROVED",
     "AUTO-FAILSTOP-1: failed row remains held for explicit retry/clear")
+end
+
+-- ---- TASKSTATE-1: live RS task identities survive into host diagnostics ----
+do
+  local BRTasks = fakeBridge()
+  BRTasks.getCraftingTasks = function()
+    return {
+      {
+        bridge_id = 77,
+        id = "live-zinc-task",
+        crafted = 8,
+        quantity = 32,
+        resource = { name = "alltheores:zinc_ingot", displayName = "Zinc Ingot" },
+      },
+    }
+  end
+  local okTS, errTS = runManagerWithEvents(
+    "smoke-auto: live RS task details persist for host diagnostics",
+    BRTasks,
+    { { "timer", 1 } })
+  check(okTS == false and tostring(errTS):find(SENTINEL, 1, true) ~= nil,
+    "TASKSTATE-1: manager captured the live task then stopped: " .. tostring(errTS))
+  local taskState = textutils.unserialize(files[".atm10-craftstate"])
+  check(type(taskState) == "table" and taskState.activeCraftCount == 1
+    and type(taskState.activeTasks) == "table" and taskState.activeTasks[1]
+    and taskState.activeTasks[1].name == "alltheores:zinc_ingot"
+    and taskState.activeTasks[1].id == "live-zinc-task"
+    and taskState.activeTasks[1].progressPct == 25
+    and taskState.activeTasksTruncated == 0,
+    "TASKSTATE-1: craftstate exposes bounded normalized live-task identity and progress")
 end
 
 -- ---- APPROVE-REQ-1: terminal approval request is consumed by the manager ----
