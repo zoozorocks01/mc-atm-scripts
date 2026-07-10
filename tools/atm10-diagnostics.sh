@@ -27,6 +27,8 @@ Usage:
   tools/atm10-diagnostics.sh cc-restart [computer_id]  # disabled: unsafe with Advanced Peripherals RS bridge
   tools/atm10-diagnostics.sh chat <message>       # whisper the operator in-game (one line)
   tools/atm10-diagnostics.sh chat-log [lines]     # read recent player chat from the server log
+  tools/atm10-diagnostics.sh highlight <x> <y> <z> [seconds]  # glowing in-world ping on a block (default 30s, max 300)
+  tools/atm10-diagnostics.sh highlight-clear      # remove all highlight displays now
 
 Environment overrides:
   ATM10_SERVER_OPS_DIR    MC server registry dir (default: ~/Projects/personal/mc-server-ops)
@@ -624,6 +626,29 @@ case "${1:-snapshot}" in
     chat_lines="${2:-15}"
     case "$chat_lines" in ""|*[!0-9]*) chat_lines=15 ;; esac
     run_server_remote "grep -E '] \[Server thread/INFO] \[net.minecraft.server.MinecraftServer/]: <' logs/latest.log | tail -$chat_lines"
+    ;;
+  highlight)
+    # Operator-requested visual ping (Zach, 2026-07-10): outline a block in-world
+    # so test-session steps don't require navigating by raw coords. Summons a
+    # glowing glass block_display over the target block plus a particle burst,
+    # then kills ONLY its own uniquely-tagged entity after the timeout. This is
+    # the one non-chat console verb with standing approval; the kill selector is
+    # tag-scoped so it can never touch other entities.
+    hl_x="${2:-}"; hl_y="${3:-}"; hl_z="${4:-}"; hl_secs="${5:-30}"
+    for coord in "$hl_x" "$hl_y" "$hl_z"; do
+      case "$coord" in ''|*[!0-9-]*|-|*?-*) printf 'highlight requires integer x y z, e.g. highlight 1149 75 2642 [seconds]\n' >&2; exit 2 ;; esac
+    done
+    case "$hl_secs" in ''|*[!0-9]*) hl_secs=30 ;; esac
+    [ "$hl_secs" -gt 300 ] && hl_secs=300
+    hl_tag="atm10-hl-$(date +%s)-$$"
+    screen_stuff "summon minecraft:block_display $hl_x $hl_y $hl_z {Tags:[\"atm10-highlight\",\"$hl_tag\"],Glowing:1b,glow_color_override:16711680,brightness:{sky:15,block:15},block_state:{Name:\"minecraft:glass\"},transformation:{translation:[-0.03f,-0.03f,-0.03f],scale:[1.06f,1.06f,1.06f],left_rotation:[0f,0f,0f,1f],right_rotation:[0f,0f,0f,1f]}}"
+    screen_stuff "particle minecraft:end_rod $hl_x.5 $hl_y.5 $hl_z.5 0.4 0.4 0.4 0.02 60 force"
+    ( sleep "$hl_secs"; screen_stuff "kill @e[type=minecraft:block_display,tag=$hl_tag]" ) >/dev/null 2>&1 &
+    printf 'Highlighted %s %s %s for %ss (tag %s) via %s\n' "$hl_x" "$hl_y" "$hl_z" "$hl_secs" "$hl_tag" "$SCREEN_SESSION"
+    ;;
+  highlight-clear)
+    screen_stuff "kill @e[type=minecraft:block_display,tag=atm10-highlight]"
+    printf 'Cleared all atm10-highlight block displays\n'
     ;;
   cc-restart)
     computer_id="${2:-6}"

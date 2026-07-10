@@ -12,6 +12,8 @@ set -euo pipefail
 #   STEP zach: instruction whispered in-game; waits for !ok/!no/!skip/!abort
 #   CAPTURE: space-separated tokens: queue craftstate audit status
 #   CHECK: assertion for the driving agent to verify from the evidence
+#   HIGHLIGHT: x y z [seconds] - glowing in-world ping on the block (diagnostics
+#     highlight verb), so the operator never navigates by raw coords
 # Blank lines and #-comments are ignored.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -169,6 +171,13 @@ run_scenario() {
       CHECK:*)
         local check="${line#CHECK:}"
         if [ "$dry" = true ]; then printf 'CHECK:%s\n' "$check"; else printf -- '- **Check:** %s\n' "${check# }" >>"$report"; fi
+        ;;
+      HIGHLIGHT:*)
+        local hl="${line#HIGHLIGHT:}"; hl="${hl# }"
+        if [ "$dry" = true ]; then printf 'HIGHLIGHT: %s\n' "$hl"; continue; fi
+        # shellcheck disable=SC2086
+        "$SCRIPT_DIR/atm10-diagnostics.sh" highlight $hl >/dev/null || true
+        printf -- '  - highlighted in-world: `%s`\n' "$hl" >>"$report"
         ;;
       *)
         printf 'unrecognized scenario line: %s\n' "$line" >&2

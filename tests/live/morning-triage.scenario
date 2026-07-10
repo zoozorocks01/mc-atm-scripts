@@ -6,7 +6,9 @@ HYPOTHESIS: The unverified push-target crafter at 1149 75 2642 is freezing tasks
 STEP zach: On computer 6, run atm10-reload (NOT update, NOT reboot). Reply !ok when the manager UI is back.
 CAPTURE: craftstate status
 CHECK: craftstate now has activeTasks[] naming RS's active tasks with progress - the driving agent whispers the zombie list + count to Zach.
-STEP zach: Go to the support crafter at 1149 75 2642 (lead dust pattern). What does it physically face/sit on? It must SIT ON a smelter like the tin crafter at 1147 75 2640. Reply !ok <what it faces> or !no <what it faces>.
+HIGHLIGHT: 1149 75 2642 120
+HIGHLIGHT: 1147 75 2640 120
+STEP zach: The suspect crafter is GLOWING RED at 1149 75 2642 (lead dust pattern); the correctly-placed tin model next to it is highlighted too. What does the suspect physically face/sit on? It must SIT ON a smelter like the tin one. Reply !ok <what it faces> or !no <what it faces>.
 STEP zach: If the facing was wrong, fix it (move crafter onto its smelter). Reply !ok fixed, or !skip if it was already correct.
 CAPTURE: craftstate audit
 CHECK: After the fix, do frozen tasks start progressing (crafted/completion moving in activeTasks)? If not, cancelling the zombies from the Autocrafting Monitor is the next lever - operator's call, note ingredient loss.

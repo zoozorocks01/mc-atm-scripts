@@ -26,6 +26,12 @@ hypothesis -> result `report.md`. Scenarios are line-based files in
 `tests/live/*.scenario`; `tools/atm10-test-session.sh selftest` checks the
 chat parser. Stale chat commands from before the session are never consumed.
 
+Scenarios can ping blocks in-world so the operator never navigates by raw
+coords: a `HIGHLIGHT: x y z [seconds]` line (or manually,
+`tools/atm10-diagnostics.sh highlight 1149 75 2642`) summons a red glowing
+outline over the block, visible through walls, self-removing on a timeout.
+`highlight-clear` removes all of them immediately.
+
 ## Baseline Before Touching Computer 6
 
 From this repo:
