@@ -39,6 +39,11 @@ return {
   -- on a very large network. Touch input stays responsive regardless.
   refreshSeconds = 5,
 
+  -- Minimum seconds between full viewer-snapshot broadcasts (the whole-grid
+  -- sort feeding remote displays). Line-control packets are unaffected: they
+  -- go every scan. Default 15.
+  -- viewerSeconds = 15,
+
   -- Production lines (docs/DECISIONS.md #4): script-controlled continuous
   -- machine lines. The manager decides on/off per line each scan (hysteresis:
   -- ON below `low`, stays on until `high`) and broadcasts it; an atm10-line

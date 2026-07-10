@@ -2337,6 +2337,16 @@ local function broadcast(data)
   -- lag episode while keeping the line control above independent and fresh.
   if now < (tonumber(ui.nextViewerBroadcastAt) or 0) then return end
   ui.nextViewerBroadcastAt = now + 15000
+  -- Finding #1 (Terra review 2026-07-09), completed at merge review: the
+  -- read-only viewer snapshot below sorts the WHOLE grid -- the largest
+  -- recurring Lua cost in the 65%-of-server-CPU capture. It now ships at most
+  -- every viewerSeconds (default 15s; first send immediate so single-cycle
+  -- smokes and fresh viewers aren't starved). The compact line packet above
+  -- already went out this scan -- safety decisions never wait on this.
+  local viewerMs = math.max(5, tonumber(config.viewerSeconds) or 15) * 1000
+  if ui.lastViewerAt and (now - ui.lastViewerAt) < viewerMs then return end
+  ui.lastViewerAt = now
+
   local broadcastItems = console.sortedItems(data.items, "qty", {
     name = itemName,
     amount = itemAmount,

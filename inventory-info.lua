@@ -565,6 +565,7 @@ function ui.writeStatusState(data, now)
   }
   -- Production line states (DECISIONS #4) for agent/operator polling.
   if ui.lineStates and next(ui.lineStates) then state.lines = ui.lineStates end
+  if ui.lineConfigError then state.linesError = ui.lineConfigError end
 
   -- Agents drive a soak entirely through files: request in, this block + the
   -- soak report out. secondsLeft lets a poller size its wait without clock math.
@@ -1739,8 +1740,9 @@ local function processCraftQueue(now, plans)
     -- During a soak the bar is stricter: ONE failure anywhere holds every quota
     -- row in this same cycle; processSoak then formally ends the soak next cycle.
     holdWhenAnyFailed = ui.soak ~= nil,
-    -- A1: live source amount for a job's craftFrom reserve (getItems is TTL-cached, cheap)
-    resolve = function(name) local it = findStoredItem(getItems(), name); return it and itemAmount(it) or 0 end,
+    -- This scan already built itemsByName. Never call bridge.getItems() again
+    -- inside a queue pass: a manual row would otherwise add a full RS scan.
+    resolve = function(name) local it = itemsByName and itemsByName[name]; return it and itemAmount(it) or 0 end,
     isCrafting = function(name) return isItemCrafting(name, { verifyEmpty = true }) end,
     holdReason = function(entry)
       return stockplan.compressionPairHold(effectiveStockKeeper(),
@@ -2274,6 +2276,77 @@ end
 
 local function broadcast(data)
   if not BROADCAST_ENABLED or not broadcastReady or not data then return end
+  local now = math.max(1, nowMs())
+
+  -- Production lines are a tiny control channel, sent every scan. Do NOT make a
+  -- continuous-machine safety decision wait for the big read-only viewer
+  -- snapshot (which sorts the whole grid). Build amounts only for configured
+  -- product/feedstock pairs, never an O(all stored items) duplicate map.
+  local lines = {}
+  ui.lineStates = ui.lineStates or {}
+  if type(config.lines) == "table" then
+    local valid, reason = control.validateLines(config.lines)
+    if valid then
+      ui.lineConfigError = nil
+      local nextStates = {}
+      for _, line in ipairs(config.lines) do
+        local key = line.name or line.item
+        local amounts = control.lineAmounts(line, function(name)
+          local item = itemsByName and itemsByName[name]
+          return item and itemAmount(item) or nil
+        end)
+        local prev = ui.lineStates[key]
+        local on, lineReason = control.lineDecision(line, {
+          amounts = amounts,
+          prevOn = prev and prev.on or false,
+        })
+        nextStates[key] = {
+          on = on, reason = lineReason, item = line.item,
+          stock = amounts[line.item], at = now,
+        }
+        lines[key] = nextStates[key]
+      end
+      ui.lineStates = nextStates
+    else
+      -- An invalid topology/config must turn all physical gates OFF on the
+      -- next packet. Preserve the fault for agent polling rather than guessing.
+      ui.lineStates = {}
+      ui.lineConfigError = reason
+    end
+  else
+    ui.lineConfigError = nil
+  end
+
+  -- A process restart gets a new session; the actuator accepts the reset
+  -- sequence only when sentAt moves forward. This blocks delayed rednet packets
+  -- from re-enabling a line after a manager stop/restart.
+  ui.lineSession = ui.lineSession or now
+  ui.lineSequence = (tonumber(ui.lineSequence) or 0) + 1
+  local linePayload = {
+    kind = "line_state",
+    source = os.getComputerID(),
+    session = ui.lineSession,
+    sequence = ui.lineSequence,
+    sentAt = now,
+    lines = lines,
+  }
+  pcall(rednet.broadcast, linePayload, "atm10-lines-v1")
+
+  -- Viewer broadcasts are informational, so a bounded 15-second cadence is
+  -- enough. This avoids repeatedly sorting/serializing the full grid during a
+  -- lag episode while keeping the line control above independent and fresh.
+  if now < (tonumber(ui.nextViewerBroadcastAt) or 0) then return end
+  ui.nextViewerBroadcastAt = now + 15000
+  -- Finding #1 (Terra review 2026-07-09), completed at merge review: the
+  -- read-only viewer snapshot below sorts the WHOLE grid -- the largest
+  -- recurring Lua cost in the 65%-of-server-CPU capture. It now ships at most
+  -- every viewerSeconds (default 15s; first send immediate so single-cycle
+  -- smokes and fresh viewers aren't starved). The compact line packet above
+  -- already went out this scan -- safety decisions never wait on this.
+  local viewerMs = math.max(5, tonumber(config.viewerSeconds) or 15) * 1000
+  if ui.lastViewerAt and (now - ui.lastViewerAt) < viewerMs then return end
+  ui.lastViewerAt = now
+
   local broadcastItems = console.sortedItems(data.items, "qty", {
     name = itemName,
     amount = itemAmount,
@@ -2313,31 +2386,10 @@ local function broadcast(data)
     categorySummaries = data.categorySummaries,
     craftQueue = data.craftQueue,
   }
-
-  -- Production lines (docs/DECISIONS.md #4): compute the script-controlled
-  -- on/off state for each configured line from live stock and ship it in this
-  -- same broadcast -- the atm10-line actuator computers listen for it. States
-  -- are remembered on ui.lineStates for hysteresis and for the status file.
-  if type(config.lines) == "table" then
-    ui.lineStates = ui.lineStates or {}
-    local lineAmounts = {}
-    for name, it in pairs(itemsByName or {}) do lineAmounts[name] = itemAmount(it) end
-    local lines = {}
-    for _, line in ipairs(config.lines) do
-      local key = tostring(line.name or line.item)
-      local prev = ui.lineStates[key]
-      local on, reason = control.lineDecision(line, {
-        amounts = lineAmounts,
-        prevOn = prev and prev.on or false,
-      })
-      ui.lineStates[key] = {
-        on = on, reason = reason, item = line.item,
-        stock = lineAmounts[line.item], at = nowMs(),
-      }
-      lines[key] = ui.lineStates[key]
-    end
-    payload.lines = lines
-  end
+  -- Kept in the viewer snapshot for dashboard compatibility; actuators listen
+  -- only to the compact, validated atm10-lines-v1 packet above.
+  payload.lines = lines
+  payload.lineConfigError = ui.lineConfigError
 
   -- The viewer broadcast is a strictly-secondary, best-effort path. rednet.broadcast
   -- can throw if the modem was closed/removed mid-run; that transient must NOT abort
