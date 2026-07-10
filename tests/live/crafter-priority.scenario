@@ -1,7 +1,8 @@
-# Test 1 on the 2026-07-10 board.
+# Test 1 on the 2026-07-10 board. Ladder per docs/DECISIONS.md #5:
+# dust=20 > secondary (essence)=10 > block-unpack fallback=0.
 TITLE: Crafter PRIORITY makes dust routing deterministic
-HYPOTHESIS: With dust-route crafters set to priority 1, the RS preview picks the dust route every time (no more gold-via-dust / tin-via-blocks lottery).
-STEP zach: Set priority 1 on each dust-route crafter (the ones sitting on smelters). Reply !ok when set, !no <note> if a crafter will not take a priority.
+HYPOTHESIS: With the same-output priority ladder set (dust=20, essence=10, block-unpack=0), the RS preview picks the dust route every time (no more gold-via-dust / tin-via-blocks lottery).
+STEP zach: Set priority 20 on each dust-route crafter (the ones sitting on smelters); any essence route gets 10; the dedicated block-unpack crafter gets 0. Reply !ok when set, !no <note> if a crafter will not take a priority.
 CAPTURE: craftstate status
 STEP zach: In the pattern grid, preview (do not start) an order for one metal with both dust and block patterns, e.g. gold. Reply !ok dust or !no <route you saw>.
 STEP zach: Repeat the preview for a second metal (e.g. tin). Reply !ok dust or !no <route you saw>.
