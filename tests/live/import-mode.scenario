@@ -1,0 +1,8 @@
+# Test 2 on the 2026-07-10 board.
+TITLE: Crafter IMPORT mode as its own return path
+HYPOTHESIS: A crafter set to import mode pulls its machine's output back into RS by itself - no separate importer/interface needed on that machine.
+STEP zach: Pick one metal's smelter crafter and set the crafter to import mode. Reply !ok <which metal> when set.
+CAPTURE: craftstate
+STEP zach: Order a small batch (e.g. 64) of that metal's ingot and watch the smelter. Reply !ok when the ingots landed back in RS, or !no <where they ended up>.
+CAPTURE: queue craftstate audit
+CHECK: Task completed and stock rose by the ordered amount; audit shows job_done (not failed-but-delivered) and no zombie active task remains.

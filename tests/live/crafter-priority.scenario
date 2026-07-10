@@ -1,0 +1,9 @@
+# Test 1 on the 2026-07-10 board.
+TITLE: Crafter PRIORITY makes dust routing deterministic
+HYPOTHESIS: With dust-route crafters set to priority 1, the RS preview picks the dust route every time (no more gold-via-dust / tin-via-blocks lottery).
+STEP zach: Set priority 1 on each dust-route crafter (the ones sitting on smelters). Reply !ok when set, !no <note> if a crafter will not take a priority.
+CAPTURE: craftstate status
+STEP zach: In the pattern grid, preview (do not start) an order for one metal with both dust and block patterns, e.g. gold. Reply !ok dust or !no <route you saw>.
+STEP zach: Repeat the preview for a second metal (e.g. tin). Reply !ok dust or !no <route you saw>.
+CAPTURE: queue craftstate
+CHECK: Both previews planned via the DUST route. If either picked blocks, priority is not the deterministic lever and the one-output-one-winner rule needs another mechanism.

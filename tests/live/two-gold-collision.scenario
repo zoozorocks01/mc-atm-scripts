@@ -1,0 +1,13 @@
+# Test 4 on the 2026-07-10 board: the PRE-upgrade baseline. Rerun after the
+# RS 2.0.9 swap as the acceptance test - both tasks must run.
+TITLE: Two-gold collision baseline (RS 2.0.6 bug on film)
+HYPOTHESIS: On RS 2.0.6, two concurrent orders on the same pattern+machine freeze the second at 0% (filmed 2026-07-09). After the 2.0.9 swap this same scenario must run BOTH tasks.
+STEP zach: Confirm the server is calm (no soak, no profiler) and gold has a single dust-route pattern live. Reply !ok.
+CAPTURE: craftstate status
+STEP zach: Start gold order A (a big one, e.g. 10k). Reply !ok when it is visibly running in the Autocrafting Monitor.
+CAPTURE: craftstate
+STEP zach: Start gold order B (small, e.g. 500) while A runs. Hover B in the Autocrafting Monitor and read its tooltip. Reply !ok <both running> or !no <B frozen at 0% + tooltip text>.
+CAPTURE: queue craftstate audit
+STEP zach: Optional: cancel both orders from the monitor so no zombie survives the test. Reply !ok when cancelled (or !skip to leave them).
+CAPTURE: craftstate
+CHECK: Pre-swap expectation is !no (B frozen) - that is the baseline. Post-swap acceptance is !ok (both run). Record the tooltip text either way; it names the stuck resource.

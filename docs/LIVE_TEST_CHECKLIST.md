@@ -9,6 +9,23 @@ unit suite, all smokes, and the failure-injection sim scenarios. The simulator
 discovers failure modes; this live pass only confirms. If the live pass surfaces
 a failure the sim lacks, add the reproducing scenario before fixing.
 
+## Interactive Test Sessions (chat-driven)
+
+For staged in-game tests, prefer the session driver over ad-hoc back-and-forth:
+
+```bash
+tools/atm10-test-session.sh list
+tools/atm10-test-session.sh run <scenario>   # e.g. two-gold-collision
+```
+
+The driver whispers each step to the operator in-game; the operator answers in
+normal chat with `!ok [note]`, `!no <note>`, `!skip`, or `!abort` — no
+alt-tabbing to a terminal. Evidence snapshots (queue/craftstate/audit/status)
+land in a timestamped directory under `/tmp/atm10-test-sessions/` with a
+hypothesis -> result `report.md`. Scenarios are line-based files in
+`tests/live/*.scenario`; `tools/atm10-test-session.sh selftest` checks the
+chat parser. Stale chat commands from before the session are never consumed.
+
 ## Baseline Before Touching Computer 6
 
 From this repo:

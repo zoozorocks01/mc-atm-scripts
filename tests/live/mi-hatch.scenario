@@ -1,0 +1,8 @@
+# Test 3 on the 2026-07-10 board. Gate for backlog #5 (MI smelting array as line muscle).
+TITLE: Crafter face-to-hatch drives a Modern Industrialization machine
+HYPOTHESIS: A crafter facing an MI input hatch with a processing pattern can push ingredients in and the output comes back to RS - MI machines are usable as on-demand craft targets.
+STEP zach: Place/point a crafter at the MI machine's input hatch and slot ONE processing pattern (input -> MI output). Reply !ok <machine/recipe> when set.
+CAPTURE: craftstate
+STEP zach: Order one batch of that output. Watch the hatch accept inputs and the machine run. Reply !ok when output is back in RS, or !no <where it stopped: hatch refused / machine idle / output stranded>.
+CAPTURE: queue craftstate audit
+CHECK: Output returned to RS and the task completed. If the output strands in the MI output hatch, note which return path is missing - that defines the go/no-go for the MI smelting array idea.
