@@ -641,8 +641,15 @@ case "${1:-snapshot}" in
     case "$hl_secs" in ''|*[!0-9]*) hl_secs=30 ;; esac
     [ "$hl_secs" -gt 300 ] && hl_secs=300
     hl_tag="atm10-hl-$(date +%s)-$$"
-    screen_stuff "summon minecraft:block_display $hl_x $hl_y $hl_z {Tags:[\"atm10-highlight\",\"$hl_tag\"],Glowing:1b,glow_color_override:16711680,brightness:{sky:15,block:15},block_state:{Name:\"minecraft:glass\"},transformation:{translation:[-0.03f,-0.03f,-0.03f],scale:[1.06f,1.06f,1.06f],left_rotation:[0f,0f,0f,1f],right_rotation:[0f,0f,0f,1f]}}"
-    screen_stuff "particle minecraft:end_rod $hl_x.5 $hl_y.5 $hl_z.5 0.4 0.4 0.4 0.02 60 force"
+    # Live-tested with Seth 2026-07-10. Lessons baked in: glass renders no
+    # pixels so the glow shader outlines nothing; a display embedded flush in a
+    # solid block can be occlusion-culled client-side. So each highlight places
+    # an oversized opaque red skin on the block AND a floating marker two
+    # blocks above it (open air, can't be culled), plus a particle burst.
+    hl_marker_y=$((hl_y + 2))
+    screen_stuff "summon minecraft:block_display $hl_x $hl_y $hl_z {Tags:[\"atm10-highlight\",\"$hl_tag\"],Glowing:1b,glow_color_override:16711680,brightness:{sky:15,block:15},block_state:{Name:\"minecraft:red_concrete\"},transformation:{translation:[-0.05f,-0.05f,-0.05f],scale:[1.10f,1.10f,1.10f],left_rotation:[0f,0f,0f,1f],right_rotation:[0f,0f,0f,1f]}}"
+    screen_stuff "summon minecraft:block_display $hl_x $hl_marker_y $hl_z {Tags:[\"atm10-highlight\",\"$hl_tag\"],Glowing:1b,glow_color_override:16711680,brightness:{sky:15,block:15},block_state:{Name:\"minecraft:red_concrete\"},transformation:{translation:[0.25f,0.25f,0.25f],scale:[0.5f,0.5f,0.5f],left_rotation:[0f,0f,0f,1f],right_rotation:[0f,0f,0f,1f]}}"
+    screen_stuff "particle minecraft:end_rod $hl_x.5 $hl_y.5 $hl_z.5 0.4 0.9 0.4 0.02 120 force"
     ( sleep "$hl_secs"; screen_stuff "kill @e[type=minecraft:block_display,tag=$hl_tag]" ) >/dev/null 2>&1 &
     printf 'Highlighted %s %s %s for %ss (tag %s) via %s\n' "$hl_x" "$hl_y" "$hl_z" "$hl_secs" "$hl_tag" "$SCREEN_SESSION"
     ;;
