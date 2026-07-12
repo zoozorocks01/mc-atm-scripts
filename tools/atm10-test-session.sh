@@ -61,8 +61,8 @@ whisper() {
 }
 
 chat_tail() {
-  ssh "${SSH_OPTS[@]}" "$HOST" \
-    "cd $(printf '%q' "$SERVER_DIR") && grep -E '] \[Server thread/INFO] \[net.minecraft.server.MinecraftServer/]: <' logs/latest.log | tail -40" \
+  atm10_run_in "$SERVER_DIR" \
+    "grep -E '] \[Server thread/INFO] \[net.minecraft.server.MinecraftServer/]: <' logs/latest.log | tail -40" \
     2>/dev/null || true
 }
 
@@ -93,10 +93,10 @@ wait_for_reply() {
 capture() {
   local token="$1" dest="$2"
   case "$token" in
-    queue)      ssh "${SSH_OPTS[@]}" "$HOST" "cat $(printf '%q' "$COMPUTER_DIR")/.atm10-craft-queue" >"$dest" 2>/dev/null || true ;;
-    craftstate) ssh "${SSH_OPTS[@]}" "$HOST" "cat $(printf '%q' "$COMPUTER_DIR")/.atm10-craftstate" >"$dest" 2>/dev/null || true ;;
-    status)     ssh "${SSH_OPTS[@]}" "$HOST" "cat $(printf '%q' "$COMPUTER_DIR")/.atm10-status" >"$dest" 2>/dev/null || true ;;
-    audit)      ssh "${SSH_OPTS[@]}" "$HOST" "tail -200 $(printf '%q' "$COMPUTER_DIR")/.atm10-craft-audit" >"$dest" 2>/dev/null || true ;;
+    queue)      atm10_run_in "$COMPUTER_DIR" "cat .atm10-craft-queue" >"$dest" 2>/dev/null || true ;;
+    craftstate) atm10_run_in "$COMPUTER_DIR" "cat .atm10-craftstate" >"$dest" 2>/dev/null || true ;;
+    status)     atm10_run_in "$COMPUTER_DIR" "cat .atm10-status" >"$dest" 2>/dev/null || true ;;
+    audit)      atm10_run_in "$COMPUTER_DIR" "tail -200 .atm10-craft-audit" >"$dest" 2>/dev/null || true ;;
     *)          printf 'unknown capture token: %s\n' "$token" >&2 ;;
   esac
 }

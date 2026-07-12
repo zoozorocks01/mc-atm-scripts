@@ -48,6 +48,7 @@ Environment overrides:
   ATM10_DIAG_INTERVAL     watch interval seconds (default: 5)
   ATM10_DIAG_OUT_DIR      save/watch-log output dir (default: /tmp/atm10-diagnostics)
   ATM10_SSH_OPTS          extra ssh options (default: batch mode, 8s connect timeout)
+  ATM10_TRANSPORT         auto (default), local, or ssh; useful for diagnostics/testing
 USAGE
 }
 
@@ -173,11 +174,11 @@ show_file .atm10-target-probe.txt 220
 '
 
 run_remote() {
-  ssh "${SSH_OPTS[@]}" "$HOST" "cd $remote_dir && $1"
+  atm10_run_in "$COMPUTER_DIR" "$1"
 }
 
 run_server_remote() {
-  ssh "${SSH_OPTS[@]}" "$HOST" "cd $server_dir && $1"
+  atm10_run_in "$SERVER_DIR" "$1"
 }
 
 validate_computer_id() {
