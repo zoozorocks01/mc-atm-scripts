@@ -72,19 +72,24 @@ parse_commands() {
   sed -n "s/.*: <$CHAT_PLAYER> \(![a-z]*.*\)/\1/p"
 }
 
-# Wait for the first operator command not already listed in the seen file.
+# Wait for the first operator command whose full timestamped chat line was not
+# already seen. Store raw lines rather than just `!ok`: a later, legitimate
+# `!ok` must not be mistaken for an earlier reply with the same text.
 # Prints the command; returns 1 on timeout.
 wait_for_reply() {
-  local seen_file="$1" deadline=$((SECONDS + TIMEOUT_SECS)) line
+  local seen_file="$1" deadline=$((SECONDS + TIMEOUT_SECS)) line command
   while [ "$SECONDS" -lt "$deadline" ]; do
     while IFS= read -r line; do
       [ -n "$line" ] || continue
       if ! grep -qxF "$line" "$seen_file"; then
         printf '%s\n' "$line" >>"$seen_file"
-        printf '%s' "$line"
-        return 0
+        command="$(printf '%s\n' "$line" | parse_commands)"
+        if [ -n "$command" ]; then
+          printf '%s' "$command"
+          return 0
+        fi
       fi
-    done < <(chat_tail | parse_commands)
+    done < <(chat_tail)
     sleep "$POLL_SECS"
   done
   return 1
@@ -114,8 +119,9 @@ run_scenario() {
   else
     mkdir -p "$session"
     : >"$seen"
-    # Pre-seed with current chat so stale !ok lines are never consumed.
-    chat_tail | parse_commands >>"$seen" || true
+    # Pre-seed with current timestamped chat lines so stale replies are never
+    # consumed, while a later identical command is still accepted.
+    chat_tail >>"$seen" || true
     {
       printf '# Test session: %s\n\n' "$name"
       printf -- '- started: %s\n- host: %s\n- operator: %s\n\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$HOST" "$CHAT_PLAYER"
@@ -212,6 +218,26 @@ EOF
     printf 'selftest OK: parser extracts operator commands only\n'
   else
     printf 'selftest FAIL\n-- got --\n%s\n-- expected --\n%s\n' "$got" "$expected" >&2
+    exit 1
+  fi
+
+  local seen old_reply fresh_reply
+  seen="$(mktemp)"
+  old_reply='[10Jul2026 13:01:09.789] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: <Zoozorocks> !ok'
+  fresh_reply='[10Jul2026 13:02:09.789] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: <Zoozorocks> !ok'
+  printf '%s\n' "$old_reply" >"$seen"
+  if grep -qxF "$fresh_reply" "$seen"; then
+    printf 'selftest FAIL: a later identical command was treated as stale\n' >&2
+    rm -f "$seen"
+    exit 1
+  fi
+  printf '%s\n' "$fresh_reply" >>"$seen"
+  got="$(printf '%s\n' "$fresh_reply" | parse_commands)"
+  rm -f "$seen"
+  if [ "$got" = '!ok' ]; then
+    printf 'selftest OK: later identical commands remain distinct chat events\n'
+  else
+    printf 'selftest FAIL: later command parsing failed\n' >&2
     exit 1
   fi
 }
