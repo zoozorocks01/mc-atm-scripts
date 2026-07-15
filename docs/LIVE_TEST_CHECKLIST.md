@@ -32,6 +32,26 @@ coords: a `HIGHLIGHT: x y z [seconds]` line (or manually,
 outline over the block, visible through walls, self-removing on a timeout.
 `highlight-clear` removes all of them immediately.
 
+## Bounded RS-task observability check
+
+Run this only after the build that includes the `RS STUCK` status fields is
+deployed, with the manager otherwise left in its current mode. It is an
+observation pass: do not retry, clear, cancel, or create a craft merely to make
+the indicator change.
+
+1. Capture `tools/atm10-iterate.sh status` twice, at least five minutes apart.
+2. Compare `.atm10-status` `crafts.rsActive`, `crafts.rsStuckCount`, and
+   `crafts.rsStuck`; the HEALTH page should show the same count as `RS STUCK`.
+3. Expected healthy result: `rsStuckCount = 0`. A task that advances between
+   captures remains unflagged because its timer resets.
+4. Expected diagnostic result for a frozen RS task: after five unchanged
+   minutes, `summary = STUCK`, `rsStuckCount > 0`, and `rsStuck` names the item
+   plus its AP/bridge task id. Keep the manager in manual and record the item,
+   id, and two timestamps; do not mutate the queue as part of this test.
+
+This detector is intentionally in-memory. Restarting the manager starts a new
+five-minute observation window rather than inheriting a stale diagnosis.
+
 ## Baseline Before Touching Computer 6
 
 From this repo:

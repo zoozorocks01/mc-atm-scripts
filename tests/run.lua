@@ -277,6 +277,26 @@ do
   t.eq(ch.recentFail, 1, "monitor.craft: 1 recent fail")
   t.eq(ch.ratePerMin, 12, "monitor.craft: passes through crafts/min")
 
+  local active = {
+    tasks = {
+      { name = "t:lead", label = "Lead", bridgeId = 258, crafted = 0, quantity = 64, progressPct = 0 },
+      { name = "t:fresh", label = "Fresh", bridgeId = 259, crafted = 2, quantity = 64, progressPct = 3 },
+      { name = "t:opaque", label = "Opaque" }, -- fallback task list has no observable progress
+    },
+  }
+  local rs = monitor.rsTasks(active, nil, NOW, { stuckMs = 300000 })
+  t.eq(rs.active, 2, "monitor.rsTasks: tracks only tasks with observable progress")
+  t.eq(#rs.stuck, 0, "monitor.rsTasks: fresh snapshot is not called stuck")
+  rs = monitor.rsTasks(active, rs.history, NOW + 300000, { stuckMs = 300000 })
+  t.eq(#rs.stuck, 2, "monitor.rsTasks: unchanged RS tasks become stuck at 5m")
+  t.eq(rs.stuck[1].label, "Lead", "monitor.rsTasks: preserves task labels for operators")
+  active.tasks[2].crafted, active.tasks[2].progressPct = 3, 5
+  rs = monitor.rsTasks(active, rs.history, NOW + 300001, { stuckMs = 300000 })
+  t.eq(#rs.stuck, 1, "monitor.rsTasks: progress resets only that task's timer")
+  t.eq(rs.stuck[1].bridgeId, 258, "monitor.rsTasks: exposes bridge task id for investigation")
+  rs = monitor.rsTasks({ tasks = {} }, rs.history, NOW + 300002, { stuckMs = 300000 })
+  t.eq(next(rs.history), nil, "monitor.rsTasks: drops completed tasks from bounded history")
+
   local paceOk = monitor.pace({ loopMs = 1200, refreshMs = 5000, dataAgeMs = 0 }, NOW)
   t.eq(paceOk.status, "OK", "monitor.pace: low loop load is OK")
   t.eq(paceOk.loadPct, 24, "monitor.pace: computes scan load percentage")

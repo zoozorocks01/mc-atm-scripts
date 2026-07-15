@@ -504,6 +504,19 @@ function ui.statusRows(rows, limit)
   return out
 end
 
+-- RS task progress is independent of queue state: a broken crafter can leave
+-- RS reporting an active task after its manager queue row is gone. Keep this
+-- history in memory only; it is diagnostic and must never alter craft policy.
+function ui.rsTaskHealth(tasks, now)
+  local ok, monlib = pcall(require, "atm10-monitor")
+  if not ok or not monlib or type(monlib.rsTasks) ~= "function" then
+    return { active = 0, stuck = {} }
+  end
+  local rs = monlib.rsTasks(tasks, ui.rsTaskHistory, now, {})
+  ui.rsTaskHistory = rs.history
+  return rs
+end
+
 function ui.writeStatusState(data, now)
   data = type(data) == "table" and data or {}
   now = tonumber(now) or nowMs()
@@ -582,9 +595,13 @@ function ui.writeStatusState(data, now)
   local ok, monlib = pcall(require, "atm10-monitor")
   if ok and monlib then
     local ch = monlib.craft(data.craftQueue, craftResults, #firedTimes, now, {})
+    local rs = ui.rsTaskHealth(data.craftTasks, now)
     state.crafts.inFlight = ch.inFlight
     state.crafts.stuckCount = #ch.stuck
     state.crafts.stuck = ui.statusRows(ch.stuck, 5)
+    state.crafts.rsActive = rs.active
+    state.crafts.rsStuckCount = #rs.stuck
+    state.crafts.rsStuck = ui.statusRows(rs.stuck, 5)
     state.crafts.recentOk = ch.recentOk
     state.crafts.recentFail = ch.recentFail
 
@@ -612,7 +629,7 @@ function ui.writeStatusState(data, now)
     end
 
     if ph.status ~= "OK" then state.summary = ph.status end
-    if #ch.stuck > 0 then state.summary = "STUCK" end
+    if #ch.stuck > 0 or #rs.stuck > 0 then state.summary = "STUCK" end
   else
     state.summary = "DEGRADED"
     state.error = "atm10-monitor unavailable"
@@ -2988,6 +3005,7 @@ local function drawHealthPage(data)
 
   -- FUNCTIONING --------------------------------------------------------------
   local ch = monlib.craft(data.craftQueue, craftResults, #firedTimes, now, {})
+  local rs = ui.rsTaskHealth(data.craftTasks, now)
   local btxt, bcol = "ONLINE", colors.lime
   if data.online == false then
     btxt, bcol = "OFFLINE", colors.red
@@ -2998,8 +3016,9 @@ local function drawHealthPage(data)
   mwrite(1, 7, "Bridge: ", colors.gray)
   mwrite(9, 7, btxt, bcol)
   line(8, "Crafts: " .. ch.ratePerMin .. "/min   " .. ch.inFlight .. " in-flight" ..
-    (#ch.stuck > 0 and ("   " .. #ch.stuck .. " STUCK") or ""),
-    #ch.stuck > 0 and colors.orange or colors.white)
+    (#ch.stuck > 0 and ("   " .. #ch.stuck .. " QUEUE STUCK") or "") ..
+    (#rs.stuck > 0 and ("   " .. #rs.stuck .. " RS STUCK") or ""),
+    (#ch.stuck > 0 or #rs.stuck > 0) and colors.orange or colors.white)
   line(9, "Recent: " .. ch.recentOk .. " ok   " .. ch.recentFail .. " failed (30m)",
     ch.recentFail > 0 and colors.orange or colors.gray)
   local ph = monlib.pace(data.loop or craftingCache.__loop, now, {
@@ -3030,6 +3049,14 @@ local function drawHealthPage(data)
     line(y, "STUCK JOBS (" .. #ch.stuck .. "):", colors.red); y = y + 1
     for i = 1, math.min(#ch.stuck, 3) do
       line(y, "  " .. uiDraw.fit(tostring(ch.stuck[i].label), 18) .. " " .. math.floor(ch.stuck[i].ageMin) .. "m", colors.red)
+      y = y + 1
+    end
+    y = y + 1
+  end
+  if #rs.stuck > 0 then
+    line(y, "RS TASKS STUCK (" .. #rs.stuck .. "):", colors.red); y = y + 1
+    for i = 1, math.min(#rs.stuck, 3) do
+      line(y, "  " .. uiDraw.fit(tostring(rs.stuck[i].label), 18) .. " " .. math.floor(rs.stuck[i].ageMin) .. "m", colors.red)
       y = y + 1
     end
     y = y + 1

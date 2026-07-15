@@ -60,6 +60,54 @@ function monitor.craft(queueEntries, craftResults, firedCount, nowMs, opts)
   return out
 end
 
+-- RS TASK PROGRESS: RS can retain an active task even after the manager's own
+-- queue row has failed or been reconciled away. Track only task-list snapshots
+-- that expose progress fields, so the status surface names a frozen RS task
+-- without changing queue admission, retry, or crafting behavior.
+--
+--   snapshot : control.activeCraftSnapshot() result
+--   history  : prior result.history (in-memory only; a restart starts fresh)
+--   nowMs, opts { stuckMs = 300000 }
+-- returns { active, stuck = { {label, name, ageMin, id, bridgeId}, ... }, history }
+function monitor.rsTasks(snapshot, history, nowMs, opts)
+  opts = opts or {}
+  nowMs = tonumber(nowMs) or 0
+  history = type(history) == "table" and history or {}
+  local source = type(snapshot) == "table" and snapshot.tasks or nil
+  if type(source) ~= "table" then
+    return { active = 0, stuck = {}, history = history }
+  end
+
+  local nextHistory, out = {}, { active = 0, stuck = {}, history = nil }
+  local stuckMs = tonumber(opts.stuckMs) or 300000
+  for index, task in ipairs(source) do
+    if type(task) == "table" and (task.progressPct ~= nil or task.crafted ~= nil or task.completion ~= nil) then
+      local id = task.bridgeId or task.id
+      local key = id ~= nil and tostring(id) or ((task.name or task.label or "?") .. "#" .. index)
+      local signature = table.concat({
+        tostring(task.progressPct), tostring(task.crafted), tostring(task.completion), tostring(task.quantity),
+      }, ":")
+      local prior = history[key]
+      local firstAt = prior and prior.signature == signature and prior.firstAt or nowMs
+      local row = {
+        label = task.label or task.name or "?", name = task.name,
+        id = task.id, bridgeId = task.bridgeId, signature = signature, firstAt = firstAt,
+      }
+      nextHistory[key] = row
+      out.active = out.active + 1
+      local age = math.max(0, nowMs - firstAt)
+      if age >= stuckMs then
+        out.stuck[#out.stuck + 1] = {
+          label = row.label, name = row.name, id = row.id, bridgeId = row.bridgeId, ageMin = age / 60000,
+        }
+      end
+    end
+  end
+  table.sort(out.stuck, function(a, b) return a.ageMin > b.ageMin end)
+  out.history = nextHistory
+  return out
+end
+
 -- LOOP PACE: health of the manager's own scan/render loop.
 --   state : {
 --     loopMs, loopGapMs, dataAgeMs, refreshMs, lastError, errors
