@@ -1,0 +1,10 @@
+{
+  "values": {
+    "alltheores:steel_nugget": {
+      "variant": "alltheores:steel_ingot"
+    },
+    "alltheores:steel_ingot": {
+      "variant": "alltheores:steel_block"
+    }
+  }
+}
