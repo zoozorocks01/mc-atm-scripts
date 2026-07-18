@@ -253,7 +253,9 @@ check(type(statusFile) == "table" and statusFile.mode == "auto"
   and statusFile.queue and statusFile.queue.crafting == 1
   and statusFile.crafts and statusFile.crafts.inFlight == 1
   and statusFile.plan and statusFile.plan.wouldCraftCount == 1
-  and statusFile.loop and statusFile.loop.status == "OK",
+  and statusFile.loop and statusFile.loop.status == "OK"
+  and statusFile.management and type(statusFile.management.state) == "string"
+  and type(statusFile.management.reason) == "string",
   "manager writes a compact .atm10-status summary for agent polling")
 check(files[".atm10-drain-request"] == nil,
   "manager clears a stale drain request flag on boot")
