@@ -3034,6 +3034,14 @@ local function drawHealthPage(data)
   local ph = monlib.pace(data.loop or craftingCache.__loop, now, {
     refreshMs = ((config and config.refreshSeconds) or REFRESH_SECONDS) * 1000,
   })
+  local mgmt = management.plan({
+    plans = data.stockPlans,
+    queue = data.craftQueue,
+    bridge = { connected = data.connected, online = data.online,
+      degraded = craftingCache.__bridge and craftingCache.__bridge.allowFire == false },
+    loop = { status = ph.status },
+    rsStuckCount = #rs.stuck,
+  }, {})
   local function sec(v)
     v = tonumber(v) or 0
     if v >= 10 then return tostring(math.floor(v)) .. "s" end
@@ -3071,6 +3079,11 @@ local function drawHealthPage(data)
     end
     y = y + 1
   end
+
+  local mgmtLine = management.statusLine(mgmt)
+  line(y, uiDraw.fit(mgmtLine, w), mgmt.state == "BLOCKED" and colors.orange or
+    (mgmt.state == "READY" and colors.lime or colors.gray))
+  y = y + 2
 
   -- KEEPING UP ---------------------------------------------------------------
   if next(trendHistory) == nil then

@@ -342,10 +342,14 @@ do
   t.eq(v0.target.name, "alltheores:lead_ingot", "management.plan: picks highest-priority safe ingot")
   t.eq(v0.target.remaining, 4000, "management.plan: total objective is capped at 4000")
   t.eq(v0.target.capped, true, "management.plan: reports when the proposal was capped")
+  t.eq(management.statusLine(v0), "V0 READY: Lead +4000 (approval required)",
+    "management.statusLine: ready objective is concise and non-mutating")
   healthy.queue = { { error = "craft failed" } }
   v0 = management.plan(healthy)
   t.eq(v0.state, "BLOCKED", "management.plan: failed queue blocks a new objective")
   t.eq(v0.reason, "queue failures: 1", "management.plan: names the queue blocker")
+  t.eq(management.statusLine(v0), "V0 BLOCKED: queue failures: 1",
+    "management.statusLine: blocker is exact")
   healthy.queue, healthy.loop = {}, { status = "SLOW" }
   v0 = management.plan(healthy)
   t.eq(v0.reason, "manager loop SLOW", "management.plan: loop health blocks the proposal")

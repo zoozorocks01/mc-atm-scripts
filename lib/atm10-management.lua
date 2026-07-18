@@ -87,4 +87,17 @@ function management.plan(input, opts)
   }
 end
 
+-- One compact HEALTH-page/operator line for the proposal above. Keeping this
+-- pure makes the in-game wording testable and avoids a second interpretation of
+-- safety state in the display code.
+function management.statusLine(result)
+  result = type(result) == "table" and result or {}
+  if result.state == "READY" and type(result.target) == "table" then
+    return "V0 READY: " .. tostring(result.target.label or result.target.name) ..
+      " +" .. tostring(result.target.remaining or 0) .. " (approval required)"
+  end
+  if result.state == "BLOCKED" then return "V0 BLOCKED: " .. tostring(result.reason or "unknown") end
+  return "V0 IDLE: " .. tostring(result.reason or "no objective")
+end
+
 return management
