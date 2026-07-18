@@ -11,13 +11,31 @@ local management = {}
 -- small callers/tests may pass a plain row list. Inspect both shapes. Reading
 -- only `ipairs(queue)` silently missed every real persisted failure because its
 -- entries are keyed by item/key rather than numeric indexes.
-local function countFailed(queue)
+local function failedSummary(queue)
   local n = 0
+  local reasons = {}
   local rows = type(queue) == "table" and (queue.entries or queue) or {}
   for _, row in pairs(rows) do
-    if type(row) == "table" and row.error then n = n + 1 end
+    if type(row) == "table" and row.error then
+      n = n + 1
+      local reason = tostring(row.error)
+      reasons[reason] = (reasons[reason] or 0) + 1
+    end
   end
-  return n
+  if n == 0 then return n, nil end
+  local ordered = {}
+  for reason, count in pairs(reasons) do ordered[#ordered + 1] = { reason = reason, count = count } end
+  table.sort(ordered, function(a, b)
+    if a.count ~= b.count then return a.count > b.count end
+    return a.reason < b.reason
+  end)
+  local parts = {}
+  for i = 1, math.min(2, #ordered) do
+    local item = ordered[i]
+    parts[#parts + 1] = item.reason .. " x" .. item.count
+  end
+  if #ordered > 2 then parts[#parts + 1] = "+" .. tostring(#ordered - 2) .. " more" end
+  return n, table.concat(parts, "; ")
 end
 
 local function isProtected(name, opts)
@@ -53,7 +71,7 @@ function management.plan(input, opts)
   opts = opts or {}
   local bridge = type(input.bridge) == "table" and input.bridge or {}
   local loop = type(input.loop) == "table" and input.loop or {}
-  local failed = countFailed(input.queue)
+  local failed, failureReasons = failedSummary(input.queue)
 
   if bridge.connected == false or bridge.online == false then
     return { state = "BLOCKED", reason = "bridge unavailable" }
@@ -62,7 +80,9 @@ function management.plan(input, opts)
   if loop.status and loop.status ~= "OK" then
     return { state = "BLOCKED", reason = "manager loop " .. tostring(loop.status) }
   end
-  if failed > 0 then return { state = "BLOCKED", reason = "queue failures: " .. failed } end
+  if failed > 0 then
+    return { state = "BLOCKED", reason = "queue failures: " .. failed .. " (" .. failureReasons .. ")" }
+  end
   if (tonumber(input.rsStuckCount) or 0) > 0 then
     return { state = "BLOCKED", reason = "frozen RS tasks: " .. tostring(input.rsStuckCount) }
   end

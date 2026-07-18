@@ -347,12 +347,18 @@ do
   -- The live manager passes the keyed persisted queue shape, not a numeric
   -- list. A failure here must block v0's read-only proposal just as it does in
   -- the production snapshot.
-  healthy.queue = { entries = { ["alltheores:tin_ingot"] = { error = "craft failed" } } }
+  healthy.queue = { entries = {
+    ["alltheores:tin_ingot"] = { error = "craft failed" },
+    ["alltheores:osmium_ingot"] = { error = "craft failed" },
+    ["minecraft:gold_ingot"] = { error = "UNKNOWN_ERROR" },
+    ["mysticalagriculture:tertium_essence"] = { error = "MISSING_ITEMS" },
+  } }
   v0 = management.plan(healthy)
   t.eq(v0.state, "BLOCKED", "management.plan: failed queue blocks a new objective")
-  t.eq(v0.reason, "queue failures: 1", "management.plan: names the queue blocker")
-  t.eq(management.statusLine(v0), "V0 BLOCKED: queue failures: 1",
-    "management.statusLine: blocker is exact")
+  t.eq(v0.reason, "queue failures: 4 (craft failed x2; MISSING_ITEMS x1; +1 more)",
+    "management.plan: names and deterministically summarizes the queue blocker")
+  t.eq(management.statusLine(v0), "V0 BLOCKED: queue failures: 4 (craft failed x2; MISSING_ITEMS x1; +1 more)",
+    "management.statusLine: preserves the read-only failure summary")
   healthy.queue, healthy.loop = {}, { status = "SLOW" }
   v0 = management.plan(healthy)
   t.eq(v0.reason, "manager loop SLOW", "management.plan: loop health blocks the proposal")
