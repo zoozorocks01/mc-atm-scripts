@@ -323,6 +323,37 @@ do
   t.check(dm.sourceMore[1].perMin >= 199 and dm.sourceMore[1].perMin <= 201, "monitor.demand: ~200/min drain")
 end
 
+-- ---------------------------------------------------------------------------
+print("management v0 (read-only bounded objective selection)")
+do
+  local management = require("atm10-management")
+  local healthy = {
+    plans = {
+      { action = "WOULD CRAFT", name = "alltheores:lead_ingot", label = "Lead", request = 9000, amount = 4, target = 500, craftTo = 9004, priority = 0.9 },
+      { action = "WOULD CRAFT", name = "alltheores:silver_ingot", label = "Silver", request = 1200, amount = 8, target = 500, craftTo = 1208, priority = 0.8 },
+      { action = "WOULD CRAFT", name = "alltheores:lead_dust", request = 5000, priority = 1 },
+      { action = "WOULD CRAFT", name = "alltheores:lead_block", request = 5000, priority = 1, kind = "compress" },
+      { action = "WOULD CRAFT", name = "allthemodium:allthemodium_ingot", request = 5000, priority = 1 },
+    },
+    queue = {}, bridge = { connected = true, online = true }, loop = { status = "OK" }, rsStuckCount = 0,
+  }
+  local v0 = management.plan(healthy)
+  t.eq(v0.state, "READY", "management.plan: healthy snapshots propose one target")
+  t.eq(v0.target.name, "alltheores:lead_ingot", "management.plan: picks highest-priority safe ingot")
+  t.eq(v0.target.remaining, 4000, "management.plan: total objective is capped at 4000")
+  t.eq(v0.target.capped, true, "management.plan: reports when the proposal was capped")
+  healthy.queue = { { error = "craft failed" } }
+  v0 = management.plan(healthy)
+  t.eq(v0.state, "BLOCKED", "management.plan: failed queue blocks a new objective")
+  t.eq(v0.reason, "queue failures: 1", "management.plan: names the queue blocker")
+  healthy.queue, healthy.loop = {}, { status = "SLOW" }
+  v0 = management.plan(healthy)
+  t.eq(v0.reason, "manager loop SLOW", "management.plan: loop health blocks the proposal")
+  healthy.loop, healthy.rsStuckCount = { status = "OK" }, 2
+  v0 = management.plan(healthy)
+  t.eq(v0.reason, "frozen RS tasks: 2", "management.plan: frozen RS tasks block the proposal")
+end
+
 -- control.unsettledJobs: safereboot's per-job settled check over recorded craftItem
 -- ids -- closes the CALCULATION-phase hole (job invisible to getCraftingTasks but
 -- AP still fires its events). Biting: settled/unsettled/blind classification.

@@ -15,6 +15,7 @@ local commonFiles = {
   { remote = "lib/atm10-power.lua", localName = "atm10-power.lua" },
   { remote = "lib/atm10-presets.lua", localName = "atm10-presets.lua" },
   { remote = "lib/atm10-console.lua", localName = "atm10-console.lua" },
+  { remote = "lib/atm10-management.lua", localName = "atm10-management.lua" }, -- read-only bounded objective planner (v0)
   { remote = "lib/atm10-health.lua", localName = "atm10-health.lua" }, -- bridge-health gating (A3)
   { remote = "lib/atm10-monitor.lua", localName = "atm10-monitor.lua" }, -- HEALTH page: functioning + keeping-up (MON-1)
   { remote = "lib/atm10-pattern-give.lua", localName = "atm10-pattern-give.lua" }, -- /give builder (used by atm10-patterns)

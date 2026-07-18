@@ -80,6 +80,7 @@ local balance = require("atm10-balance")
 local suggest = require("atm10-suggest")
 local presets = require("atm10-presets")
 local console = require("atm10-console")
+local management = require("atm10-management")
 
 local DEFAULT_CONFIG = {
   mode = "manual",          -- manual: plan + require operator approval before a craft fires
@@ -630,6 +631,15 @@ function ui.writeStatusState(data, now)
 
     if ph.status ~= "OK" then state.summary = ph.status end
     if #ch.stuck > 0 or #rs.stuck > 0 then state.summary = "STUCK" end
+    -- v0 management is intentionally observe/plan only. It reads the same
+    -- snapshots as the dashboard and cannot enqueue or fire a craft.
+    state.management = management.plan({
+      plans = data.stockPlans,
+      queue = data.craftQueue,
+      bridge = state.bridge,
+      loop = { status = ph.status },
+      rsStuckCount = #rs.stuck,
+    }, {})
   else
     state.summary = "DEGRADED"
     state.error = "atm10-monitor unavailable"
