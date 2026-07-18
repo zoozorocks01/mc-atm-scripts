@@ -83,7 +83,8 @@ function health.gateCrafts(state, ok, threshold, recoverCycles)
          state.bridgeFails or 0, state.cleanStreak or 0
 end
 
--- sweepTmps(fsApi, paths): resolve leftover ".tmp" files from a crashed atomicWrite.
+-- sweepTmps(fsApi, paths): resolve leftover ".tmp" and ".old" files from a
+-- crashed atomicWrite replacement transaction.
 -- atomicWrite writes "<path>.tmp" then delete(path) + move(tmp,path); a crash in that
 -- window leaves a ".tmp". atomicWrite only clears it on the NEXT write to THAT file,
 -- so a rarely-written file's orphan lingers on the ~1MB CC disk. For each path: if
@@ -105,6 +106,20 @@ function health.sweepTmps(fsApi, paths)
       end
     end
   end
+  -- A crash after tmp -> main but before rollback cleanup leaves ".old" beside
+  -- a valid main file. Discard it then; if main is absent, it is the only stable
+  -- fallback and must be restored. This second pass deliberately follows tmp
+  -- recovery so a complete new tmp wins over the older rollback copy.
+  for _, p in ipairs(paths) do
+    local old = p .. ".old"
+    if fsApi.exists(old) then
+      if fsApi.exists(p) then
+        if pcall(fsApi.delete, old) then discarded = discarded + 1 end
+      else
+        if pcall(function() fsApi.move(old, p) end) then recovered = recovered + 1 end
+      end
+    end
+  end
   return discarded, recovered
 end
 
@@ -113,7 +128,7 @@ end
 -- replace an existing file, so keep the old file as a short-lived rollback copy.
 -- If the final move fails, restore that copy and leave tmp for diagnosis/retry.
 -- A crash between moves leaves either a complete tmp or .old; sweepTmps handles
--- the tmp on next boot, while the next successful write discards a stale .old.
+-- both artifacts on next boot.
 function health.replaceFile(fsApi, path, tmp)
   if type(fsApi) ~= "table" or type(path) ~= "string" or type(tmp) ~= "string" then return false end
   if not fsApi.exists(tmp) then return false end

@@ -2297,17 +2297,21 @@ do
     ["a"] = "A", ["a.tmp"] = "Anew",  -- orphan: main exists -> discard the tmp
     ["b.tmp"] = "Bnew",               -- main missing -> recover (move tmp -> b)
     ["c"] = "C",                      -- no tmp -> untouched
+    ["d"] = "D", ["d.old"] = "Dold", -- completed replace interrupted before rollback cleanup
+    ["e.old"] = "Eold",               -- live missing -> restore rollback fallback
   }
   local fakeFs = {
     exists = function(p) return store[p] ~= nil end,
     delete = function(p) store[p] = nil end,
     move = function(s, d) store[d] = store[s]; store[s] = nil end,
   }
-  local disc, rec = health.sweepTmps(fakeFs, { "a", "b", "c" })
-  t.check(disc == 1 and rec == 1, "sweepTmps: 1 discarded + 1 recovered")
+  local disc, rec = health.sweepTmps(fakeFs, { "a", "b", "c", "d", "e" })
+  t.check(disc == 2 and rec == 2, "sweepTmps: tmp/old artifacts are discarded or recovered")
   t.check(store["a"] == "A" and store["a.tmp"] == nil, "sweepTmps: orphan tmp discarded, main file kept intact")
   t.check(store["b"] == "Bnew" and store["b.tmp"] == nil, "sweepTmps: tmp recovered to main when main was missing")
   t.check(store["c"] == "C", "sweepTmps: a file with no .tmp is left untouched")
+  t.check(store["d"] == "D" and store["d.old"] == nil, "sweepTmps: stale rollback is discarded after a completed replace")
+  t.check(store["e"] == "Eold" and store["e.old"] == nil, "sweepTmps: rollback restores a missing live file")
   t.check((select(1, health.sweepTmps(nil, {}))) == 0, "sweepTmps: nil fs is a guarded no-op")
 
   -- Replacement is a two-move transaction: a final-move failure must put the
