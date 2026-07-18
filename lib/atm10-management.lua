@@ -7,9 +7,14 @@
 
 local management = {}
 
-local function countFailed(rows)
+-- The manager passes its persisted queue object ({ entries = { ... } }), while
+-- small callers/tests may pass a plain row list. Inspect both shapes. Reading
+-- only `ipairs(queue)` silently missed every real persisted failure because its
+-- entries are keyed by item/key rather than numeric indexes.
+local function countFailed(queue)
   local n = 0
-  for _, row in ipairs(rows or {}) do
+  local rows = type(queue) == "table" and (queue.entries or queue) or {}
+  for _, row in pairs(rows) do
     if type(row) == "table" and row.error then n = n + 1 end
   end
   return n

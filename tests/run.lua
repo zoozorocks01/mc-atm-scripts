@@ -344,7 +344,10 @@ do
   t.eq(v0.target.capped, true, "management.plan: reports when the proposal was capped")
   t.eq(management.statusLine(v0), "V0 READY: Lead +4000 (approval required)",
     "management.statusLine: ready objective is concise and non-mutating")
-  healthy.queue = { { error = "craft failed" } }
+  -- The live manager passes the keyed persisted queue shape, not a numeric
+  -- list. A failure here must block v0's read-only proposal just as it does in
+  -- the production snapshot.
+  healthy.queue = { entries = { ["alltheores:tin_ingot"] = { error = "craft failed" } } }
   v0 = management.plan(healthy)
   t.eq(v0.state, "BLOCKED", "management.plan: failed queue blocks a new objective")
   t.eq(v0.reason, "queue failures: 1", "management.plan: names the queue blocker")
