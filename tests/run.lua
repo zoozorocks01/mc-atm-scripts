@@ -2309,6 +2309,28 @@ do
   t.check(store["b"] == "Bnew" and store["b.tmp"] == nil, "sweepTmps: tmp recovered to main when main was missing")
   t.check(store["c"] == "C", "sweepTmps: a file with no .tmp is left untouched")
   t.check((select(1, health.sweepTmps(nil, {}))) == 0, "sweepTmps: nil fs is a guarded no-op")
+
+  -- Replacement is a two-move transaction: a final-move failure must put the
+  -- previous complete state back, not leave the manager booting with no state.
+  store = { ["state"] = "old", ["state.tmp"] = "new" }
+  local failFinalMove = true
+  fakeFs = {
+    exists = function(p) return store[p] ~= nil end,
+    delete = function(p) store[p] = nil end,
+    move = function(s, d)
+      if failFinalMove and s == "state.tmp" and d == "state" then error("simulated move failure") end
+      store[d] = store[s]; store[s] = nil
+    end,
+  }
+  t.check(health.replaceFile(fakeFs, "state", "state.tmp") == false,
+    "replaceFile: final-move failure is reported")
+  t.check(store["state"] == "old" and store["state.tmp"] == "new" and store["state.old"] == nil,
+    "replaceFile: final-move failure restores the old live state and preserves tmp")
+  failFinalMove = false
+  t.check(health.replaceFile(fakeFs, "state", "state.tmp") == true,
+    "replaceFile: completed replacement succeeds")
+  t.check(store["state"] == "new" and store["state.tmp"] == nil and store["state.old"] == nil,
+    "replaceFile: completed replacement removes temporary rollback files")
 end
 
 -- ---------------------------------------------------------------------------

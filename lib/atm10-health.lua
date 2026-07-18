@@ -108,4 +108,35 @@ function health.sweepTmps(fsApi, paths)
   return discarded, recovered
 end
 
+-- replaceFile(fsApi, path, tmp): install a fully-written temporary replacement
+-- without ever deleting the only live copy first. ComputerCraft fs.move cannot
+-- replace an existing file, so keep the old file as a short-lived rollback copy.
+-- If the final move fails, restore that copy and leave tmp for diagnosis/retry.
+-- A crash between moves leaves either a complete tmp or .old; sweepTmps handles
+-- the tmp on next boot, while the next successful write discards a stale .old.
+function health.replaceFile(fsApi, path, tmp)
+  if type(fsApi) ~= "table" or type(path) ~= "string" or type(tmp) ~= "string" then return false end
+  if not fsApi.exists(tmp) then return false end
+  local old = path .. ".old"
+  local function guarded(fn) return pcall(fn) end
+
+  -- Resolve a stale rollback from an interrupted earlier attempt before starting
+  -- a new transaction. Prefer the existing main file when both are present.
+  if fsApi.exists(old) then
+    if fsApi.exists(path) then
+      if not guarded(function() fsApi.delete(old) end) then return false end
+    elseif not guarded(function() fsApi.move(old, path) end) then
+      return false
+    end
+  end
+
+  if fsApi.exists(path) and not guarded(function() fsApi.move(path, old) end) then return false end
+  if not guarded(function() fsApi.move(tmp, path) end) then
+    if fsApi.exists(old) then guarded(function() fsApi.move(old, path) end) end
+    return false
+  end
+  if fsApi.exists(old) then guarded(function() fsApi.delete(old) end) end
+  return true
+end
+
 return health

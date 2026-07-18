@@ -366,13 +366,9 @@ local function atomicWrite(path, content)
   if not file then return false end
   local wrote = pcall(function() file.write(content); file.close() end)
   if not wrote then pcall(fs.delete, tmp); return false end
-  local moved = pcall(function()
-    if fs.exists(path) then fs.delete(path) end
-    fs.move(tmp, path)
-  end)
-  -- on move failure leave the .tmp in place: if delete(path) already succeeded the
-  -- tmp holds the only copy of the new data. The next atomicWrite clears stale tmp.
-  return moved == true
+  local ok, health = pcall(require, "atm10-health")
+  if not ok or not health or type(health.replaceFile) ~= "function" then return false end
+  return health.replaceFile(fs, path, tmp) == true
 end
 
 local function writeLedger(data)
