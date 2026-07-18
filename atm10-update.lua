@@ -104,8 +104,7 @@ local function writeRole(role)
   local file = fs.open(tmp, "w")
   file.write(role)
   file.close()
-  if fs.exists(ROLE_FILE) then fs.delete(ROLE_FILE) end
-  fs.move(tmp, ROLE_FILE)
+  replaceFile(tmp, ROLE_FILE)
 end
 
 local function ensureParentDir(path)
@@ -113,6 +112,26 @@ local function ensureParentDir(path)
   if dir and dir ~= "" and not fs.exists(dir) then
     fs.makeDir(dir)
   end
+end
+
+-- CC's fs.move cannot overwrite. Preserve the old live file as a backup before
+-- installing a verified staged replacement; if the second move fails, restore it
+-- immediately. A power loss in either small gap is recovered at the next update.
+function replaceFile(tmp, localName)
+  local backup = localName .. ".old"
+  if not fs.exists(localName) then
+    if fs.exists(tmp) then fs.move(tmp, localName); return end
+    if fs.exists(backup) then fs.move(backup, localName); return end
+    error("Missing replacement and backup for " .. localName, 0)
+  end
+  if fs.exists(backup) then fs.delete(backup) end
+  fs.move(localName, backup)
+  local ok, err = pcall(fs.move, tmp, localName)
+  if not ok then
+    if not fs.exists(localName) and fs.exists(backup) then fs.move(backup, localName) end
+    error("Replace failed: " .. tostring(err), 0)
+  end
+  if fs.exists(backup) then fs.delete(backup) end
 end
 
 local function printUsage()
@@ -139,8 +158,8 @@ local function download(remote, localName)
   -- computer with a deleted-but-unreplaced script. (localName is only ever deleted
   -- below AFTER tmp is verified complete, so "localName missing + tmp present" means
   -- tmp is the complete replacement.)
-  if not fs.exists(localName) and fs.exists(tmp) then
-    fs.move(tmp, localName)
+  if not fs.exists(localName) and (fs.exists(tmp) or fs.exists(localName .. ".old")) then
+    replaceFile(tmp, localName)
   end
 
   if fs.exists(tmp) then fs.delete(tmp) end
@@ -154,8 +173,7 @@ local function download(remote, localName)
   -- The replacement is fully downloaded + verified above; only now replace the live
   -- script. CC's fs.move won't overwrite, so the delete is unavoidable; the staged
   -- tmp + self-heal above make that one-rename gap recoverable on the next run.
-  if fs.exists(localName) then fs.delete(localName) end
-  fs.move(tmp, localName)
+  replaceFile(tmp, localName)
 end
 
 local function shouldSkip(file)
