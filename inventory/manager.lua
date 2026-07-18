@@ -2482,9 +2482,18 @@ local function drawPlanPage(data)
   -- (its inputs only change on scan) and read here so it doesn't re-loop every
   -- render/touch. See managed.countNotInGrid for why presence-in-grid is the signal.
   local notInGrid = data.notInGrid or 0
-  line(planLabelY, "Stock Keeper Plan [" .. tostring(effectiveMode()) ..
-    "]   page " .. pg.page .. "/" .. pg.pages ..
-    (notInGrid > 0 and ("   " .. notInGrid .. " not in grid") or ""), colors.cyan)
+  -- Keep v0's one-line proposal/blocker on the default page too: HEALTH has the
+  -- detailed explanation, but PLAN is where Zach normally starts. This remains
+  -- display-only and uses no additional bridge calls.
+  local mgmt = management.plan({
+    plans = data.stockPlans,
+    queue = data.craftQueue,
+    bridge = { connected = data.connected, online = data.online, degraded = data.bridgeDegraded == true },
+  }, {})
+  line(planLabelY, uiDraw.fit("Stock Keeper Plan [" .. tostring(effectiveMode()) .. "]  " ..
+    management.statusLine(mgmt) .. "  page " .. pg.page .. "/" .. pg.pages ..
+    (notInGrid > 0 and ("   " .. notInGrid .. " not in grid") or ""), w),
+    mgmt.state == "BLOCKED" and colors.orange or (mgmt.state == "READY" and colors.lime or colors.cyan))
   if w >= 72 then
     line(planLabelY + 1, uiDraw.fit("ITEM", math.max(18, w - 39)) .. "     HAVE   TARGET    PLAN   STATUS", colors.gray)
   end
