@@ -91,6 +91,7 @@ run_tests() {
   run_step "lua tests/smoke_auto.lua" lua tests/smoke_auto.lua
   run_step "lua tests/smoke_sim.lua" lua tests/smoke_sim.lua
   run_step "lua tools/atm10-sim.lua all" lua tools/atm10-sim.lua all
+  run_step "bash tests/smoke_diagnostics.sh" bash tests/smoke_diagnostics.sh
   run_step "bash syntax" bash -n \
     tools/atm10-env.sh \
     tools/atm10-diagnostics.sh \
