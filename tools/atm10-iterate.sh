@@ -94,6 +94,12 @@ run_tests() {
   run_step "lua tests/smoke_update.lua" lua tests/smoke_update.lua
   run_step "lua tests/smoke_auto.lua" lua tests/smoke_auto.lua
   run_step "lua tests/smoke_sim.lua" lua tests/smoke_sim.lua
+  run_step "lua tests/smoke_patterns.lua" lua tests/smoke_patterns.lua
+  run_step "lua tests/smoke_bridge_probe.lua" lua tests/smoke_bridge_probe.lua
+  run_step "lua tests/smoke_target_probe.lua" lua tests/smoke_target_probe.lua
+  run_step "lua tests/smoke_reload.lua" lua tests/smoke_reload.lua
+  run_step "lua tests/smoke_safereboot.lua" lua tests/smoke_safereboot.lua
+  run_step "lua tests/smoke_probe.lua" lua tests/smoke_probe.lua
   run_step "lua tools/atm10-sim.lua all" lua tools/atm10-sim.lua all
   run_step "bash syntax" bash -n \
     tools/atm10-env.sh \
