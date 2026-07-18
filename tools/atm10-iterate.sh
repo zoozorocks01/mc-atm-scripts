@@ -89,6 +89,7 @@ run_step() {
 run_tests() {
   run_step "lua tests/run.lua" lua tests/run.lua
   run_step "lua tests/smoke.lua" lua tests/smoke.lua
+  run_step "lua tests/smoke_remote.lua" lua tests/smoke_remote.lua
   run_step "lua tests/smoke_auto.lua" lua tests/smoke_auto.lua
   run_step "lua tests/smoke_sim.lua" lua tests/smoke_sim.lua
   run_step "lua tools/atm10-sim.lua all" lua tools/atm10-sim.lua all
