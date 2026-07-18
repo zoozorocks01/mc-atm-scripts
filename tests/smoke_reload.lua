@@ -156,5 +156,37 @@ check(staleRuns == 2,
 check(files[".atm10-reload-request"] == nil,
   "wrapper deleted the stale reload flag (dead requester)")
 
+-- ---- wrapper: repeated fast exits back off instead of hammering every 5s -------
+-- A corrupt config or partial self-update must not leave the force-loaded manager
+-- in a tight restart loop.  Four immediate clean exits reach the first two
+-- backoff steps; the fifth uses the Ctrl+T path to end the otherwise infinite
+-- wrapper loop.
+files = {}
+local backoffRuns, backoffSleeps, wrapperLines = 0, {}, {}
+_G.sleep = function(seconds) backoffSleeps[#backoffSleeps + 1] = seconds end
+_G.shell = {
+  run = function(program)
+    backoffRuns = backoffRuns + 1
+    if backoffRuns >= 5 then error("Terminated", 0) end
+    return true
+  end,
+}
+local realPrint = print
+_G.print = function(...)
+  local parts = {}
+  for i = 1, select("#", ...) do parts[#parts + 1] = tostring(select(i, ...)) end
+  wrapperLines[#wrapperLines + 1] = table.concat(parts, "\t")
+  realPrint(...)
+end
+print("smoke-reload: wrapper backs off repeated fast exits")
+local bOk, bErr = pcall(function() dofile("inventory/manager-startup.lua") end)
+_G.print = realPrint
+check(bOk == false and tostring(bErr) == "Terminated",
+  "wrapper ended the scripted fast-exit loop through Ctrl+T: " .. tostring(bErr))
+check(backoffRuns == 5 and table.concat(backoffSleeps, ",") == "5,5,5,10",
+  "wrapper escalated repeated fast exits from 5s to 10s (got " .. table.concat(backoffSleeps, ",") .. ")")
+check(table.concat(wrapperLines, "\n"):find("PERSISTENT CRASH", 1, true) ~= nil,
+  "wrapper prints a persistent-crash configuration banner once backoff starts")
+
 print((failures == 0) and "SMOKE-RELOAD OK" or ("SMOKE-RELOAD FAILED (" .. failures .. ")"))
 os.exit(failures == 0 and 0 or 1)
