@@ -188,5 +188,39 @@ check(backoffRuns == 5 and table.concat(backoffSleeps, ",") == "5,5,5,10",
 check(table.concat(wrapperLines, "\n"):find("PERSISTENT CRASH", 1, true) ~= nil,
   "wrapper prints a persistent-crash configuration banner once backoff starts")
 
+-- ---- wrapper: a long run resets the fast-failure streak -----------------------
+-- Without this reset, a recovered manager remains on the escalating backoff path
+-- and is incorrectly labelled as persistently crashing after later normal stops.
+files = {}
+local resetRuns, resetSleeps, resetLines, clock = 0, {}, {}, 0
+_G.os.clock = function() return clock end
+_G.sleep = function(seconds) resetSleeps[#resetSleeps + 1] = seconds end
+_G.shell = {
+  run = function(program)
+    resetRuns = resetRuns + 1
+    if resetRuns == 2 then clock = 31 end -- survives FAST_FAIL_SECONDS
+    if resetRuns >= 6 then error("Terminated", 0) end
+    return true
+  end,
+}
+_G.print = function(...)
+  local parts = {}
+  for i = 1, select("#", ...) do parts[#parts + 1] = tostring(select(i, ...)) end
+  resetLines[#resetLines + 1] = table.concat(parts, "\t")
+  realPrint(...)
+end
+print("smoke-reload: wrapper resets backoff after a long run")
+local rOk, rErr = pcall(function() dofile("inventory/manager-startup.lua") end)
+_G.print = realPrint
+_G.os.clock = realOs.clock
+local resetOutput = table.concat(resetLines, "\n")
+local _, resetBanners = resetOutput:gsub("PERSISTENT CRASH", "")
+check(rOk == false and tostring(rErr) == "Terminated",
+  "wrapper ended the reset scenario through Ctrl+T: " .. tostring(rErr))
+check(table.concat(resetSleeps, ",") == "5,5,5,5,5",
+  "a long run resets the backoff streak before later fast exits (got " .. table.concat(resetSleeps, ",") .. ")")
+check(resetBanners == 1,
+  "only the third post-recovery fast exit enters persistent-crash backoff (got " .. resetBanners .. ")")
+
 print((failures == 0) and "SMOKE-RELOAD OK" or ("SMOKE-RELOAD FAILED (" .. failures .. ")"))
 os.exit(failures == 0 and 0 or 1)
