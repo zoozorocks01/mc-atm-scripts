@@ -6,6 +6,8 @@ local MONITOR_SIDE = "right"
 local TITLE = "ATM10 POWER MANAGEMENT"
 local TEXT_SCALE = "auto"
 local HISTORY_LIMIT = 180
+local HISTORY_FILE = ".atm10-power-history"
+local HISTORY_SAVE_SECONDS = 60
 local SHOW_NET_GRAPH = true
 local SHOW_STORED_GRAPH = true
 -- POWER-GRAPH: net-flow graph y-scaling. "auto" tracks the visible peak (fills the height but
@@ -28,6 +30,7 @@ local uiStatus = require("atm10-status")
 local uiDraw = require("atm10-draw")
 local uiPalette = require("atm10-palette")
 local power = require("atm10-power") -- QUICK-2: pure FE/duration/percent/net math (tested off-CC)
+local healthOk, health = pcall(require, "atm10-health")
 
 local mon = peripheral.wrap(MONITOR_SIDE)
 if not mon then error("No monitor on " .. MONITOR_SIDE) end
@@ -82,6 +85,35 @@ local function now()
   if os.epoch then return math.floor(os.epoch("utc") / 1000) end
   return os.clock()
 end
+
+-- PWR-1: retain a small paired graph window across a watchdog/program restart.
+-- Save infrequently (not every 1s sample) and use the same rollback replacement
+-- helper as manager state, so a failed write leaves the prior history intact.
+local function loadHistory()
+  if not fs.exists(HISTORY_FILE) then return {}, {} end
+  local file = fs.open(HISTORY_FILE, "r")
+  if not file then return {}, {} end
+  local text = file.readAll()
+  file.close()
+  local ok, data = pcall(textutils.unserialize, text)
+  if not ok then return {}, {} end
+  return power.historyPair(data, HISTORY_LIMIT)
+end
+
+local function saveHistory()
+  if not healthOk or not health or type(health.replaceFile) ~= "function" then return false end
+  local ok, text = pcall(textutils.serialize, { history = history, netHistory = netHistory })
+  if not ok or type(text) ~= "string" then return false end
+  local tmp = HISTORY_FILE .. ".tmp"
+  if fs.exists(tmp) then pcall(fs.delete, tmp) end
+  local file = fs.open(tmp, "w")
+  if not file then return false end
+  if not pcall(function() file.write(text); file.close() end) then pcall(fs.delete, tmp); return false end
+  return health.replaceFile(fs, HISTORY_FILE, tmp) == true
+end
+
+history, netHistory = loadHistory()
+local lastHistorySaveAt = now()
 
 -- QUICK-2: math moved to the tested atm10-power lib. Thin aliases keep the call
 -- sites unchanged; estimateTime maps the lib's state string to a display color.
@@ -402,6 +434,10 @@ while true do
 
       while #history > HISTORY_LIMIT do table.remove(history, 1) end
       while #netHistory > HISTORY_LIMIT do table.remove(netHistory, 1) end
+      if now() - lastHistorySaveAt >= HISTORY_SAVE_SECONDS then
+        pcall(saveHistory)
+        lastHistorySaveAt = now()
+      end
     end
   end
 

@@ -4,6 +4,26 @@
 -- feeds raw port readings into percent().
 local power = {}
 
+-- historyPair(data, limit): normalize a persisted paired graph history. Keep only
+-- numeric pairs so the stored-energy and net-flow graphs remain aligned after a
+-- partial/corrupt write or an older schema. Newest samples win under the cap.
+function power.historyPair(data, limit)
+  local outHistory, outNet = {}, {}
+  local h = type(data) == "table" and data.history or nil
+  local n = type(data) == "table" and data.netHistory or nil
+  if type(h) ~= "table" or type(n) ~= "table" then return outHistory, outNet end
+  local cap = math.max(1, math.floor(tonumber(limit) or 180))
+  local first = math.max(1, math.min(#h, #n) - cap + 1)
+  for i = first, math.min(#h, #n) do
+    local pct, net = tonumber(h[i]), tonumber(n[i])
+    if pct and net and pct == pct and net == net then
+      outHistory[#outHistory + 1] = pct
+      outNet[#outNet + 1] = net
+    end
+  end
+  return outHistory, outNet
+end
+
 -- Format an energy value with an FE magnitude suffix. Keeps sign on negatives
 -- (net flow can be negative).
 function power.fmt(n)
