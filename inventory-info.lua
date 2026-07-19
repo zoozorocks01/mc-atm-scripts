@@ -2094,6 +2094,17 @@ local function scan()
   local online = call(bridge, "isOnline")
   markPhase("bridgeStatusMs")
 
+  -- STAB-6: an explicit offline result means this cached peripheral handle is
+  -- stale. Do not make another read through it this cycle; drop it so the next
+  -- scan re-wraps the bridge after the chunk/peripheral has settled.
+  if connected == false or online == false then
+    bridge, bridgeName = nil, nil
+    status = "Grid OFFLINE - holding last plan"
+    craftingCache.__bridge.allowFire = craftingCache.__health.gateCrafts(craftingCache.__bridge, false)
+    profile.totalMs = math.max(0, nowMs() - profile.startedAt)
+    return nil, "stale"
+  end
+
   local items = getItems()
   markPhase("getItemsMs")
 
@@ -2101,10 +2112,8 @@ local function scan()
   -- error or laggy/partial tick. If we HAD items last cycle (or the grid reports
   -- offline), treat this as stale and hold the last plan rather than manufacturing
   -- a full set of phantom deficits (which in auto mode could re-fire bulk crafts).
-  if (next(items) == nil and lastUnique > 0) or online == false or connected == false then
-    status = (online == false or connected == false)
-      and "Grid OFFLINE - holding last plan"
-      or "Grid read failed - holding last plan"
+  if next(items) == nil and lastUnique > 0 then
+    status = "Grid read failed - holding last plan"
     -- degraded cycle: a stale/offline read must hold back craft-firing.
     craftingCache.__bridge.allowFire = craftingCache.__health.gateCrafts(craftingCache.__bridge, false)
     profile.totalMs = math.max(0, nowMs() - profile.startedAt)
