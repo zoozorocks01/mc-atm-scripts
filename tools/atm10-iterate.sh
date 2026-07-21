@@ -336,6 +336,7 @@ put lib/atm10-balance.lua atm10-balance.lua
 put lib/atm10-suggest.lua atm10-suggest.lua
 put lib/atm10-presets.lua atm10-presets.lua
 put lib/atm10-console.lua atm10-console.lua
+put lib/atm10-management.lua atm10-management.lua
 put lib/atm10-health.lua atm10-health.lua
 put lib/atm10-monitor.lua atm10-monitor.lua
 put lib/atm10-pattern-give.lua atm10-pattern-give.lua

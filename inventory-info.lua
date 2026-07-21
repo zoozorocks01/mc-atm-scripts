@@ -80,7 +80,21 @@ local balance = require("atm10-balance")
 local suggest = require("atm10-suggest")
 local presets = require("atm10-presets")
 local console = require("atm10-console")
-local management = require("atm10-management")
+-- atm10-management is OPTIONAL like atm10-health: pcall the require + fall back to a
+-- no-op stub so a not-yet-deployed / missing module DEGRADES (the management line just
+-- reads "unavailable") instead of boot-crashing the manager. Same failure class as the
+-- June atm10-health incident -- a deploy manifest that shipped a require() without its
+-- module HARD-crash-looped computer 6. Assigned inside a do-scope so there is no
+-- net-new top-level local (the manager is at the locals cap); the existing `management`
+-- slot is reused. Mirrors the boot-time defensive require at line ~3939.
+local management
+do
+  local ok, mod = pcall(require, "atm10-management")
+  management = (ok and mod) or {
+    plan = function() return { state = "IDLE", reason = "management module unavailable" } end,
+    statusLine = function() return "V0 unavailable (management module not loaded)" end,
+  }
+end
 
 local DEFAULT_CONFIG = {
   mode = "manual",          -- manual: plan + require operator approval before a craft fires
