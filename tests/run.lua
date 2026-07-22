@@ -770,14 +770,17 @@ t.eq(_G.__zeroStoredCraftable[1].action, "WOULD CRAFT", "zero-stock craftable it
 t.eq(_G.__zeroStoredCraftable[1].request, 256, "zero-stock craftable request fills to craftTo")
 _G.__zeroStoredCraftable = nil
 
--- below target, watch/manual route -> explicit BLOCKED reason, never a craft request
+-- below target, watch/manual route -> deliberate WATCH row, never a craft request
 do
   local watchP = stockplan.plan({ stockKeeper = SK({
       { name = "mi:plate", label = "MI Plate", target = 100, craftTo = 200,
         craftMode = "watch", blockReason = "MI assembler route; do not RS autocraft" },
     }), ledger = emptyLedger, resolve = function() return 0, true, false end })
-  t.eq(watchP[1].action, "BLOCKED", "watch-only target -> BLOCKED")
+  t.eq(watchP[1].action, "WATCH", "watch-only target -> WATCH, not a BLOCKED problem")
   t.eq(watchP[1].reason, "MI assembler route; do not RS autocraft", "watch-only target explains the route")
+  local watchState = stockplan.compactState(watchP)
+  t.eq(watchState.watchCount, 1, "compactState counts WATCH rows separately")
+  t.eq(watchState.blockedCount, 0, "WATCH rows do not inflate blockedCount")
 end
 
 -- below target, craftable, already crafting -> ALREADY CRAFTING
@@ -1796,7 +1799,7 @@ do
   t.eq(wcat.items[1].blockReason, "MI assembler route; do not RS autocraft", "managed.toCategory preserves blockReason")
   local wplan = stockplan.plan({ stockKeeper = { enabled = true, categories = { wcat } },
     ledger = { requests = {} }, resolve = function() return 0, true, false end })
-  t.eq(wplan[1].action, "BLOCKED", "managed watch-only quota blocks instead of crafting")
+  t.eq(wplan[1].action, "WATCH", "managed watch-only quota watches instead of crafting")
   t.eq(wplan[1].reason, "MI assembler route; do not RS autocraft", "managed watch-only row carries reason")
 end
 
