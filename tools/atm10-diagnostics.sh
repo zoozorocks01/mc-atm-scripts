@@ -207,6 +207,18 @@ screen_stuff() {
   run_server_remote "export SCREENDIR=$server_dir/.screen; screen -S $screen_session -p 0 -X stuff $payload"
 }
 
+chat_log_size() {
+  run_server_remote 'if [ -f logs/latest.log ]; then wc -c < logs/latest.log; else echo 0; fi'
+}
+
+chat_accepted_since() {
+  local offset start match
+  offset="$1"
+  match="$(quote_remote "$2")"
+  start=$((offset + 1))
+  run_server_remote "test -f logs/latest.log && tail -c +$start logs/latest.log | grep -Fq -- $match"
+}
+
 cc_restart_safety() {
   local drain max_stale allow_stale
   drain="$(quote_remote "$CC_RESTART_DRAIN_MS")"
@@ -626,8 +638,27 @@ case "${1:-snapshot}" in
       *$'\n'*|*$'\r'*) printf 'chat messages must be a single line\n' >&2; exit 2 ;;
     esac
     chat_player="${ATM10_CHAT_PLAYER:-Zoozorocks}"
-    screen_stuff "tell $chat_player [$( echo "${ATM10_CHAT_FROM:-Claude}" )] $chat_msg"
-    printf 'Injected private chat for %s via %s; verify receipt in-game or through chat-log.\n' "$chat_player" "$SCREEN_SESSION"
+    chat_text="[${ATM10_CHAT_FROM:-Claude}] $chat_msg"
+    if [ "${#chat_text}" -gt 256 ]; then
+      printf 'chat message is %s characters; Minecraft accepts at most 256 including the sender tag\n' "${#chat_text}" >&2
+      exit 2
+    fi
+    chat_offset="$(chat_log_size)"
+    case "$chat_offset" in *[!0-9]*|'')
+      printf 'Cannot read current server log offset; refusing chat injection.\n' >&2
+      exit 1
+      ;;
+    esac
+    screen_stuff "tell $chat_player $chat_text"
+    for _ in 1 2 3; do
+      if chat_accepted_since "$chat_offset" "$chat_text"; then
+        printf 'Whispered private chat for %s via %s; accepted in current server log.\n' "$chat_player" "$SCREEN_SESSION"
+        exit 0
+      fi
+      sleep 1
+    done
+    printf 'Chat injection was not accepted in the current server log; refusing Whispered status.\n' >&2
+    exit 1
     ;;
   chat-log)
     chat_lines="${2:-15}"
