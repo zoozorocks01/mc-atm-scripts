@@ -196,6 +196,7 @@ function stockplan.compactState(plans, opts)
     wouldCraftCount = 0,
     wouldCraftAmount = 0,
     blockedCount = 0,
+    watchCount = 0,
     unknownIdCount = 0,
     rows = {},
   }
@@ -211,6 +212,8 @@ function stockplan.compactState(plans, opts)
       out.unknownIdCount = out.unknownIdCount + 1
     elseif action == "BLOCKED" or action == "NO RECIPE" or action == "RESERVED" then
       out.blockedCount = out.blockedCount + 1
+    elseif action == "WATCH" then
+      out.watchCount = out.watchCount + 1
     end
     if action ~= "OK" then
       if #out.rows < limit then
@@ -238,7 +241,7 @@ end
 --
 -- Returns an array of plan rows. Each row has an `action`, one of:
 --   OK, NOT CRAFTABLE, ALREADY CRAFTING, ON COOLDOWN, CYCLE CAP, WOULD CRAFT,
---   BLOCKED, RESERVED.
+--   BLOCKED, RESERVED, WATCH (deliberate machine-route rows; never a problem).
 -- Deficit rows carry `priority` (larger = farther below the floor), so the
 -- queue/runner can fire the most-deficient items first under a per-cycle cap.
 function stockplan.plan(ctx)
@@ -293,7 +296,7 @@ function stockplan.plan(ctx)
         plans[#plans + 1] = copyMeta({ action = "BLOCKED", name = target.name, category = categoryLabel,
           label = label, amount = amount, target = trigger, craftTo = craftTo, priority = priority }, craftMeta)
       elseif isWatchOnly(target) then
-        plans[#plans + 1] = copyMeta({ action = "BLOCKED", name = target.name, category = categoryLabel,
+        plans[#plans + 1] = copyMeta({ action = "WATCH", name = target.name, category = categoryLabel,
           label = label, amount = amount, target = trigger, craftTo = craftTo, priority = priority,
           reason = watchReason(target), craftMode = target.craftMode or "watch" }, craftMeta)
       elseif not craftable then
