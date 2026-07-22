@@ -7,6 +7,8 @@ public final class ClearPathTest {
 
     public static void main(String[] args) {
         String owner = "dk.magnusjensen.simpleafk.NeoforgeSimpleAFK";
+        check(!ClearPath.shouldLog(false), "ordinary interaction must not log when player is not AFK");
+        check(ClearPath.shouldLog(true), "an actual AFK clear must log");
         check("event:left-click-block".equals(ClearPath.subscribedHandler(owner, "onPlayerLeftClickBlock")), "left click block");
         check("event:left-click-empty".equals(ClearPath.subscribedHandler(owner, "onPlayerLeftClickEmpty")), "left click empty");
         check("event:right-click-empty".equals(ClearPath.subscribedHandler(owner, "onPlayerRightClickEmpty")), "right click empty");

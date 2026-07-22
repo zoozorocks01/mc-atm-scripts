@@ -12,12 +12,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 /** Logs AFK-clear provenance without changing SimpleAFK's result or state. */
 @Mixin(targets = "dk.magnusjensen.simpleafk.AFKPlayer", remap = false)
 public abstract class AFKPlayerDiagnosticsMixin {
+    @Shadow private boolean isAfk;
     @Shadow private ServerPlayer player;
     @Shadow private Vec3 lastLookAngle;
     @Shadow private BlockPos lastPosition;
 
     @Inject(method = "removeAfkStatus", at = @At("HEAD"), remap = false)
     private void simpleafkdiagnostics$recordClearPath(CallbackInfo ci) {
+        // Match upstream's first branch: ordinary interactions call this method too.
+        if (!ClearPath.shouldLog(isAfk)) return;
         Vec3 currentLook = player.getLookAngle();
         BlockPos currentPosition = player.blockPosition();
         String path = ClearPath.subscribedHandlerFromStack();

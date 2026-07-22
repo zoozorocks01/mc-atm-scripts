@@ -4,6 +4,10 @@ final class ClearPath {
     private ClearPath() {
     }
 
+    static boolean shouldLog(boolean isAfk) {
+        return isAfk;
+    }
+
     static String subscribedHandler(String className, String methodName) {
         if (!"dk.magnusjensen.simpleafk.NeoforgeSimpleAFK".equals(className)) return null;
         return switch (methodName) {
