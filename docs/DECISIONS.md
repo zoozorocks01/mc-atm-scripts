@@ -193,3 +193,33 @@ No bulk retry sweep is part of this test.
 
 **Reference.** Refined Storage 2 feature overview:
 <https://refinedmods.com/refined-storage/news/20250308-whats-new-in-refined-storage-2.html>.
+
+## 5. Crash-safe replacement + rollback wrapper (2026-07-19 series, backfilled 2026-07-21)
+
+**What was happening.** Two unprotected replacement windows could brick the
+manager: (a) the updater replaced live scripts with a delete-then-move, so a
+failure or power loss between the two steps left computer 6 with NO script
+(the exact class that once required manual recovery); (b) manager state files
+(queue/managed/ledger) were replaced non-atomically in places, so a crash
+mid-write could corrupt persistent state.
+
+**Policy.**
+- **Updater rollback wrapper (`atm10-update.lua`):** a verified staged file is
+  installed as: live -> `<name>.old` (backup), staged -> live. If the second
+  move fails, the backup is restored immediately. A crash in either gap is
+  self-recovered on the NEXT update run: backup present + live missing ->
+  restore backup; both missing -> hard error naming the file (never a silent
+  hole). CC's `fs.move` cannot overwrite, which is WHY the two-step + backup
+  exists.
+- **State replacement (`health.replaceFile`):** manager persistent-state
+  writes route through the atomic replace helper in atm10-health, with
+  boot-time recovery of interrupted replacements (extends the tmp-sweep).
+- **Queue safety** stays as decided in #1 (per-row quarantine, bounded
+  admission) and #3 (order-independent late-progress reconcile); this entry
+  adds the layer UNDER those: the files recording that state survive crashes.
+
+**Enforced in** `atm10-update.lua`, `lib/atm10-health.lua`
+(`replaceFile` + boot sweep), manager state-write call sites.
+
+**Gated by** `tests/smoke_update.lua` (filesystem-stub failure paths),
+startup crash-loop/backoff smokes, `tests/run.lua` coverage from the series.
