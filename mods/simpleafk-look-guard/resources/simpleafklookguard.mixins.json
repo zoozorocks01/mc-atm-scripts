@@ -1,0 +1,8 @@
+{
+  "required": true,
+  "minVersion": "0.8.5",
+  "package": "dev.zjn.simpleafklookguard.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["AFKPlayerMixin"],
+  "injectors": {"defaultRequire": 1}
+}

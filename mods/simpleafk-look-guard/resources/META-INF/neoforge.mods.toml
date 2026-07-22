@@ -1,0 +1,19 @@
+modLoader = "lowcodefml"
+loaderVersion = "[1,)"
+license = "MIT"
+
+[[mods]]
+modId = "simpleafklookguard"
+version = "1.0.0"
+displayName = "SimpleAFK Look Guard"
+description = '''Ignores sub-threshold look-vector jitter when SimpleAFK checks AFK activity. Remove when SimpleAFK fixes exact Vec3 activity detection upstream.'''
+
+[[dependencies.simpleafklookguard]]
+modId = "simpleafk"
+type = "required"
+versionRange = "[1.5.2,1.5.3)"
+ordering = "NONE"
+side = "BOTH"
+
+[[mixins]]
+config = "simpleafklookguard.mixins.json"
