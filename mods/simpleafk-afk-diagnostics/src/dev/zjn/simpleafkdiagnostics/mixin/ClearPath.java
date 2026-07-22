@@ -1,6 +1,8 @@
 package dev.zjn.simpleafkdiagnostics.mixin;
 
 final class ClearPath {
+    private static final String COMMANDS = "dk.magnusjensen.simpleafk.commands.AFKCommands";
+
     private ClearPath() {
     }
 
@@ -9,6 +11,7 @@ final class ClearPath {
     }
 
     static String subscribedHandler(String className, String methodName) {
+        if (COMMANDS.equals(className) && "toggleAfkStatus".equals(methodName)) return "command:toggle";
         if (!"dk.magnusjensen.simpleafk.NeoforgeSimpleAFK".equals(className)) return null;
         return switch (methodName) {
             case "onPlayerLeftClickBlock" -> "event:left-click-block";

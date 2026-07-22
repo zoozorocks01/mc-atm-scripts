@@ -7,8 +7,12 @@ public final class ClearPathTest {
 
     public static void main(String[] args) {
         String owner = "dk.magnusjensen.simpleafk.NeoforgeSimpleAFK";
+        String commands = "dk.magnusjensen.simpleafk.commands.AFKCommands";
         check(!ClearPath.shouldLog(false), "ordinary interaction must not log when player is not AFK");
         check(ClearPath.shouldLog(true), "an actual AFK clear must log");
+        // SimpleAFK has two toggleAfkStatus overloads; both retain this method name on the stack.
+        check("command:toggle".equals(ClearPath.subscribedHandler(commands, "toggleAfkStatus")), "self command toggle");
+        check("command:toggle".equals(ClearPath.subscribedHandler(commands, "toggleAfkStatus")), "target command toggle");
         check("event:left-click-block".equals(ClearPath.subscribedHandler(owner, "onPlayerLeftClickBlock")), "left click block");
         check("event:left-click-empty".equals(ClearPath.subscribedHandler(owner, "onPlayerLeftClickEmpty")), "left click empty");
         check("event:right-click-empty".equals(ClearPath.subscribedHandler(owner, "onPlayerRightClickEmpty")), "right click empty");
