@@ -16,4 +16,5 @@ in `libs/`:
 JAVA_HOME=/usr/local/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./build.sh
 ```
 
-Output: `build/simpleafk-afk-diagnostics-1.0.0.jar`.
+Output: `build/simpleafk-afk-diagnostics-1.0.0.jar`. The build normalizes jar
+entry timestamps, so identical source and compile inputs produce the same SHA-256.

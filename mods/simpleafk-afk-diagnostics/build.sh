@@ -27,5 +27,6 @@ mkdir -p build/classes build/test-classes build/jar
 "$JBIN/java" -cp "build/classes:build/test-classes:$CP" dev.zjn.simpleafkdiagnostics.mixin.ClearPathTest
 cp -R build/classes/. build/jar/
 cp -R resources/. build/jar/
-"$JBIN/jar" --create --file "build/simpleafk-afk-diagnostics-$VERSION.jar" -C build/jar .
+"$JBIN/jar" --create --date=2026-01-01T00:00:00Z \
+  --file "build/simpleafk-afk-diagnostics-$VERSION.jar" -C build/jar .
 echo "built: build/simpleafk-afk-diagnostics-$VERSION.jar"
