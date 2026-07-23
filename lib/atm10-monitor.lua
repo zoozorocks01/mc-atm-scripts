@@ -121,36 +121,49 @@ end
 --   * sourceMore    = declining AND NOT auto-craftable -> a raw input being drained
 --     faster than it arrives -> go mine/farm/produce more (e.g. silver dust, shards).
 -- etaMin = current amount / drain rate = rough "time to empty".
-function monitor.demand(trends, craftable, opts)
+-- Sustained drain rate (units/min) for ONE persisted trend entry, or 0 when the
+-- window is too short/sparse, not declining, a transient bounce (spike), or below
+-- minPerMin. This is the SAME qualifying test demand() uses to classify a row as
+-- falling/source, factored out so the stock planner can size a high-drain item's
+-- batch off the exact signal the FALLING-BEHIND dashboard shows (DECISIONS #6).
+--   opts { minPerMin = 20, minWindowMin = 10, minSamples = 4, spikeRatio = 3 }
+function monitor.drainRate(t, opts)
+  if type(t) ~= "table" then return 0 end
   opts = opts or {}
   local minPerMin = opts.minPerMin or 20
   local minWindowMin = opts.minWindowMin or 10
   local minSamples = opts.minSamples or 4
-  local top = opts.top or 6
   local spikeRatio = opts.spikeRatio or 3 -- swing > spikeRatio*netDrain => transient, ignore
+  local span = minutesBetween(t.t0, t.tN)
+  local decline = (t.a0 or 0) - (t.aN or 0) -- positive => net drained over the window
+  if span < minWindowMin or (t.n or 0) < minSamples or decline <= 0 then return 0 end
+  local perMin = decline / span
+  -- Drop transient spikes: if the in-window swing (max-min) dwarfs the NET drain,
+  -- the stock bounced (consumed then refilled) rather than steadily declining --
+  -- not something to go "source more" of. Kills the v10k/min ~0m noise.
+  local swing = (t.maxA or 0) - (t.minA or 0)
+  if swing > spikeRatio * decline then return 0 end
+  if perMin < minPerMin then return 0 end
+  return perMin
+end
+
+function monitor.demand(trends, craftable, opts)
+  opts = opts or {}
+  local top = opts.top or 6
   craftable = craftable or {}
   local skip = opts.skip or {} -- names to exclude entirely (e.g. watch-only / machine-made)
 
   local falling, source = {}, {}
   for name, t in pairs(trends or {}) do
     if not skip[name] then
-      local span = minutesBetween(t.t0, t.tN)
-      local decline = (t.a0 or 0) - (t.aN or 0) -- positive => net drained over the window
-      if span >= minWindowMin and (t.n or 0) >= minSamples and decline > 0 then
-        local perMin = decline / span
-        -- Drop transient spikes: if the in-window swing (max-min) dwarfs the NET drain,
-        -- the stock bounced (consumed then refilled) rather than steadily declining --
-        -- not something to go "source more" of. Kills the v10k/min ~0m noise.
-        local swing = (t.maxA or 0) - (t.minA or 0)
-        local spiky = swing > spikeRatio * decline
-        if perMin >= minPerMin and not spiky then
-          local eta = (t.aN and t.aN > 0) and (t.aN / perMin) or 0
-          local row = { label = t.label or name, name = name, perMin = perMin, etaMin = eta }
-          if craftable[name] then
-            falling[#falling + 1] = row
-          else
-            source[#source + 1] = row
-          end
+      local perMin = monitor.drainRate(t, opts)
+      if perMin > 0 then
+        local eta = (t.aN and t.aN > 0) and (t.aN / perMin) or 0
+        local row = { label = t.label or name, name = name, perMin = perMin, etaMin = eta }
+        if craftable[name] then
+          falling[#falling + 1] = row
+        else
+          source[#source + 1] = row
         end
       end
     end

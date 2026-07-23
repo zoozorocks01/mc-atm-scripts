@@ -17,6 +17,7 @@ local ORDER = {
   "soak-fail-stop-reverts",
   "soak-restart-stays-manual",
   "late-progress-clears-failed-row",
+  "drain-aware-batch-sizing",
 }
 
 local function contains(text, needle)
@@ -635,6 +636,80 @@ SCENARIOS["late-progress-clears-failed-row"] = {
     addCheck(checks, hasAudit(report, function(event)
       return event.kind == "late_progress" and event.name == "test:late_item" and event.amount == 32
     end), "audit records late_progress with the credited batch size")
+    return checks
+  end,
+}
+
+SCENARIOS["drain-aware-batch-sizing"] = {
+  description = "High-drain gold sizes ONE turn's request to outpace measured consumption instead of starving at the fixed base batch.",
+  run = function()
+    -- Live repro (production 2026-07-22): gold sat at 18,776 of a 100,000 target
+    -- while the planner requested only 4,096/turn. A Dyson-swarm crafting chain
+    -- drained gold faster than 4,096/turn, so the deficit never closed. Persist a
+    -- sustained-drain window (net 21,224 over 15 min => ~1,415/min) and let auto
+    -- fire once; the fired batch must now cover the drain expected before the next
+    -- turn (~one 5-min cooldown) plus headway, bounded by the maxBatch ceiling.
+    local goldName = "minecraft:gold_ingot"
+    local bridge = sim.bridge({
+      items = { { name = goldName, amount = 18776, isCraftable = true } },
+    })
+    local runner = sim.new({
+      bridge = bridge,
+      -- start the sim clock past the trend window so the persisted history is
+      -- fresh (now > tN) and inside the 12h keep window when loadTrends prunes.
+      clockStart = 500000000,
+      managedStore = {
+        items = {
+          [goldName] = { name = goldName, label = "Gold Ingot", target = 100000, craftTo = 100000 },
+        },
+        settings = { modeOverride = "auto", smartMode = true },
+      },
+      config = {
+        mode = "auto",
+        allowAutocraft = true,
+        stockKeeper = {
+          enabled = true,
+          cooldownSeconds = 300,     -- 5-min re-request window the batch must span
+          maxCraftsPerCycle = 2,
+          maxRequest = 4096,         -- the fixed base batch that starved gold live
+          maxBatch = 32768,          -- drain-aware ceiling (opt-in; DECISIONS #6)
+          maxBridgeRequest = 65536,  -- large: don't let bridge batching mask the plan request
+        },
+      },
+      files = {
+        [".atm10-trends"] = {
+          [goldName] = {
+            label = "Gold Ingot",
+            t0 = 499000000, a0 = 40000,
+            tN = 499900000, aN = 18776,
+            minA = 18776, maxA = 40000, n = 30,
+          },
+        },
+      },
+      events = { { "timer", 1 } },
+    })
+    local result = runner:run()
+    return { runner = runner, result = result, crafted = result.crafted }
+  end,
+  checks = function(report)
+    local checks = {}
+    -- perMin = (40000-18776)/15min = 1414.93...; one 5-min cooldown of drain =
+    -- floor(1414.93*5) = 7074; drain-aware batch = base 4096 + 7074 = 11170.
+    local baseBatch = 4096
+    local drainPerCooldown = 7074
+    local expectedBatch = 11170
+    local maxBatch = 32768
+    local fired = report.crafted[1]
+    local count = fired and tonumber(fired.count)
+    addCheck(checks, reachedSentinel(report), "manager completed one auto scan and stopped at the simulator sentinel")
+    addCheck(checks, #report.crafted == 1 and fired and fired.name == "minecraft:gold_ingot",
+      "auto fired exactly one gold craft (serial lane unchanged: one task at a time)")
+    addCheck(checks, count ~= nil and count > drainPerCooldown,
+      "one turn's request outpaces a cooldown of measured drain (converges); the fixed " .. baseBatch .. " batch did not")
+    addCheck(checks, count == expectedBatch,
+      "drain-aware batch = base cap + one cooldown of drain (4096 + 7074 = 11170)")
+    addCheck(checks, count ~= nil and count <= maxBatch,
+      "batch stays bounded by the configured maxBatch ceiling")
     return checks
   end,
 }

@@ -181,6 +181,12 @@ route:
 - Keep the manager's compression-pair guard. Autocrafter priority selects the
   RS recipe; it does not authorize ingot↔block quota thrash.
 
+**Control boundary.** The installed Advanced Peripherals RS bridge accepts an
+output request (`craftItem({name, count})`), but exposes no supported
+selected-pattern or selected-route argument. Route selection therefore belongs
+to the physical Autocrafter priority ladder, not to the manager after it has
+requested an ingot.
+
 This matches Refined Storage 2's documented behavior: the highest-priority
 pattern for a shared output is tried first, and lower-priority patterns are
 checked when higher-priority routes lack resources.
@@ -193,3 +199,57 @@ No bulk retry sweep is part of this test.
 
 **Reference.** Refined Storage 2 feature overview:
 <https://refinedmods.com/refined-storage/news/20250308-whats-new-in-refined-storage-2.html>.
+
+## 6. Drain-aware craft batch sizing for high-drain metals (2026-07-23)
+
+**What was happening.** A fixed per-turn batch cap starved high-drain metals.
+Live (production, 2026-07-22): gold sat at 18,776 of a 100,000 target while the
+planner requested only 4,096/turn. 19 items below target shared ONE serial
+crafting lane at ~3 crafts/min (a deliberate guard against an RS 2.0.6
+concurrent-task deadlock), and a Dyson-swarm crafting chain drained gold faster
+than 4,096/turn. Each turn's request was smaller than what got consumed before
+the next turn, so the deficit never closed no matter how long the lane ran. The
+consumption signal was already measured — the FALLING-BEHIND dashboard
+(`monitor.demand`) has shown gold declining for days — but the planner ignored
+it when sizing a request.
+
+**Policy.** One turn's request may scale with MEASURED drain, up to an explicit
+per-item or global ceiling. Nothing else about the pipeline changes.
+- **Base cap unchanged.** The per-turn request still defaults to `maxRequest`
+  (4,096 when unset). With no measured drain and no `maxBatch` configured, sizing
+  is byte-identical to before — the feature is strictly opt-in.
+- **Drain-aware ceiling (`maxBatch`).** When a sustained drain is measured for an
+  item AND a `maxBatch` greater than `maxRequest` is configured (per-item, else
+  the global `stockKeeper.maxBatch`), the planner raises THIS turn's cap to
+  `maxRequest + floor(perMin * cooldownMinutes)` — cover the consumption expected
+  before the item can be re-requested (~one cooldown) plus one base batch of
+  headway — bounded by `maxBatch`. So one turn now outpaces the drain and the
+  deficit shrinks instead of treading water.
+- **Same drain signal as the dashboard.** "Sustained drain" is
+  `monitor.drainRate` (factored out of `monitor.demand`): net decline over a
+  window ≥10 min, ≥4 samples, ≥20/min, with the transient-spike guard. Below that
+  floor, 4,096/turn already keeps pace, so no scaling. The persisted trend window
+  is loaded BEFORE planning so a rebooted manager sizes correctly on its first
+  scan.
+- **Bounds preserved.** The request never exceeds the deficit (`craftTo`
+  ceilings hold), the `craftFrom` input reserve still clamps it afterward,
+  oresight-reserve semantics for raw allthemodium/vibranium/unobtainium are
+  untouched, quarantine/cooldown policy is unchanged, and the serial lane still
+  fires one task at a time and yields to ALREADY CRAFTING. Only the ceiling on a
+  single turn's ask changed — a larger single task, not more concurrent tasks.
+
+**Enforced in** `lib/atm10-stockplan.lua` (`ctx.drain`, `maxBatch`, the
+effective-cap block), `lib/atm10-monitor.lua` (`monitor.drainRate`), manager
+`planStockActions` (builds the drain map from `trendHistory`),
+`effectiveStockKeeper` + `loadConfig` (`maxBatch` plumbing), scan trend-load
+ordering.
+
+**Gated by** sim scenario `drain-aware-batch-sizing` (written first, red against
+the pre-fix planner: gold fired 4,096 < the 7,074 consumed per cooldown; green
+after: 11,170, which outpaces the drain and stays under `maxBatch`);
+`tests/run.lua` stockplan drain-aware unit tests + `monitor.drainRate` tests.
+
+**Rollout (operator action, Zach-gated).** The code ships the capability; it does
+nothing until `maxBatch` is set. Set a global `stockKeeper.maxBatch` (or a
+per-item `maxBatch`) above `maxRequest` to arm it for high-drain items, gold
+first.

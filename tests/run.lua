@@ -301,6 +301,19 @@ do
   t.eq(#dm.sourceMore, 1, "monitor.demand: 1 source-more (raw input draining; spiky one excluded)")
   t.eq(dm.sourceMore[1].name, "ma:silver_dust", "monitor.demand: silver dust -> source more")
   t.check(dm.sourceMore[1].perMin >= 199 and dm.sourceMore[1].perMin <= 201, "monitor.demand: ~200/min drain")
+
+  -- monitor.drainRate: the per-entry primitive demand() now shares (same qualifying
+  -- test), exposed so the stock planner sizes high-drain batches off the SAME signal.
+  local infDrain = monitor.drainRate(trends["mc:inferium"])
+  t.check(infDrain >= 199 and infDrain <= 201, "monitor.drainRate: sustained ~200/min drain qualifies")
+  t.eq(monitor.drainRate(trends["mx:flat"]), 0, "monitor.drainRate: no decline -> 0")
+  t.eq(monitor.drainRate(trends["my:tiny"]), 0, "monitor.drainRate: below minPerMin -> 0")
+  t.eq(monitor.drainRate(trends["mz:spiky"]), 0, "monitor.drainRate: transient spike -> 0")
+  t.eq(monitor.drainRate(nil), 0, "monitor.drainRate: missing entry -> 0")
+  t.eq(monitor.drainRate({ t0 = NOW - 120000, tN = NOW, a0 = 5000, aN = 1000, n = 6 }), 0,
+    "monitor.drainRate: window under minWindowMin -> 0")
+  t.eq(monitor.drainRate({ t0 = NOW - 1200000, tN = NOW, a0 = 5000, aN = 1000, n = 2 }), 0,
+    "monitor.drainRate: too few samples -> 0")
 end
 
 -- control.unsettledJobs: safereboot's per-job settled check over recorded craftItem
@@ -811,6 +824,38 @@ local capP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100, cra
   resolve = function() return 0, true, false end })
 t.eq(capP[1].request, 500, "request capped to maxRequest")
 t.check(capP[1].capped == true, "capped flag set")
+
+-- drain-aware batch sizing (DECISIONS #6): a MEASURED drain plus a maxBatch ceiling
+-- above the base cap raises ONE turn's request to outpace consumption. SK cooldown
+-- is 300s, so one cooldown = 5 min: cap = maxRequest + floor(perMin * 5), bound maxBatch.
+-- Own do-scope: run.lua's main chunk is at Lua's 200-local limit (see the monitor block).
+do
+  local dGold = stockplan.plan({ stockKeeper = SK({ { name = "g", target = 100000, craftTo = 100000, maxRequest = 4096, maxBatch = 32768 } }),
+    ledger = emptyLedger, drain = { g = 1000 }, resolve = function() return 18776, true, false end })
+  t.eq(dGold[1].request, 9096, "drain-aware: request = base cap + one cooldown of drain (4096 + 1000*5)")
+  t.check(dGold[1].capped == true, "drain-aware: still capped below the full deficit")
+  -- measured drain but no maxBatch configured -> base cap unchanged (opt-in)
+  local dNoBatch = stockplan.plan({ stockKeeper = SK({ { name = "g", target = 100000, craftTo = 100000, maxRequest = 4096 } }),
+    ledger = emptyLedger, drain = { g = 1000 }, resolve = function() return 18776, true, false end })
+  t.eq(dNoBatch[1].request, 4096, "drain measured but no maxBatch -> base cap unchanged")
+  -- maxBatch configured but no measured drain -> base cap unchanged
+  local dNoDrain = stockplan.plan({ stockKeeper = SK({ { name = "g", target = 100000, craftTo = 100000, maxRequest = 4096, maxBatch = 32768 } }),
+    ledger = emptyLedger, resolve = function() return 18776, true, false end })
+  t.eq(dNoDrain[1].request, 4096, "maxBatch set but no measured drain -> base cap unchanged")
+  -- maxBatch not above the base cap -> no scaling (can only raise, never lower)
+  local dLowBatch = stockplan.plan({ stockKeeper = SK({ { name = "g", target = 100000, craftTo = 100000, maxRequest = 4096, maxBatch = 4096 } }),
+    ledger = emptyLedger, drain = { g = 1000 }, resolve = function() return 18776, true, false end })
+  t.eq(dLowBatch[1].request, 4096, "maxBatch not above base cap -> no scaling")
+  -- a huge drain is bounded by maxBatch
+  local dClamp = stockplan.plan({ stockKeeper = SK({ { name = "g", target = 100000, craftTo = 100000, maxRequest = 4096, maxBatch = 16384 } }),
+    ledger = emptyLedger, drain = { g = 100000 }, resolve = function() return 0, true, false end })
+  t.eq(dClamp[1].request, 16384, "drain-aware cap is bounded by maxBatch")
+  -- the drain-aware request never exceeds the deficit (craftTo ceiling holds)
+  local dDeficit = stockplan.plan({ stockKeeper = SK({ { name = "g", target = 100000, craftTo = 100000, maxRequest = 4096, maxBatch = 32768 } }),
+    ledger = emptyLedger, drain = { g = 1000 }, resolve = function() return 98000, true, false end })
+  t.eq(dDeficit[1].request, 2000, "drain-aware request never exceeds the deficit")
+  t.check(dDeficit[1].capped == false, "request below the drain-aware cap is not capped")
+end
 
 -- recent ledger record within cooldown -> ON COOLDOWN with secondsLeft
 local cdP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100, craftTo = 200 } }),

@@ -65,6 +65,12 @@ return {
     overflowReserve = 0,    -- compress slots reserved first within maxCraftsPerCycle (0 = pure priority)
     maxRequest = 65536,
     maxBridgeRequest = 32,  -- max count sent to one RS Bridge craftItem call
+    -- Drain-aware batch sizing (DECISIONS #6): opt-in ceiling that lets ONE turn's
+    -- request grow above maxRequest for items measured to drain faster than the base
+    -- batch replenishes over a cooldown (live: gold starved at 4096/turn). Sizing =
+    -- maxRequest + one cooldown of measured drain, bounded here. Unset/nil = off
+    -- (base cap only); a per-item `maxBatch` overrides this global for that item.
+    -- maxBatch = 32768,
     -- Refill uses your exact numbers: set craftTo == target to maintain that floor,
     -- or set craftTo higher than target for a min->max buffer. No auto-band.
     --

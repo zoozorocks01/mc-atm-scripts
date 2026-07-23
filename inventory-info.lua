@@ -291,6 +291,9 @@ local function normalizeConfig(raw)
   -- clamps it to the cap at use time, so a mis-set value can never exceed maxCraftsPerCycle).
   cfg.stockKeeper.manualReserve = math.max(0, math.floor(tonumber(cfg.stockKeeper.manualReserve) or 1))
   cfg.stockKeeper.maxRequest = tonumber(cfg.stockKeeper.maxRequest) or 65536
+  -- DECISIONS #6: optional drain-aware batch ceiling. nil => base cap only, so
+  -- drain-aware sizing stays opt-in; a per-item maxBatch overrides this global.
+  cfg.stockKeeper.maxBatch = tonumber(cfg.stockKeeper.maxBatch)
   cfg.stockKeeper.maxBridgeRequest = math.max(1, math.floor(tonumber(cfg.stockKeeper.maxBridgeRequest) or 32))
   if type(cfg.stockKeeper.items) ~= "table" then cfg.stockKeeper.items = {} end
   if type(cfg.stockKeeper.categories) ~= "table" then cfg.stockKeeper.categories = {} end
@@ -1330,6 +1333,8 @@ local function effectiveStockKeeper()
     -- the craft runner per cycle, not on the plan display.
     maxCraftsPerCycle = math.huge,
     maxRequest = stock.maxRequest,
+    -- Drain-aware batch ceiling (DECISIONS #6): opt-in; nil keeps the base cap.
+    maxBatch = stock.maxBatch,
     categories = categories,
   }
 end
@@ -1366,11 +1371,33 @@ local function planStockActions(items)
   -- is something to plan: an idle keeper must not surface a ledger error.
   local ledger = readLedger()
 
+  -- Drain-aware batch sizing (DECISIONS #6): hand the planner each managed item's
+  -- MEASURED consumption (units/min) so a high-drain metal can be sized to outpace
+  -- its drain instead of a fixed base batch. Only sustained drains qualify --
+  -- monitor.drainRate applies the same thresholds/spike guard as the FALLING-BEHIND
+  -- signal. Absent trend history (smart mode off / fresh boot) => no map => base cap.
+  local drain = nil
+  if next(trendHistory) ~= nil then
+    local okMon, monlib = pcall(require, "atm10-monitor")
+    if okMon and monlib and monlib.drainRate then
+      drain = {}
+      for _, category in ipairs(stock.categories or {}) do
+        for _, target in ipairs(category.items or {}) do
+          if target.name and drain[target.name] == nil then
+            local perMin = monlib.drainRate(trendHistory[target.name])
+            if perMin and perMin > 0 then drain[target.name] = perMin end
+          end
+        end
+      end
+    end
+  end
+
   return stockplan.plan({
     stockKeeper = stock,
     now = nowMs(),
     ledger = ledger,
     ledgerError = ledgerError,
+    drain = drain,
     resolve = function(name)
       local item = findStoredItem(items, name)
       local amount = item and itemAmount(item) or 0
@@ -2131,21 +2158,23 @@ local function scan()
   if not managedStore then managedStore = loadManaged() end
   local managedNames = buildManagedItemNames()
   local listedItems = collectListedItems(items)
+  -- Restore the persisted drain window BEFORE planning: drain-aware batch sizing
+  -- (DECISIONS #6) reads it in planStockActions, and the trend file survives reboot,
+  -- so a rebooted manager should size high-drain batches on its first scan instead
+  -- of waiting a cycle. (Recording new samples still happens below, post-plan.)
+  local smartOn = managed.getSetting(managedStore, "smartMode") == true
+  if smartOn and not trendsLoaded then
+    trendHistory = loadTrends()
+    trendsLoaded = true
+  end
   local stockPlans = planStockActions(items)
   -- append overflow/compress plans so they render + approve like refill rows
   for _, r in ipairs(planOverflowActions(items)) do stockPlans[#stockPlans + 1] = r end
   markPhase("planningMs")
 
   -- smart mode (opt-in): record consumption trends and compute quota suggestions
-  local smartOn = managed.getSetting(managedStore, "smartMode") == true
   local suggestions = {}
   if smartOn then
-    -- lazily restore the persisted drain window the first time smart mode runs, so
-    -- a reboot continues learning instead of starting from zero
-    if not trendsLoaded then
-      trendHistory = loadTrends()
-      trendsLoaded = true
-    end
     if not dismissedLoaded then
       dismissedSuggestions = suggest.pruneDismissed(loadDismissed(), nowMs(), DISMISSED_OPTS)
       dismissedLoaded = true
