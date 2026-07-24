@@ -34,6 +34,7 @@ Commands:
 Environment:
   ATM10_SERVER_OPS_DIR, ATM10_SERVER_REGISTRY, ATM10_HOST_ID
   ATM10_HOST, ATM10_SERVER_DIR, ATM10_COMPUTER_DIR, ATM10_MINECRAFT_PORT, ATM10_SSH_OPTS
+  ATM10_TRANSPORT (auto, local, or ssh)
   ATM10_DIAG_CMD, ATM10_SIM_CMD, ATM10_APPROVE_TIMEOUT, ATM10_APPROVE_INTERVAL
 USAGE
 }
@@ -46,11 +47,11 @@ remote_dir="$(quote_remote "$COMPUTER_DIR")"
 server_dir="$(quote_remote "$SERVER_DIR")"
 
 run_remote() {
-  ssh "${SSH_OPTS[@]}" "$HOST" "cd $remote_dir && $1"
+  atm10_run_in "$COMPUTER_DIR" "$1"
 }
 
 run_server_remote() {
-  ssh "${SSH_OPTS[@]}" "$HOST" "cd $server_dir && $1"
+  atm10_run_in "$SERVER_DIR" "$1"
 }
 
 now_ms() {
@@ -88,14 +89,28 @@ run_step() {
 run_tests() {
   run_step "lua tests/run.lua" lua tests/run.lua
   run_step "lua tests/smoke.lua" lua tests/smoke.lua
+  run_step "lua tests/smoke_remote.lua" lua tests/smoke_remote.lua
+  run_step "lua tests/smoke_request.lua" lua tests/smoke_request.lua
+  run_step "lua tests/smoke_update.lua" lua tests/smoke_update.lua
   run_step "lua tests/smoke_auto.lua" lua tests/smoke_auto.lua
   run_step "lua tests/smoke_sim.lua" lua tests/smoke_sim.lua
+  run_step "lua tests/smoke_patterns.lua" lua tests/smoke_patterns.lua
+  run_step "lua tests/smoke_bridge_probe.lua" lua tests/smoke_bridge_probe.lua
+  run_step "lua tests/smoke_target_probe.lua" lua tests/smoke_target_probe.lua
+  run_step "lua tests/smoke_reload.lua" lua tests/smoke_reload.lua
+  run_step "lua tests/smoke_safereboot.lua" lua tests/smoke_safereboot.lua
+  run_step "lua tests/smoke_probe.lua" lua tests/smoke_probe.lua
   run_step "lua tools/atm10-sim.lua all" lua tools/atm10-sim.lua all
+  run_step "bash tests/smoke_diagnostics.sh" bash tests/smoke_diagnostics.sh
   run_step "bash syntax" bash -n \
     tools/atm10-env.sh \
     tools/atm10-diagnostics.sh \
     tools/atm10-live-pass.sh \
-    tools/atm10-iterate.sh
+    tools/atm10-iterate.sh \
+    tools/atm10-test-session.sh \
+    tests/smoke_host_tools.sh
+  run_step "host tools smoke" bash tests/smoke_host_tools.sh
+  run_step "live session parser" tools/atm10-test-session.sh selftest
 }
 
 run_sim() {
@@ -150,8 +165,8 @@ write_approve_request() {
   local escaped payload
   escaped="$(lua_string_escape "$target")"
   payload="$(printf '{\n  target = "%s",\n  requestedAt = %s,\n}\n' "$escaped" "$requested_at")"
-  printf '%s' "$payload" | ssh "${SSH_OPTS[@]}" "$HOST" \
-    "cd $remote_dir && cat > .atm10-approve-request.tmp && mv .atm10-approve-request.tmp .atm10-approve-request"
+  printf '%s' "$payload" | run_remote \
+    "cat > .atm10-approve-request.tmp && mv .atm10-approve-request.tmp .atm10-approve-request"
 }
 
 poll_approve_result() {
@@ -224,8 +239,8 @@ write_soak_request() {
     payload="$payload$(printf '  maxPerCycle = %s,\n' "$max_per_cycle")"
   fi
   payload="$payload}"
-  printf '%s\n' "$payload" | ssh "${SSH_OPTS[@]}" "$HOST" \
-    "cd $remote_dir && cat > .atm10-soak-request.tmp && mv .atm10-soak-request.tmp .atm10-soak-request"
+  printf '%s\n' "$payload" | run_remote \
+    "cat > .atm10-soak-request.tmp && mv .atm10-soak-request.tmp .atm10-soak-request"
 }
 
 # A soak report is "ours" when its end/rejection stamp is not older than our
@@ -321,6 +336,7 @@ put lib/atm10-balance.lua atm10-balance.lua
 put lib/atm10-suggest.lua atm10-suggest.lua
 put lib/atm10-presets.lua atm10-presets.lua
 put lib/atm10-console.lua atm10-console.lua
+put lib/atm10-management.lua atm10-management.lua
 put lib/atm10-health.lua atm10-health.lua
 put lib/atm10-monitor.lua atm10-monitor.lua
 put lib/atm10-pattern-give.lua atm10-pattern-give.lua

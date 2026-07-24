@@ -277,6 +277,26 @@ do
   t.eq(ch.recentFail, 1, "monitor.craft: 1 recent fail")
   t.eq(ch.ratePerMin, 12, "monitor.craft: passes through crafts/min")
 
+  local active = {
+    tasks = {
+      { name = "t:lead", label = "Lead", bridgeId = 258, crafted = 0, quantity = 64, progressPct = 0 },
+      { name = "t:fresh", label = "Fresh", bridgeId = 259, crafted = 2, quantity = 64, progressPct = 3 },
+      { name = "t:opaque", label = "Opaque" }, -- fallback task list has no observable progress
+    },
+  }
+  local rs = monitor.rsTasks(active, nil, NOW, { stuckMs = 300000 })
+  t.eq(rs.active, 2, "monitor.rsTasks: tracks only tasks with observable progress")
+  t.eq(#rs.stuck, 0, "monitor.rsTasks: fresh snapshot is not called stuck")
+  rs = monitor.rsTasks(active, rs.history, NOW + 300000, { stuckMs = 300000 })
+  t.eq(#rs.stuck, 2, "monitor.rsTasks: unchanged RS tasks become stuck at 5m")
+  t.eq(rs.stuck[1].label, "Lead", "monitor.rsTasks: preserves task labels for operators")
+  active.tasks[2].crafted, active.tasks[2].progressPct = 3, 5
+  rs = monitor.rsTasks(active, rs.history, NOW + 300001, { stuckMs = 300000 })
+  t.eq(#rs.stuck, 1, "monitor.rsTasks: progress resets only that task's timer")
+  t.eq(rs.stuck[1].bridgeId, 258, "monitor.rsTasks: exposes bridge task id for investigation")
+  rs = monitor.rsTasks({ tasks = {} }, rs.history, NOW + 300002, { stuckMs = 300000 })
+  t.eq(next(rs.history), nil, "monitor.rsTasks: drops completed tasks from bounded history")
+
   local paceOk = monitor.pace({ loopMs = 1200, refreshMs = 5000, dataAgeMs = 0 }, NOW)
   t.eq(paceOk.status, "OK", "monitor.pace: low loop load is OK")
   t.eq(paceOk.loadPct, 24, "monitor.pace: computes scan load percentage")
@@ -301,6 +321,50 @@ do
   t.eq(#dm.sourceMore, 1, "monitor.demand: 1 source-more (raw input draining; spiky one excluded)")
   t.eq(dm.sourceMore[1].name, "ma:silver_dust", "monitor.demand: silver dust -> source more")
   t.check(dm.sourceMore[1].perMin >= 199 and dm.sourceMore[1].perMin <= 201, "monitor.demand: ~200/min drain")
+end
+
+-- ---------------------------------------------------------------------------
+print("management v0 (read-only bounded objective selection)")
+do
+  local management = require("atm10-management")
+  local healthy = {
+    plans = {
+      { action = "WOULD CRAFT", name = "alltheores:lead_ingot", label = "Lead", request = 9000, amount = 4, target = 500, craftTo = 9004, priority = 0.9 },
+      { action = "WOULD CRAFT", name = "alltheores:silver_ingot", label = "Silver", request = 1200, amount = 8, target = 500, craftTo = 1208, priority = 0.8 },
+      { action = "WOULD CRAFT", name = "alltheores:lead_dust", request = 5000, priority = 1 },
+      { action = "WOULD CRAFT", name = "alltheores:lead_block", request = 5000, priority = 1, kind = "compress" },
+      { action = "WOULD CRAFT", name = "allthemodium:allthemodium_ingot", request = 5000, priority = 1 },
+    },
+    queue = {}, bridge = { connected = true, online = true }, loop = { status = "OK" }, rsStuckCount = 0,
+  }
+  local v0 = management.plan(healthy)
+  t.eq(v0.state, "READY", "management.plan: healthy snapshots propose one target")
+  t.eq(v0.target.name, "alltheores:lead_ingot", "management.plan: picks highest-priority safe ingot")
+  t.eq(v0.target.remaining, 4000, "management.plan: total objective is capped at 4000")
+  t.eq(v0.target.capped, true, "management.plan: reports when the proposal was capped")
+  t.eq(management.statusLine(v0), "V0 READY: Lead +4000 (approval required)",
+    "management.statusLine: ready objective is concise and non-mutating")
+  -- The live manager passes the keyed persisted queue shape, not a numeric
+  -- list. A failure here must block v0's read-only proposal just as it does in
+  -- the production snapshot.
+  healthy.queue = { entries = {
+    ["alltheores:tin_ingot"] = { error = "craft failed" },
+    ["alltheores:osmium_ingot"] = { error = "craft failed" },
+    ["minecraft:gold_ingot"] = { error = "UNKNOWN_ERROR" },
+    ["mysticalagriculture:tertium_essence"] = { error = "MISSING_ITEMS" },
+  } }
+  v0 = management.plan(healthy)
+  t.eq(v0.state, "BLOCKED", "management.plan: failed queue blocks a new objective")
+  t.eq(v0.reason, "queue failures: 4 (craft failed x2; MISSING_ITEMS x1; +1 more)",
+    "management.plan: names and deterministically summarizes the queue blocker")
+  t.eq(management.statusLine(v0), "V0 BLOCKED: queue failures: 4 (craft failed x2; MISSING_ITEMS x1; +1 more)",
+    "management.statusLine: preserves the read-only failure summary")
+  healthy.queue, healthy.loop = {}, { status = "SLOW" }
+  v0 = management.plan(healthy)
+  t.eq(v0.reason, "manager loop SLOW", "management.plan: loop health blocks the proposal")
+  healthy.loop, healthy.rsStuckCount = { status = "OK" }, 2
+  v0 = management.plan(healthy)
+  t.eq(v0.reason, "frozen RS tasks: 2", "management.plan: frozen RS tasks block the proposal")
 end
 
 -- control.unsettledJobs: safereboot's per-job settled check over recorded craftItem
@@ -2233,18 +2297,44 @@ do
     ["a"] = "A", ["a.tmp"] = "Anew",  -- orphan: main exists -> discard the tmp
     ["b.tmp"] = "Bnew",               -- main missing -> recover (move tmp -> b)
     ["c"] = "C",                      -- no tmp -> untouched
+    ["d"] = "D", ["d.old"] = "Dold", -- completed replace interrupted before rollback cleanup
+    ["e.old"] = "Eold",               -- live missing -> restore rollback fallback
   }
   local fakeFs = {
     exists = function(p) return store[p] ~= nil end,
     delete = function(p) store[p] = nil end,
     move = function(s, d) store[d] = store[s]; store[s] = nil end,
   }
-  local disc, rec = health.sweepTmps(fakeFs, { "a", "b", "c" })
-  t.check(disc == 1 and rec == 1, "sweepTmps: 1 discarded + 1 recovered")
+  local disc, rec = health.sweepTmps(fakeFs, { "a", "b", "c", "d", "e" })
+  t.check(disc == 2 and rec == 2, "sweepTmps: tmp/old artifacts are discarded or recovered")
   t.check(store["a"] == "A" and store["a.tmp"] == nil, "sweepTmps: orphan tmp discarded, main file kept intact")
   t.check(store["b"] == "Bnew" and store["b.tmp"] == nil, "sweepTmps: tmp recovered to main when main was missing")
   t.check(store["c"] == "C", "sweepTmps: a file with no .tmp is left untouched")
+  t.check(store["d"] == "D" and store["d.old"] == nil, "sweepTmps: stale rollback is discarded after a completed replace")
+  t.check(store["e"] == "Eold" and store["e.old"] == nil, "sweepTmps: rollback restores a missing live file")
   t.check((select(1, health.sweepTmps(nil, {}))) == 0, "sweepTmps: nil fs is a guarded no-op")
+
+  -- Replacement is a two-move transaction: a final-move failure must put the
+  -- previous complete state back, not leave the manager booting with no state.
+  store = { ["state"] = "old", ["state.tmp"] = "new" }
+  local failFinalMove = true
+  fakeFs = {
+    exists = function(p) return store[p] ~= nil end,
+    delete = function(p) store[p] = nil end,
+    move = function(s, d)
+      if failFinalMove and s == "state.tmp" and d == "state" then error("simulated move failure") end
+      store[d] = store[s]; store[s] = nil
+    end,
+  }
+  t.check(health.replaceFile(fakeFs, "state", "state.tmp") == false,
+    "replaceFile: final-move failure is reported")
+  t.check(store["state"] == "old" and store["state.tmp"] == "new" and store["state.old"] == nil,
+    "replaceFile: final-move failure restores the old live state and preserves tmp")
+  failFinalMove = false
+  t.check(health.replaceFile(fakeFs, "state", "state.tmp") == true,
+    "replaceFile: completed replacement succeeds")
+  t.check(store["state"] == "new" and store["state.tmp"] == nil and store["state.old"] == nil,
+    "replaceFile: completed replacement removes temporary rollback files")
 end
 
 -- ---------------------------------------------------------------------------
@@ -2691,6 +2781,12 @@ do
   t.eq(power.headroom(5, 0), nil, "headroom: cap 0 -> nil (display hides it)")
   t.eq(power.headroom(nil, 100), 0, "headroom: nil used -> 0%")
   t.check(power.headroom(150, 100) > 100, "headroom: over-cap is not clamped (anomaly shows)")
+  local savedPct, savedNet = power.historyPair({ history = { 1, "bad", 3, 4 }, netHistory = { 10, 20, 30, 40 } }, 2)
+  t.eq(#savedPct, 2, "historyPair: retains the newest bounded numeric pairs")
+  t.eq(savedPct[1], 3, "historyPair: drops malformed paired samples")
+  t.eq(savedNet[2], 40, "historyPair: keeps paired net-flow values aligned")
+  savedPct, savedNet = power.historyPair({ history = { 1 }, netHistory = {} }, 180)
+  t.check(#savedPct == 0 and #savedNet == 0, "historyPair: incomplete persistence degrades to an empty history")
   -- QUICK-3: edge-triggered alarm (fires on ENTRY to an alarming status, not while it persists)
   local fire, active = power.alarmDecision("CRITICAL", false)
   t.check(fire == true and active == true, "alarm: fires on entry to CRITICAL")

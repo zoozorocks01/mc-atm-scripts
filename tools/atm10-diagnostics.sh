@@ -48,6 +48,7 @@ Environment overrides:
   ATM10_DIAG_INTERVAL     watch interval seconds (default: 5)
   ATM10_DIAG_OUT_DIR      save/watch-log output dir (default: /tmp/atm10-diagnostics)
   ATM10_SSH_OPTS          extra ssh options (default: batch mode, 8s connect timeout)
+  ATM10_TRANSPORT         auto (default), local, or ssh; useful for diagnostics/testing
 USAGE
 }
 
@@ -173,11 +174,11 @@ show_file .atm10-target-probe.txt 220
 '
 
 run_remote() {
-  ssh "${SSH_OPTS[@]}" "$HOST" "cd $remote_dir && $1"
+  atm10_run_in "$COMPUTER_DIR" "$1"
 }
 
 run_server_remote() {
-  ssh "${SSH_OPTS[@]}" "$HOST" "cd $server_dir && $1"
+  atm10_run_in "$SERVER_DIR" "$1"
 }
 
 validate_computer_id() {
@@ -191,6 +192,13 @@ validate_computer_id() {
 
 screen_stuff() {
   local command payload
+  # `screen -X stuff` returning through SSH does not prove that the managed
+  # server session has a reachable control socket. GNU Screen 4 has no `-Q`,
+  # so list its sockets and require the configured session before injecting.
+  if ! run_server_remote "export SCREENDIR=$server_dir/.screen; screen -ls | grep -Fq -- $screen_session" >/dev/null 2>&1; then
+    printf 'No reachable screen control socket for %s; refusing console injection. Run screen-status to inspect; do not assume a chat message was delivered.\n' "$SCREEN_SESSION" >&2
+    return 1
+  fi
   command="$1"
   # Leading \r flushes any half-typed line stuck in the console input (observed
   # 2026-07-09: a stuck partial line silently ate every subsequent command for
@@ -620,7 +628,7 @@ case "${1:-snapshot}" in
     esac
     chat_player="${ATM10_CHAT_PLAYER:-Zoozorocks}"
     screen_stuff "tell $chat_player [$( echo "${ATM10_CHAT_FROM:-Claude}" )] $chat_msg"
-    printf 'Whispered %s via %s\n' "$chat_player" "$SCREEN_SESSION"
+    printf 'Injected private chat for %s via %s; verify receipt in-game or through chat-log.\n' "$chat_player" "$SCREEN_SESSION"
     ;;
   chat-log)
     chat_lines="${2:-15}"

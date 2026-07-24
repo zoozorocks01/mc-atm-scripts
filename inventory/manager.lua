@@ -80,6 +80,21 @@ local balance = require("atm10-balance")
 local suggest = require("atm10-suggest")
 local presets = require("atm10-presets")
 local console = require("atm10-console")
+-- atm10-management is OPTIONAL like atm10-health: pcall the require + fall back to a
+-- no-op stub so a not-yet-deployed / missing module DEGRADES (the management line just
+-- reads "unavailable") instead of boot-crashing the manager. Same failure class as the
+-- June atm10-health incident -- a deploy manifest that shipped a require() without its
+-- module HARD-crash-looped computer 6. Assigned inside a do-scope so there is no
+-- net-new top-level local (the manager is at the locals cap); the existing `management`
+-- slot is reused. Mirrors the boot-time defensive require at line ~3939.
+local management
+do
+  local ok, mod = pcall(require, "atm10-management")
+  management = (ok and mod) or {
+    plan = function() return { state = "IDLE", reason = "management module unavailable" } end,
+    statusLine = function() return "V0 unavailable (management module not loaded)" end,
+  }
+end
 
 local DEFAULT_CONFIG = {
   mode = "manual",          -- manual: plan + require operator approval before a craft fires
@@ -365,13 +380,9 @@ local function atomicWrite(path, content)
   if not file then return false end
   local wrote = pcall(function() file.write(content); file.close() end)
   if not wrote then pcall(fs.delete, tmp); return false end
-  local moved = pcall(function()
-    if fs.exists(path) then fs.delete(path) end
-    fs.move(tmp, path)
-  end)
-  -- on move failure leave the .tmp in place: if delete(path) already succeeded the
-  -- tmp holds the only copy of the new data. The next atomicWrite clears stale tmp.
-  return moved == true
+  local ok, health = pcall(require, "atm10-health")
+  if not ok or not health or type(health.replaceFile) ~= "function" then return false end
+  return health.replaceFile(fs, path, tmp) == true
 end
 
 local function writeLedger(data)
@@ -504,6 +515,19 @@ function ui.statusRows(rows, limit)
   return out
 end
 
+-- RS task progress is independent of queue state: a broken crafter can leave
+-- RS reporting an active task after its manager queue row is gone. Keep this
+-- history in memory only; it is diagnostic and must never alter craft policy.
+function ui.rsTaskHealth(tasks, now)
+  local ok, monlib = pcall(require, "atm10-monitor")
+  if not ok or not monlib or type(monlib.rsTasks) ~= "function" then
+    return { active = 0, stuck = {} }
+  end
+  local rs = monlib.rsTasks(tasks, ui.rsTaskHistory, now, {})
+  ui.rsTaskHistory = rs.history
+  return rs
+end
+
 function ui.writeStatusState(data, now)
   data = type(data) == "table" and data or {}
   now = tonumber(now) or nowMs()
@@ -582,9 +606,13 @@ function ui.writeStatusState(data, now)
   local ok, monlib = pcall(require, "atm10-monitor")
   if ok and monlib then
     local ch = monlib.craft(data.craftQueue, craftResults, #firedTimes, now, {})
+    local rs = ui.rsTaskHealth(data.craftTasks, now)
     state.crafts.inFlight = ch.inFlight
     state.crafts.stuckCount = #ch.stuck
     state.crafts.stuck = ui.statusRows(ch.stuck, 5)
+    state.crafts.rsActive = rs.active
+    state.crafts.rsStuckCount = #rs.stuck
+    state.crafts.rsStuck = ui.statusRows(rs.stuck, 5)
     state.crafts.recentOk = ch.recentOk
     state.crafts.recentFail = ch.recentFail
 
@@ -612,7 +640,16 @@ function ui.writeStatusState(data, now)
     end
 
     if ph.status ~= "OK" then state.summary = ph.status end
-    if #ch.stuck > 0 then state.summary = "STUCK" end
+    if #ch.stuck > 0 or #rs.stuck > 0 then state.summary = "STUCK" end
+    -- v0 management is intentionally observe/plan only. It reads the same
+    -- snapshots as the dashboard and cannot enqueue or fire a craft.
+    state.management = management.plan({
+      plans = data.stockPlans,
+      queue = data.craftQueue,
+      bridge = state.bridge,
+      loop = { status = ph.status },
+      rsStuckCount = #rs.stuck,
+    }, {})
   else
     state.summary = "DEGRADED"
     state.error = "atm10-monitor unavailable"
@@ -2071,6 +2108,17 @@ local function scan()
   local online = call(bridge, "isOnline")
   markPhase("bridgeStatusMs")
 
+  -- STAB-6: an explicit offline result means this cached peripheral handle is
+  -- stale. Do not make another read through it this cycle; drop it so the next
+  -- scan re-wraps the bridge after the chunk/peripheral has settled.
+  if connected == false or online == false then
+    bridge, bridgeName = nil, nil
+    status = "Grid OFFLINE - holding last plan"
+    craftingCache.__bridge.allowFire = craftingCache.__health.gateCrafts(craftingCache.__bridge, false)
+    profile.totalMs = math.max(0, nowMs() - profile.startedAt)
+    return nil, "stale"
+  end
+
   local items = getItems()
   markPhase("getItemsMs")
 
@@ -2078,10 +2126,8 @@ local function scan()
   -- error or laggy/partial tick. If we HAD items last cycle (or the grid reports
   -- offline), treat this as stale and hold the last plan rather than manufacturing
   -- a full set of phantom deficits (which in auto mode could re-fire bulk crafts).
-  if (next(items) == nil and lastUnique > 0) or online == false or connected == false then
-    status = (online == false or connected == false)
-      and "Grid OFFLINE - holding last plan"
-      or "Grid read failed - holding last plan"
+  if next(items) == nil and lastUnique > 0 then
+    status = "Grid read failed - holding last plan"
     -- degraded cycle: a stale/offline read must hold back craft-firing.
     craftingCache.__bridge.allowFire = craftingCache.__health.gateCrafts(craftingCache.__bridge, false)
     profile.totalMs = math.max(0, nowMs() - profile.startedAt)
@@ -2455,9 +2501,18 @@ local function drawPlanPage(data)
   -- (its inputs only change on scan) and read here so it doesn't re-loop every
   -- render/touch. See managed.countNotInGrid for why presence-in-grid is the signal.
   local notInGrid = data.notInGrid or 0
-  line(planLabelY, "Stock Keeper Plan [" .. tostring(effectiveMode()) ..
-    "]   page " .. pg.page .. "/" .. pg.pages ..
-    (notInGrid > 0 and ("   " .. notInGrid .. " not in grid") or ""), colors.cyan)
+  -- Keep v0's one-line proposal/blocker on the default page too: HEALTH has the
+  -- detailed explanation, but PLAN is where Zach normally starts. This remains
+  -- display-only and uses no additional bridge calls.
+  local mgmt = management.plan({
+    plans = data.stockPlans,
+    queue = data.craftQueue,
+    bridge = { connected = data.connected, online = data.online, degraded = data.bridgeDegraded == true },
+  }, {})
+  line(planLabelY, uiDraw.fit("Stock Keeper Plan [" .. tostring(effectiveMode()) .. "]  " ..
+    management.statusLine(mgmt) .. "  page " .. pg.page .. "/" .. pg.pages ..
+    (notInGrid > 0 and ("   " .. notInGrid .. " not in grid") or ""), w),
+    mgmt.state == "BLOCKED" and colors.orange or (mgmt.state == "READY" and colors.lime or colors.cyan))
   if w >= 72 then
     line(planLabelY + 1, uiDraw.fit("ITEM", math.max(18, w - 39)) .. "     HAVE   TARGET    PLAN   STATUS", colors.gray)
   end
@@ -2988,6 +3043,7 @@ local function drawHealthPage(data)
 
   -- FUNCTIONING --------------------------------------------------------------
   local ch = monlib.craft(data.craftQueue, craftResults, #firedTimes, now, {})
+  local rs = ui.rsTaskHealth(data.craftTasks, now)
   local btxt, bcol = "ONLINE", colors.lime
   if data.online == false then
     btxt, bcol = "OFFLINE", colors.red
@@ -2998,13 +3054,22 @@ local function drawHealthPage(data)
   mwrite(1, 7, "Bridge: ", colors.gray)
   mwrite(9, 7, btxt, bcol)
   line(8, "Crafts: " .. ch.ratePerMin .. "/min   " .. ch.inFlight .. " in-flight" ..
-    (#ch.stuck > 0 and ("   " .. #ch.stuck .. " STUCK") or ""),
-    #ch.stuck > 0 and colors.orange or colors.white)
+    (#ch.stuck > 0 and ("   " .. #ch.stuck .. " QUEUE STUCK") or "") ..
+    (#rs.stuck > 0 and ("   " .. #rs.stuck .. " RS STUCK") or ""),
+    (#ch.stuck > 0 or #rs.stuck > 0) and colors.orange or colors.white)
   line(9, "Recent: " .. ch.recentOk .. " ok   " .. ch.recentFail .. " failed (30m)",
     ch.recentFail > 0 and colors.orange or colors.gray)
   local ph = monlib.pace(data.loop or craftingCache.__loop, now, {
     refreshMs = ((config and config.refreshSeconds) or REFRESH_SECONDS) * 1000,
   })
+  local mgmt = management.plan({
+    plans = data.stockPlans,
+    queue = data.craftQueue,
+    bridge = { connected = data.connected, online = data.online,
+      degraded = craftingCache.__bridge and craftingCache.__bridge.allowFire == false },
+    loop = { status = ph.status },
+    rsStuckCount = #rs.stuck,
+  }, {})
   local function sec(v)
     v = tonumber(v) or 0
     if v >= 10 then return tostring(math.floor(v)) .. "s" end
@@ -3034,6 +3099,19 @@ local function drawHealthPage(data)
     end
     y = y + 1
   end
+  if #rs.stuck > 0 then
+    line(y, "RS TASKS STUCK (" .. #rs.stuck .. "):", colors.red); y = y + 1
+    for i = 1, math.min(#rs.stuck, 3) do
+      line(y, "  " .. uiDraw.fit(tostring(rs.stuck[i].label), 18) .. " " .. math.floor(rs.stuck[i].ageMin) .. "m", colors.red)
+      y = y + 1
+    end
+    y = y + 1
+  end
+
+  local mgmtLine = management.statusLine(mgmt)
+  line(y, uiDraw.fit(mgmtLine, w), mgmt.state == "BLOCKED" and colors.orange or
+    (mgmt.state == "READY" and colors.lime or colors.gray))
+  y = y + 2
 
   -- KEEPING UP ---------------------------------------------------------------
   if next(trendHistory) == nil then

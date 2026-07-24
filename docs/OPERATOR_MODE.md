@@ -225,3 +225,21 @@ Host-side console commands:
 - `tools/atm10-diagnostics.sh cc-turn-on 6` is safe only when the computer is off.
 - `tools/atm10-diagnostics.sh cc-restart 6` is intentionally disabled; never hard
   shutdown/restart the running RS-bridge manager from the server console.
+
+## Queue safety + rollback, one page (operator digest)
+
+- **A failed craft can't cascade:** the row quarantines individually
+  (DECISIONS #1), late deliveries un-quarantine it automatically
+  (DECISIONS #3), and soak windows fail-stop everything (DECISIONS #2). Worst
+  case is always "stopped", never "runaway".
+- **A failed update can't brick computer 6:** the updater keeps the previous
+  script as `<name>.old` and restores it if installation fails; interrupted
+  updates self-heal on the next `update` run. If a computer ever boots
+  missing BOTH live and backup, the updater errors with the exact filename —
+  that is the signal to re-run `update` (or deploy-inventory) rather than
+  hand-edit.
+- **A crash can't corrupt manager state:** queue/managed/ledger writes go
+  through atomic replacement with boot-time recovery of interrupted writes.
+- **Manual rollback:** the `.old` file beside any script IS the previous
+  version; `deploy-inventory` re-ships everything from the repo, which is the
+  authoritative rollback for any bad deploy.

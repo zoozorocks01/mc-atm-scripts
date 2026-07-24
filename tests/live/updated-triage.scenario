@@ -1,7 +1,7 @@
-# 2026-07-10 triage, informed by the jam autopsy (.k2/inbox note): the queue's
+# Updated triage pipeline, originally informed by the 2026-07-10 jam autopsy:
 # failed rows auto-retry and will NOT clear by tapping; the real target is the
 # zombie RS tasks and the unverified crafter push target.
-TITLE: Jam triage - reload, name the zombies, fix the bad crafter
+TITLE: Updated triage and testing pipeline
 HYPOTHESIS: The unverified push-target crafter at 1149 75 2642 is freezing tasks; zombies accumulated behind it. Naming the active tasks (new activeTasks diagnostics) plus fixing that crafter's facing unjams the dust/compress lane.
 STEP zach: On computer 6, run atm10-reload (NOT update, NOT reboot). Reply !ok when the manager UI is back.
 CAPTURE: craftstate status

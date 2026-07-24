@@ -69,7 +69,7 @@ need_diag() {
 }
 
 run_server_remote() {
-  ssh "${SSH_OPTS[@]}" "$HOST" "cd $server_dir && $1"
+  atm10_run_in "$SERVER_DIR" "$1"
 }
 
 npe_count() {

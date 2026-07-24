@@ -253,7 +253,9 @@ check(type(statusFile) == "table" and statusFile.mode == "auto"
   and statusFile.queue and statusFile.queue.crafting == 1
   and statusFile.crafts and statusFile.crafts.inFlight == 1
   and statusFile.plan and statusFile.plan.wouldCraftCount == 1
-  and statusFile.loop and statusFile.loop.status == "OK",
+  and statusFile.loop and statusFile.loop.status == "OK"
+  and statusFile.management and type(statusFile.management.state) == "string"
+  and type(statusFile.management.reason) == "string",
   "manager writes a compact .atm10-status summary for agent polling")
 check(files[".atm10-drain-request"] == nil,
   "manager clears a stale drain request flag on boot")
@@ -786,6 +788,46 @@ check(okR == false and tostring(errR):find(SENTINEL, 1, true) ~= nil,
   "A3: manager survived the recovery cycles with no crash: " .. tostring(errR))
 check(#craftedResume >= 1,
   "A3: craft-firing AUTO-RESUMES after recover consecutive clean reads")
+
+-- ---- STAB-6: drop an explicitly offline handle, then re-wrap next scan --------
+-- An AP/CC peripheral object can survive a chunk transition while its backing
+-- bridge is gone. The first explicit offline reply must stop further reads through
+-- that object; the following scan must obtain a fresh handle instead of waiting for
+-- the watchdog restart.
+files = { [MANAGED_FILE] = "MANAGED" }
+clock = 0
+local staleOnline, staleReads, bridgeWraps = true, 0, 0
+local staleBridge, freshBridge = fakeBridge(), fakeBridge()
+staleBridge.isConnected = function() return staleOnline end
+staleBridge.isOnline = function() return staleOnline end
+staleBridge.getItems = function()
+  staleReads = staleReads + 1
+  if not staleOnline then error("stale bridge read") end
+  return { { name = "alltheores:zinc_ingot", amount = 1000, isCraftable = true } }
+end
+_G.peripheral.wrap = function(n)
+  if n == "monitor_0" then return MON end
+  if n == "rs_bridge_0" then
+    bridgeWraps = bridgeWraps + 1
+    return bridgeWraps == 1 and staleBridge or freshBridge
+  end
+  return nil
+end
+local reacquireEvent = 0
+_G.os.pullEvent = function()
+  reacquireEvent = reacquireEvent + 1
+  if reacquireEvent > 2 then error(SENTINEL, 0) end
+  staleOnline = reacquireEvent ~= 1 -- first refresh sees explicit offline; second gets fresh bridge
+  return "timer", 1
+end
+print("smoke-auto: STAB-6 drops an offline bridge and re-wraps next scan")
+local okRe, errRe = pcall(function() dofile("inventory/manager.lua") end)
+check(okRe == false and tostring(errRe):find(SENTINEL, 1, true) ~= nil,
+  "STAB-6: manager survives offline bridge and reaches the next scan: " .. tostring(errRe))
+check(staleReads == 0,
+  "STAB-6: no getItems call is made through the explicitly offline stale bridge")
+check(bridgeWraps >= 2,
+  "STAB-6: next scan re-wraps a fresh bridge handle after offline detection")
 
 -- ---- A3 module-missing resilience: a missing atm10-health must NOT crash ---------
 -- This is the exact in-game failure that happened: the update manifest shipped the

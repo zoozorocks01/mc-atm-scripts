@@ -83,3 +83,40 @@ elif [ -f "$ATM10_SERVER_OPS_DIR/known_hosts" ]; then
     -o UserKnownHostsFile="$ATM10_SERVER_OPS_DIR/known_hosts"
   )
 fi
+
+# Run host tools directly when the selected registry address belongs to this
+# machine. This keeps the same scripts portable between the laptop and the
+# active server host, where self-SSH may intentionally be disabled.
+atm10_host_is_local() {
+  case "${ATM10_TRANSPORT:-auto}" in
+    local) return 0 ;;
+    ssh) return 1 ;;
+    auto) ;;
+    *) printf 'ATM10_TRANSPORT must be auto, local, or ssh\n' >&2; return 2 ;;
+  esac
+
+  case "$HOST" in
+    localhost|127.0.0.1|::1) return 0 ;;
+  esac
+  case "$HOST" in
+    "$(hostname)"|"$(hostname -s 2>/dev/null || true)") return 0 ;;
+  esac
+
+  local addresses address
+  addresses="${ATM10_LOCAL_IPS:-$(/sbin/ifconfig 2>/dev/null | sed -n 's/.*inet \([^ ]*\).*/\1/p')}"
+  for address in $addresses; do
+    [ "$HOST" = "$address" ] && return 0
+  done
+  return 1
+}
+
+atm10_run_in() {
+  local dir="$1" command="$2" decision
+  if atm10_host_is_local; then
+    (cd "$dir" && /bin/bash -c "$command")
+  else
+    decision=$?
+    [ "$decision" -eq 1 ] || return "$decision"
+    ssh "${SSH_OPTS[@]}" "$HOST" "cd $(printf '%q' "$dir") && $command"
+  fi
+}
