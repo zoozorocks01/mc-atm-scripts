@@ -2969,4 +2969,75 @@ t.eq(em[2].kind, "uncompress", "emitForItems: *_ingot -> uncompress")
 t.eq(em[2].command, pgive.uncompressBlockToIngots("alltheores:lead_block", pgive.idQuad(2, "uncompress")),
   "emitForItems: ingot emits the uncompress-from-block command (derived block + id #2)")
 
+-- ---------------------------------------------------------------------------
+print("chat bridge (in-game command grammar + reply shaping)")
+-- Anonymous fn, not a do-block: the main chunk is at Lua's 200-local cap, and
+-- a function body gets its own fresh local scope.
+;(function()
+  local cb = require("atm10-chatbridge")
+
+  -- parse: only !commands from allowed players become intents
+  t.eq(cb.parse("Zoozorocks", "hello there"), nil, "chatbridge: plain chat is ignored")
+  t.eq(cb.parse("Zoozorocks", "!stock gold").kind, "stock", "chatbridge: !stock parses")
+  t.eq(cb.parse("Zoozorocks", "!stock Gold Ingot").query, "gold ingot", "chatbridge: query lowercased")
+  t.eq(cb.parse("Zoozorocks", "!stock").kind, "help", "chatbridge: bare !stock asks for help")
+  t.eq(cb.parse("Zoozorocks", "!stonk gold").kind, "help", "chatbridge: typo command answers with help")
+  t.eq(cb.parse("griefer", "!status", { players = { "Zoozorocks" } }), nil,
+    "chatbridge: allowlist drops other players' commands")
+
+  -- reply: stock lookup prefers label matches over registry-name matches
+  local plans = {
+    { name = "alltheores:gold_tiny_dust", label = "Tiny Gold Dust", amount = 0, target = 10000, action = "UNKNOWN-ID" },
+    { name = "minecraft:gold_ingot", label = "Gold Ingot", amount = 18776, target = 100000, action = "WOULD CRAFT" },
+  }
+  local rs = cb.reply({ kind = "stock", query = "gold ingot" }, { plans = plans })
+  t.eq(#rs, 1, "chatbridge: stock reply is one line")
+  t.check(rs[1]:find("Gold Ingot: 19k of 100k target", 1, true) ~= nil,
+    "chatbridge: stock reply carries count/target (" .. rs[1] .. ")")
+  local rq = cb.reply({ kind = "stock", query = "gold" }, { plans = plans })
+  t.check(rq[1]:find("+1 more match", 1, true) ~= nil, "chatbridge: multi-match is disclosed")
+  local rn = cb.reply({ kind = "stock", query = "unobtanium9" }, { plans = plans })
+  t.check(rn[1]:find("no managed item", 1, true) ~= nil, "chatbridge: no-match says so")
+  local rstat = cb.reply({ kind = "status" }, { mode = "auto", queue = { depth = 2, crafting = 1 }, perMin = 3, summary = "OK" })
+  t.check(rstat[1]:find("mode auto | queue 2 (1 crafting)", 1, true) ~= nil,
+    "chatbridge: status line renders mode+queue (" .. rstat[1] .. ")")
+
+  -- split: every piece under the cap, word boundaries preferred, no loss
+  local long = string.rep("alpha beta gamma ", 30)
+  local pieces = cb.split(long, 50)
+  t.check(#pieces >= 2, "chatbridge: long text splits")
+  local rejoined = table.concat(pieces, " ")
+  for i, p in ipairs(pieces) do
+    t.check(#p <= 50, "chatbridge: piece " .. i .. " under cap (" .. #p .. ")")
+  end
+  t.eq(rejoined:gsub("%s+", " "), long:gsub("%s+", " "):gsub("%s+$", ""), "chatbridge: split loses no words")
+  local giant = string.rep("x", 120)
+  local gp = cb.split(giant, 50)
+  t.check(#gp == 3 and #gp[1] == 50, "chatbridge: single giant word is hard-cut, never sent long")
+
+  -- outbound: tagging, rate cap, order-preserving remainder
+  local sends, rest = cb.outbound({
+    { from = "Claude", text = "first" },
+    { from = "Claude", text = "second" },
+    { from = "Opus", text = "third" },
+    { from = "Opus", text = "fourth" },
+  }, { maxPerTick = 3 })
+  t.eq(#sends, 3, "chatbridge: outbound respects maxPerTick")
+  t.eq(sends[1], "[Claude] first", "chatbridge: outbound tags the sender")
+  t.eq(#rest, 1, "chatbridge: excess stays queued")
+  t.eq(rest[1].text, "fourth", "chatbridge: remainder preserves order")
+
+  -- presence: announce transitions only; a dead heartbeat cannot stay LIVE
+  local seats = { { name = "claude", lastBeatMs = 1000 } }
+  local ann, live = cb.presence(seats, {}, 2000, { staleMs = 5000 })
+  t.eq(#ann, 1, "chatbridge: fresh heartbeat announces LIVE once")
+  t.eq(live.claude, true, "chatbridge: live map records the seat")
+  local ann2, live2 = cb.presence(seats, live, 3000, { staleMs = 5000 })
+  t.eq(#ann2, 0, "chatbridge: steady state announces nothing")
+  local ann3, live3 = cb.presence(seats, live2, 99000, { staleMs = 5000 })
+  t.eq(#ann3, 1, "chatbridge: stale heartbeat announces offline")
+  t.check(ann3[1]:find("queue", 1, true) ~= nil, "chatbridge: offline message promises queueing")
+  t.eq(live3.claude, nil, "chatbridge: stale seat leaves the live map")
+end)()
+
 os.exit(t.summary() and 0 or 1)
