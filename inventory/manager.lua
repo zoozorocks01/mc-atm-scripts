@@ -41,6 +41,10 @@ local FILES = {
   soakRequest = ".atm10-soak-request", -- agent -> manager: run a bounded fail-stop auto soak
   soakState = ".atm10-soakstate",   -- manager-owned while a soak runs; boot treats leftovers as an interrupted soak
   soakReport = ".atm10-soak-report", -- last soak outcome (end OR rejection) for agent polling
+  chatOutbox = ".atm10-chat-outbox", -- agent-dropped outbound chat spool (array of {text, from}); drained per cycle
+  -- Seat heartbeat files are "<seatHeartbeatPrefix><seat>"; the chat bridge reads
+  -- them for presence. A prefix (not one key) because seat names vary at runtime.
+  seatHeartbeatPrefix = ".atm10-seat-heartbeat-",
 }
 local RUNTIME = {
   statusVersion = 2,
@@ -105,6 +109,13 @@ local DEFAULT_CONFIG = {
     maxBridgeRequest = 32,    -- cap per craftItem bridge call (AP/RS-safe batch)
     items = {},
     categories = {},
+  },
+  -- In-game chat bridge (DECISIONS #7): OFF by default so a deploy is inert. When
+  -- enabled, the manager answers !stock/!status/!seat/!help from an attached AP Chat
+  -- Box. players is an optional allowlist (empty = anyone may command).
+  chatBridge = {
+    enabled = false,
+    players = {},
   },
 }
 
@@ -303,6 +314,12 @@ local function normalizeConfig(raw)
       { label = "Stock Keeper", items = cfg.stockKeeper.items },
     }
   end
+
+  -- Chat bridge (DECISIONS #7): fail-closed defaults so a malformed/absent block
+  -- leaves the feature OFF with an empty (open) allowlist.
+  if type(cfg.chatBridge) ~= "table" then cfg.chatBridge = {} end
+  cfg.chatBridge.enabled = cfg.chatBridge.enabled == true
+  if type(cfg.chatBridge.players) ~= "table" then cfg.chatBridge.players = {} end
 
   return cfg
 end
@@ -505,6 +522,147 @@ function ui.statusRows(rows, limit)
     end
   end
   return out
+end
+
+-- ---------------------------------------------------------------------------
+-- Chat bridge (DECISIONS #7): wire the pure atm10-chatbridge grammar/reply/spool
+-- module into the live manager loop. All state hangs off the ui table (no new
+-- top-level locals; manager is at Lua's 200-local cap). Every path fails open:
+-- the feature is OFF unless config.chatBridge.enabled, and an absent Chat Box
+-- peripheral logs once and the manager runs normally.
+
+-- Defensive require, cached on the ui table (false = tried and unavailable) so a
+-- not-yet-deployed atm10-chatbridge never crash-loops the manager.
+function ui.chatbridge()
+  if ui.chatMod == nil then
+    local ok, mod = pcall(require, "atm10-chatbridge")
+    ui.chatMod = (ok and mod) or false
+  end
+  return ui.chatMod or nil
+end
+
+-- Send ready-to-go pieces to one player, falling back to a broadcast if the build
+-- lacks sendMessageToPlayer. call() pcall-wraps so a peripheral hiccup can't throw.
+function ui.chatSayTo(player, pieces)
+  local box = ui.chatBox
+  if not box then return end
+  for _, piece in ipairs(pieces or {}) do
+    if type(box.sendMessageToPlayer) == "function" then
+      call(box, "sendMessageToPlayer", piece, player)
+    else
+      call(box, "sendMessage", piece)
+    end
+  end
+end
+
+-- Broadcast ready-to-go pieces to the whole server (agent relay + presence).
+function ui.chatBroadcast(pieces)
+  local box = ui.chatBox
+  if not box then return end
+  for _, piece in ipairs(pieces or {}) do call(box, "sendMessage", piece) end
+end
+
+-- Read seat heartbeat files (<prefix><seat>) into presence records. Prefers an
+-- embedded ms stamp (at/beatAt); falls back to file mtime. Returns {} when fs has
+-- no list() (the off-CC test harness) so the reply/presence paths just see no seats.
+function ui.chatReadSeats(now)
+  now = tonumber(now) or nowMs()
+  local seats = {}
+  if type(fs.list) ~= "function" then return seats end
+  local ok, names = pcall(fs.list, "")
+  if not ok or type(names) ~= "table" then return seats end
+  local prefix = FILES.seatHeartbeatPrefix
+  for _, fname in ipairs(names) do
+    local name = tostring(fname)
+    if name:sub(1, #prefix) == prefix and #name > #prefix then
+      local seatName = name:sub(#prefix + 1)
+      local rec = ui.readSerializedFile(name)
+      local beat = nil
+      if type(rec) == "table" then beat = tonumber(rec.at) or tonumber(rec.beatAt) end
+      if not beat and type(fs.attributes) == "function" then
+        local aok, attr = pcall(fs.attributes, name)
+        if aok and type(attr) == "table" then beat = tonumber(attr.modified) end
+      end
+      if beat then
+        seats[#seats + 1] = {
+          name = seatName,
+          lastBeatMs = beat,
+          live = (now - beat) < 180000,
+          ageSec = math.max(0, math.floor((now - beat) / 1000)),
+        }
+      end
+    end
+  end
+  return seats
+end
+
+-- Build the reply snapshot from the SAME state the dashboard renders (last good
+-- scan + live queue/throughput), so a chat answer never disagrees with the screen.
+function ui.chatState(now)
+  local data = lastData or {}
+  local q = ui.queueStatus(data.craftQueue)
+  local mode = ui.baseMode and ui.baseMode() or (config.mode or "manual")
+  if ui.soak then mode = control.MODE_AUTO end
+  return {
+    plans = data.stockPlans,
+    mode = mode,
+    queue = { depth = tonumber(q.depth) or 0, crafting = tonumber(q.crafting) or 0 },
+    perMin = #firedTimes,
+    summary = data.stale and "STALE" or "OK",
+    seats = ui.chatReadSeats(now),
+  }
+end
+
+-- INBOUND: an AP Chat Box fires a "chat" os event (player, message). Parse it to a
+-- command intent, answer from the snapshot, send each piece back to that player.
+-- Runs in the input coroutine, so it stays responsive even mid-scan.
+function ui.handleChatEvent(player, message)
+  local cfg = config.chatBridge or {}
+  if cfg.enabled ~= true or not ui.chatBox then return end
+  local cb = ui.chatbridge()
+  if not cb then return end
+  -- empty allowlist => open (nil), never "allow nobody"
+  local players = (type(cfg.players) == "table" and #cfg.players > 0) and cfg.players or nil
+  local intent = cb.parse(player, message, { players = players })
+  if not intent then return end
+  ui.chatSayTo(player, cb.reply(intent, ui.chatState()))
+end
+
+-- PER-CYCLE service: drain the agent outbound spool (rate-capped) and announce any
+-- seat presence transitions. Called every scan; a no-op unless enabled with a Box.
+function ui.serviceChatBridge(now)
+  now = tonumber(now) or nowMs()
+  local cfg = config.chatBridge or {}
+  if cfg.enabled ~= true then return end
+  local cb = ui.chatbridge()
+  if not cb then return end
+  if not ui.chatBox then
+    if not ui.chatBoxWarned then
+      print("chat bridge: enabled but no Chat Box peripheral attached; running normally")
+      ui.chatBoxWarned = true
+    end
+    return
+  end
+
+  -- Outbound spool: an array of {text, from} the agents drop. Send oldest first up
+  -- to the per-tick cap, then rewrite the file with the remainder (delete when empty).
+  local outbox = ui.readSerializedFile(FILES.chatOutbox)
+  if type(outbox) == "table" and #outbox > 0 then
+    local sends, remaining = cb.outbound(outbox, {})
+    ui.chatBroadcast(sends)
+    if #remaining > 0 then
+      pcall(atomicWrite, FILES.chatOutbox, remaining)
+    else
+      pcall(fs.delete, FILES.chatOutbox)
+    end
+  end
+
+  -- Presence: announce LIVE/offline transitions so a dead agent session can never
+  -- keep an implicit presence claim alive (the presence-contract failure mode).
+  local seats = ui.chatReadSeats(now)
+  local announcements, live = cb.presence(seats, ui.chatPresence or {}, now)
+  ui.chatPresence = live
+  ui.chatBroadcast(announcements)
 end
 
 function ui.writeStatusState(data, now)
@@ -3929,6 +4087,14 @@ do
     pcall(fs.delete, FILES.soakState)
   end
   pcall(fs.delete, FILES.soakRequest)
+
+  -- Chat bridge (DECISIONS #7): wrap the optional AP Chat Box once at boot. Wrapping
+  -- is harmless and unconditional; USAGE is gated per-cycle on config.chatBridge.enabled
+  -- (so enabling via a config reload works without needing this detection to re-run).
+  -- A leftover outbox holds stale agent messages of unknown age -- discard it like a
+  -- pre-boot soak request rather than blasting it after a restart.
+  ui.chatBox = findPeripheral({ "chatBox", "chat_box" })
+  pcall(fs.delete, FILES.chatOutbox)
 end
 
 -- TOUCH-DECOUPLE: the heavy RS scan (refreshAndDraw -> bridge.getItems over a huge
@@ -3949,6 +4115,9 @@ parallel.waitForAny(
     while true do
       guard(advancePageIfDue)
       guard({ refreshAndDraw, resetDisplay = true })
+      -- Service the chat bridge each cycle (drain agent spool + presence). Guarded
+      -- and self-gating: a no-op unless config.chatBridge.enabled with a Box attached.
+      guard(ui.serviceChatBridge, nowMs())
       if ui.reloadRequested then return end
       writeHeartbeat(nowMs())
       sleep((config and config.refreshSeconds) or REFRESH_SECONDS)
@@ -3975,6 +4144,10 @@ parallel.waitForAny(
         guard(handleControlMessage, ev[2], ev[3])
       elseif kind == "rs_crafting" then
         guard(ui.handleCraftEvent, ev[2], ev[3], ev[4])
+      elseif kind == "chat" then
+        -- AP Chat Box inbound: ev = { "chat", username, message, uuid, isHidden }.
+        -- Self-gates on config.chatBridge.enabled; guarded so a bad line can't freeze input.
+        guard(ui.handleChatEvent, ev[2], ev[3])
       end
     end
   end

@@ -253,3 +253,56 @@ after: 11,170, which outpaces the drain and stays under `maxBatch`);
 nothing until `maxBatch` is set. Set a global `stockKeeper.maxBatch` (or a
 per-item `maxBatch`) above `maxRequest` to arm it for high-drain items, gold
 first.
+
+## 7. In-game chat bridge wired into the manager loop (2026-07-24)
+
+**What was happening.** The pure `atm10-chatbridge` module (command grammar,
+reply shaping, length-safe split, outbound spool drain, heartbeat->presence)
+landed fully unit-tested but unwired: the 24/7 manager could not yet answer a
+player in-game or relay an agent's message. The presence contract also wants an
+honest in-world signal that a seat is actually listening, not an implicit claim.
+
+**Policy.** Wire the module into the live loop behind an OFF-by-default flag so a
+deploy is inert until an operator arms it.
+- **Config flag.** `chatBridge = { enabled = false, players = {...} }`. Disabled
+  by default; `players` is an optional allowlist (empty = anyone may command).
+  Normalized fail-closed in `loadConfig` (bad/absent block => OFF, open list).
+- **Peripheral fail-open.** The AP Chat Box is wrapped once at boot
+  (`peripheral.find`/type "chatBox"). Wrapping is unconditional and harmless;
+  USAGE is gated per-cycle on the flag (so enabling via config reload needs no
+  re-detect). Enabled but no Box => log once, run normally. Never crashes the
+  manager: every path is `pcall`/`call`-guarded and the module require is
+  defensive.
+- **Inbound.** The Chat Box fires a "chat" os event; the input coroutine parses
+  it (`chatbridge.parse`, allowlist applied), answers from the SAME snapshot the
+  dashboard renders (`chatbridge.reply` over `lastData`/queue/throughput), and
+  sends each piece back to that player (`sendMessageToPlayer`, `sendMessage`
+  fallback), each already <= `chatbridge.MAX_LEN`.
+- **Outbound spool.** Each scan drains `.atm10-chat-outbox` (a Lua-serialized
+  array of `{text, from}`, same file convention as every other agent channel --
+  NOT JSON), rate-capped by `chatbridge.outbound`, rewriting the remainder
+  (deleting when empty). Boot discards a leftover outbox (stale/unknown age),
+  exactly like a pre-boot soak request.
+- **Presence.** Each scan reads `.atm10-seat-heartbeat-<seat>` files (embedded ms
+  else file mtime) and announces LIVE/offline transitions via
+  `chatbridge.presence`, so a dead agent session can never keep an implicit
+  presence claim alive.
+- **200-local cap.** All state and functions hang off the existing `ui` table
+  (`ui.chatBox`, `ui.chatMod`, `ui.chatPresence`, `ui.serviceChatBridge`,
+  `ui.handleChatEvent`, ...); no new top-level locals in the manager.
+
+**Enforced in** `inventory/manager.lua` (`ui.chatbridge`/`chatSayTo`/`chatBroadcast`/
+`chatReadSeats`/`chatState`/`handleChatEvent`/`serviceChatBridge`, boot detection +
+outbox cleanup, scan-loop service call, input-loop "chat" dispatch, `DEFAULT_CONFIG`
++ `normalizeConfig` `chatBridge`, `FILES.chatOutbox`/`seatHeartbeatPrefix`),
+`lib/atm10-chatbridge.lua` (pure module, merged from `fable/chatbridge-proof`).
+
+**Gated by** sim scenario `chatbridge-relay` (fake AP Chat Box + a real "chat" os
+event through the manager's input loop: an allowed player's `!stock` gets a
+snapshot reply, the agent outbound spool drains and its file is deleted, and a
+non-allowlisted player's command is dropped); plus the module's `tests/run.lua`
+unit tests.
+
+**Rollout (operator action, Zach-gated).** Attach an AP Chat Box to the manager
+computer and set `chatBridge.enabled = true` (optionally an allowlist). Agents
+relay by appending `{text, from}` rows to `.atm10-chat-outbox`.

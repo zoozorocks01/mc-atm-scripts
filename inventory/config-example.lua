@@ -32,6 +32,15 @@ return {
   controlToken = nil,          -- shared secret a command must carry (nil = no token)
   controlAllowedSenders = nil, -- { 7, 12 } = only these computer IDs (nil = any sender)
 
+  -- In-game chat bridge (DECISIONS #7): OFF by default so a deploy is inert. When
+  -- enabled with an AP Chat Box attached, the manager answers !stock/!status/!seat/
+  -- !help in chat, relays agent messages from the .atm10-chat-outbox spool, and
+  -- announces seat presence. players is an optional allowlist (empty = anyone).
+  chatBridge = {
+    enabled = false,
+    players = {},              -- e.g. { "Zoozorocks" }
+  },
+
   -- Bridge poll interval (seconds, floored at 2). A tuning knob, NOT a TPS fix:
   -- live /spark profiling found the once-per-poll getItems() is not a measurable
   -- server cost (an entity cull, not a slower poll, is what restored TPS). Lower

@@ -151,6 +151,7 @@ function M.bridge(opts)
     return { getId = function() return id end, id = id }
   end
   bridge.getUsedItemStorage = function() return tonumber(opts.usedItemStorage) or 1000 end
+  -- (see M.chatBox below for the fake Chat Box peripheral)
   bridge.getTotalItemStorage = function() return tonumber(opts.totalItemStorage) or 100000 end
   bridge.getAvailableItemStorage = function() return tonumber(opts.availableItemStorage) or 99000 end
   bridge.getStoredEnergy = function() return tonumber(opts.storedEnergy) or 50000 end
@@ -158,6 +159,21 @@ function M.bridge(opts)
   bridge.getEnergyUsage = function() return tonumber(opts.energyUsage) or 1000 end
   bridge.__crafted = crafted
   return bridge
+end
+
+-- Fake AP Chat Box: records every send so a scenario can assert what the manager
+-- said. sent = { { to = player|nil, text }, ... } (to=nil means a broadcast).
+function M.chatBox()
+  local box = { sent = {} }
+  box.sendMessageToPlayer = function(message, player)
+    box.sent[#box.sent + 1] = { to = player, text = message }
+    return true
+  end
+  box.sendMessage = function(message)
+    box.sent[#box.sent + 1] = { to = nil, text = message }
+    return true
+  end
+  return box
 end
 
 local Sim = {}
@@ -292,15 +308,21 @@ function Sim:install()
     end,
   }
   _G.peripheral = {
-    getNames = function() return { "monitor_0", "rs_bridge_0" } end,
+    getNames = function()
+      local names = { "monitor_0", "rs_bridge_0" }
+      if self.chatBox then names[#names + 1] = "chat_box_0" end
+      return names
+    end,
     getType = function(name)
       if name == "monitor_0" then return "monitor" end
       if name == "rs_bridge_0" then return "rs_bridge" end
+      if name == "chat_box_0" then return "chatBox" end
       return "unknown"
     end,
     wrap = function(name)
       if name == "monitor_0" then return self.monitor end
       if name == "rs_bridge_0" then return self.bridge end
+      if name == "chat_box_0" then return self.chatBox end
       return nil
     end,
     find = function() return nil end,
@@ -362,6 +384,7 @@ function M.new(opts)
     computerId = tonumber(opts.computerId) or 7,
     monitor = opts.monitor or fakeMonitor(),
     bridge = opts.bridge or M.bridge(opts.bridgeOpts or {}),
+    chatBox = opts.chatBox, -- optional fake AP Chat Box (nil = no chat peripheral)
     broadcasts = {},
     prints = {},
     dofileTables = {},

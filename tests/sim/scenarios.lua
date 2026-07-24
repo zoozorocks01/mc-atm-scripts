@@ -18,6 +18,7 @@ local ORDER = {
   "soak-restart-stays-manual",
   "late-progress-clears-failed-row",
   "drain-aware-batch-sizing",
+  "chatbridge-relay",
 }
 
 local function contains(text, needle)
@@ -710,6 +711,74 @@ SCENARIOS["drain-aware-batch-sizing"] = {
       "drain-aware batch = base cap + one cooldown of drain (4096 + 7074 = 11170)")
     addCheck(checks, count ~= nil and count <= maxBatch,
       "batch stays bounded by the configured maxBatch ceiling")
+    return checks
+  end,
+}
+
+SCENARIOS["chatbridge-relay"] = {
+  description = "Chat bridge (enabled) answers an allowed player's !stock from the live snapshot, drains the agent outbound spool, and drops a non-allowlisted player's command.",
+  run = function()
+    -- Wires the pure atm10-chatbridge module through the real manager loop with a
+    -- fake AP Chat Box: a "chat" os event drives parse->reply->send, and a per-cycle
+    -- scan drains the .atm10-chat-outbox spool. Default-OFF flag is turned ON here.
+    local goldName = "minecraft:gold_ingot"
+    local chatBox = sim.chatBox()
+    local runner = sim.new({
+      bridge = sim.bridge({ items = { { name = goldName, amount = 18776, isCraftable = true } } }),
+      chatBox = chatBox,
+      managedStore = {
+        items = {
+          [goldName] = { name = goldName, label = "Gold Ingot", target = 100000, craftTo = 100000 },
+        },
+        settings = { modeOverride = "manual" },
+      },
+      config = {
+        mode = "manual",
+        allowAutocraft = true,
+        stockKeeper = { enabled = false },
+        chatBridge = { enabled = true, players = { "Zoozorocks" } },
+      },
+      events = {
+        -- Boot deletes any pre-boot outbox (stale/unknown age), so a live agent drops
+        -- the spool mid-run -- just like the soak-request scenarios -- then the same
+        -- cycle's scan drains it.
+        function(s)
+          s:setSerializedFile(".atm10-chat-outbox", {
+            { from = "Claude", text = "soak green, back to manual" },
+            { from = "Opus", text = "drain-aware gold live" },
+          })
+          return { "timer", 1 }                      -- scan: sets lastData + drains the spool
+        end,
+        { "chat", "Zoozorocks", "!stock gold" },     -- allowed player: parse->reply->send
+        { "chat", "griefer", "!status" },            -- not on the allowlist: dropped
+      },
+    })
+    local result = runner:run()
+    return { runner = runner, result = result, crafted = result.crafted, chatBox = chatBox }
+  end,
+  checks = function(report)
+    local checks = {}
+    local sent = report.chatBox and report.chatBox.sent or {}
+    local broadcasts, reply, griefer = {}, nil, false
+    for _, m in ipairs(sent) do
+      if m.to == nil then broadcasts[#broadcasts + 1] = m.text end
+      if m.to == "Zoozorocks" then reply = m.text end
+      if m.to == "griefer" then griefer = true end
+    end
+    local hasClaude, hasOpus = false, false
+    for _, text in ipairs(broadcasts) do
+      if text:find("[Claude] soak green", 1, true) then hasClaude = true end
+      if text:find("[Opus] drain-aware gold live", 1, true) then hasOpus = true end
+    end
+    addCheck(checks, reachedSentinel(report), "manager completed the scripted chat cycles and stopped at the simulator sentinel")
+    addCheck(checks, #broadcasts == 2 and hasClaude and hasOpus,
+      "outbound spool drained: both agent lines broadcast, each tagged with its sender")
+    addCheck(checks, report.result.files[".atm10-chat-outbox"] == nil,
+      "the fully-drained outbox file is deleted")
+    addCheck(checks, type(reply) == "string" and reply:find("Gold Ingot: 19k of 100k", 1, true) ~= nil,
+      "allowed player's !stock got a snapshot reply sent back to them (" .. tostring(reply) .. ")")
+    addCheck(checks, griefer == false,
+      "a non-allowlisted player's command produced no reply")
     return checks
   end,
 }
