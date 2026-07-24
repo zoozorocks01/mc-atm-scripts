@@ -1,1 +1,1 @@
-AGENTS.md
+/Users/zacharynielsen/Projects/personal/mc-atm-scripts/.k2/AGENTS.md
