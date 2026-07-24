@@ -2985,6 +2985,19 @@ print("chat bridge (in-game command grammar + reply shaping)")
   t.eq(cb.parse("griefer", "!status", { players = { "Zoozorocks" } }), nil,
     "chatbridge: allowlist drops other players' commands")
 
+  -- named prefix mode: only "!<prefix> <cmd>" is ours; bare !cmds are ignored
+  t.eq(cb.parse("Zoozorocks", "!cheme status", { prefix = "cheme" }).kind, "status",
+    "chatbridge: prefixed command parses")
+  t.eq(cb.parse("Zoozorocks", "!CHEME stock gold", { prefix = "cheme" }).query, "gold",
+    "chatbridge: prefix is case-insensitive")
+  t.eq(cb.parse("Zoozorocks", "!status", { prefix = "cheme" }), nil,
+    "chatbridge: bare command ignored when prefix is set")
+  t.eq(cb.parse("Zoozorocks", "!cheme", { prefix = "cheme" }).kind, "help",
+    "chatbridge: bare prefix answers with help")
+  local ph = cb.reply({ kind = "help", prefix = "cheme" }, {})
+  t.check(ph[1]:find("!cheme stock <item>", 1, true) ~= nil,
+    "chatbridge: help text carries the prefix (" .. ph[1] .. ")")
+
   -- reply: stock lookup prefers label matches over registry-name matches
   local plans = {
     { name = "alltheores:gold_tiny_dust", label = "Tiny Gold Dust", amount = 0, target = 10000, action = "UNKNOWN-ID" },

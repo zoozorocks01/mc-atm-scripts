@@ -320,6 +320,7 @@ local function normalizeConfig(raw)
   if type(cfg.chatBridge) ~= "table" then cfg.chatBridge = {} end
   cfg.chatBridge.enabled = cfg.chatBridge.enabled == true
   if type(cfg.chatBridge.players) ~= "table" then cfg.chatBridge.players = {} end
+  if type(cfg.chatBridge.prefix) ~= "string" or cfg.chatBridge.prefix == "" then cfg.chatBridge.prefix = nil end
 
   return cfg
 end
@@ -623,7 +624,7 @@ function ui.handleChatEvent(player, message)
   if not cb then return end
   -- empty allowlist => open (nil), never "allow nobody"
   local players = (type(cfg.players) == "table" and #cfg.players > 0) and cfg.players or nil
-  local intent = cb.parse(player, message, { players = players })
+  local intent = cb.parse(player, message, { players = players, prefix = cfg.prefix })
   if not intent then return end
   ui.chatSayTo(player, cb.reply(intent, ui.chatState()))
 end

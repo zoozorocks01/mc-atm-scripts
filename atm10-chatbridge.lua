@@ -45,18 +45,29 @@ function chatbridge.parse(player, message, opts)
     end
     if not allowed then return nil end
   end
-  local cmd, rest = text:match("^!(%a+)%s*(.*)$")
+  -- Optional named prefix (e.g. prefix "cheme" => "!cheme status"). With a
+  -- prefix set, bare "!word" lines are ignored entirely - they belong to
+  -- other mods/players, not us. Case-insensitive; "!cheme" alone = help.
+  local body, prefix = text:sub(2), nil
+  if opts.prefix and trim(opts.prefix) ~= "" then
+    prefix = trim(opts.prefix):lower()
+    local head, tail = body:match("^(%S+)%s*(.*)$")
+    if not head or head:lower() ~= prefix then return nil end
+    body = tail
+    if trim(body) == "" then return { kind = "help", player = player, prefix = prefix } end
+  end
+  local cmd, rest = body:match("^(%a+)%s*(.*)$")
   if not cmd then return nil end
   cmd = cmd:lower()
   if cmd == "stock" then
-    if trim(rest) == "" then return { kind = "help", player = player } end
-    return { kind = "stock", query = trim(rest):lower(), player = player }
+    if trim(rest) == "" then return { kind = "help", player = player, prefix = prefix } end
+    return { kind = "stock", query = trim(rest):lower(), player = player, prefix = prefix }
   elseif cmd == "status" then
-    return { kind = "status", player = player }
+    return { kind = "status", player = player, prefix = prefix }
   elseif cmd == "seat" then
-    return { kind = "seat", player = player }
+    return { kind = "seat", player = player, prefix = prefix }
   else
-    return { kind = "help", player = player }
+    return { kind = "help", player = player, prefix = prefix }
   end
 end
 
@@ -94,7 +105,8 @@ function chatbridge.reply(intent, state, opts)
   local lines = {}
   if intent == nil then return lines end
   if intent.kind == "help" then
-    lines[1] = "commands: !stock <item>, !status, !seat, !help"
+    local p = intent.prefix and ("!" .. intent.prefix .. " ") or "!"
+    lines[1] = string.format("commands: %sstock <item>, %sstatus, %sseat, %shelp", p, p, p, p)
   elseif intent.kind == "status" then
     local q = state.queue or {}
     lines[1] = string.format("mode %s | queue %d (%d crafting) | %d crafts/min | %s",
