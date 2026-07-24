@@ -321,6 +321,19 @@ do
   t.eq(#dm.sourceMore, 1, "monitor.demand: 1 source-more (raw input draining; spiky one excluded)")
   t.eq(dm.sourceMore[1].name, "ma:silver_dust", "monitor.demand: silver dust -> source more")
   t.check(dm.sourceMore[1].perMin >= 199 and dm.sourceMore[1].perMin <= 201, "monitor.demand: ~200/min drain")
+
+  -- monitor.drainRate: the per-entry primitive demand() now shares (same qualifying
+  -- test), exposed so the stock planner sizes high-drain batches off the SAME signal.
+  local infDrain = monitor.drainRate(trends["mc:inferium"])
+  t.check(infDrain >= 199 and infDrain <= 201, "monitor.drainRate: sustained ~200/min drain qualifies")
+  t.eq(monitor.drainRate(trends["mx:flat"]), 0, "monitor.drainRate: no decline -> 0")
+  t.eq(monitor.drainRate(trends["my:tiny"]), 0, "monitor.drainRate: below minPerMin -> 0")
+  t.eq(monitor.drainRate(trends["mz:spiky"]), 0, "monitor.drainRate: transient spike -> 0")
+  t.eq(monitor.drainRate(nil), 0, "monitor.drainRate: missing entry -> 0")
+  t.eq(monitor.drainRate({ t0 = NOW - 120000, tN = NOW, a0 = 5000, aN = 1000, n = 6 }), 0,
+    "monitor.drainRate: window under minWindowMin -> 0")
+  t.eq(monitor.drainRate({ t0 = NOW - 1200000, tN = NOW, a0 = 5000, aN = 1000, n = 2 }), 0,
+    "monitor.drainRate: too few samples -> 0")
 end
 
 -- ---------------------------------------------------------------------------
@@ -821,14 +834,17 @@ t.eq(_G.__zeroStoredCraftable[1].action, "WOULD CRAFT", "zero-stock craftable it
 t.eq(_G.__zeroStoredCraftable[1].request, 256, "zero-stock craftable request fills to craftTo")
 _G.__zeroStoredCraftable = nil
 
--- below target, watch/manual route -> explicit BLOCKED reason, never a craft request
+-- below target, watch/manual route -> deliberate WATCH row, never a craft request
 do
   local watchP = stockplan.plan({ stockKeeper = SK({
       { name = "mi:plate", label = "MI Plate", target = 100, craftTo = 200,
         craftMode = "watch", blockReason = "MI assembler route; do not RS autocraft" },
     }), ledger = emptyLedger, resolve = function() return 0, true, false end })
-  t.eq(watchP[1].action, "BLOCKED", "watch-only target -> BLOCKED")
+  t.eq(watchP[1].action, "WATCH", "watch-only target -> WATCH, not a BLOCKED problem")
   t.eq(watchP[1].reason, "MI assembler route; do not RS autocraft", "watch-only target explains the route")
+  local watchState = stockplan.compactState(watchP)
+  t.eq(watchState.watchCount, 1, "compactState counts WATCH rows separately")
+  t.eq(watchState.blockedCount, 0, "WATCH rows do not inflate blockedCount")
 end
 
 -- below target, craftable, already crafting -> ALREADY CRAFTING
@@ -875,6 +891,38 @@ local capP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100, cra
   resolve = function() return 0, true, false end })
 t.eq(capP[1].request, 500, "request capped to maxRequest")
 t.check(capP[1].capped == true, "capped flag set")
+
+-- drain-aware batch sizing (DECISIONS #6): a MEASURED drain plus a maxBatch ceiling
+-- above the base cap raises ONE turn's request to outpace consumption. SK cooldown
+-- is 300s, so one cooldown = 5 min: cap = maxRequest + floor(perMin * 5), bound maxBatch.
+-- Own do-scope: run.lua's main chunk is at Lua's 200-local limit (see the monitor block).
+do
+  local dGold = stockplan.plan({ stockKeeper = SK({ { name = "g", target = 100000, craftTo = 100000, maxRequest = 4096, maxBatch = 32768 } }),
+    ledger = emptyLedger, drain = { g = 1000 }, resolve = function() return 18776, true, false end })
+  t.eq(dGold[1].request, 9096, "drain-aware: request = base cap + one cooldown of drain (4096 + 1000*5)")
+  t.check(dGold[1].capped == true, "drain-aware: still capped below the full deficit")
+  -- measured drain but no maxBatch configured -> base cap unchanged (opt-in)
+  local dNoBatch = stockplan.plan({ stockKeeper = SK({ { name = "g", target = 100000, craftTo = 100000, maxRequest = 4096 } }),
+    ledger = emptyLedger, drain = { g = 1000 }, resolve = function() return 18776, true, false end })
+  t.eq(dNoBatch[1].request, 4096, "drain measured but no maxBatch -> base cap unchanged")
+  -- maxBatch configured but no measured drain -> base cap unchanged
+  local dNoDrain = stockplan.plan({ stockKeeper = SK({ { name = "g", target = 100000, craftTo = 100000, maxRequest = 4096, maxBatch = 32768 } }),
+    ledger = emptyLedger, resolve = function() return 18776, true, false end })
+  t.eq(dNoDrain[1].request, 4096, "maxBatch set but no measured drain -> base cap unchanged")
+  -- maxBatch not above the base cap -> no scaling (can only raise, never lower)
+  local dLowBatch = stockplan.plan({ stockKeeper = SK({ { name = "g", target = 100000, craftTo = 100000, maxRequest = 4096, maxBatch = 4096 } }),
+    ledger = emptyLedger, drain = { g = 1000 }, resolve = function() return 18776, true, false end })
+  t.eq(dLowBatch[1].request, 4096, "maxBatch not above base cap -> no scaling")
+  -- a huge drain is bounded by maxBatch
+  local dClamp = stockplan.plan({ stockKeeper = SK({ { name = "g", target = 100000, craftTo = 100000, maxRequest = 4096, maxBatch = 16384 } }),
+    ledger = emptyLedger, drain = { g = 100000 }, resolve = function() return 0, true, false end })
+  t.eq(dClamp[1].request, 16384, "drain-aware cap is bounded by maxBatch")
+  -- the drain-aware request never exceeds the deficit (craftTo ceiling holds)
+  local dDeficit = stockplan.plan({ stockKeeper = SK({ { name = "g", target = 100000, craftTo = 100000, maxRequest = 4096, maxBatch = 32768 } }),
+    ledger = emptyLedger, drain = { g = 1000 }, resolve = function() return 98000, true, false end })
+  t.eq(dDeficit[1].request, 2000, "drain-aware request never exceeds the deficit")
+  t.check(dDeficit[1].capped == false, "request below the drain-aware cap is not capped")
+end
 
 -- recent ledger record within cooldown -> ON COOLDOWN with secondsLeft
 local cdP = stockplan.plan({ stockKeeper = SK({ { name = "x", target = 100, craftTo = 200 } }),
@@ -949,6 +997,25 @@ do
     }), function(name) return name == "ore:zinc_ingot" and 77 or 205 end, "ore:zinc_block"),
     "compression pair low: Zinc Ingot and Zinc Block",
     "compression pair: runner hold helper returns the same explanatory reason")
+
+  -- BUG (2026-07-24 live, uranium): a `ceiling`-bearing row (atm10-presets.lua's
+  -- reserve() -- one-way "convert-all surplus dust into ingot", owned by the
+  -- overflow balancer in atm10-balance.lua) is NOT a genuine two-way compression
+  -- pair like zinc above. Its dense side (ingot) often crafts from something
+  -- else entirely (essence). A momentarily-empty byproduct reserve must not
+  -- block the ingot's own unrelated craft path.
+  local reserveP = stockplan.plan({ stockKeeper = SK({
+      { name = "alltheores:uranium_dust", label = "Uranium Dust", target = 1, craftTo = 1,
+        ceiling = 5000, into = { name = "alltheores:uranium_ingot", label = "Uranium" }, ratio = 1 },
+      { name = "alltheores:uranium_ingot", label = "Uranium", target = 40000, craftTo = 40000 },
+    }, { maxCraftsPerCycle = 2 }), ledger = emptyLedger,
+    resolve = function(name)
+      if name == "alltheores:uranium_dust" then return 0, true, false end
+      if name == "alltheores:uranium_ingot" then return 1601, true, false end
+      return 0, true, false
+    end })
+  t.eq(reserveP[2].action, "WOULD CRAFT",
+    "convert-all reserve row: empty byproduct dust must not block the ingot's own craft")
 end
 
 do
@@ -1815,7 +1882,7 @@ do
   t.eq(wcat.items[1].blockReason, "MI assembler route; do not RS autocraft", "managed.toCategory preserves blockReason")
   local wplan = stockplan.plan({ stockKeeper = { enabled = true, categories = { wcat } },
     ledger = { requests = {} }, resolve = function() return 0, true, false end })
-  t.eq(wplan[1].action, "BLOCKED", "managed watch-only quota blocks instead of crafting")
+  t.eq(wplan[1].action, "WATCH", "managed watch-only quota watches instead of crafting")
   t.eq(wplan[1].reason, "MI assembler route; do not RS autocraft", "managed watch-only row carries reason")
 end
 
@@ -3016,5 +3083,89 @@ t.eq(em[1].command, pgive.compressIngotToBlock("alltheores:tin_ingot", pgive.idQ
 t.eq(em[2].kind, "uncompress", "emitForItems: *_ingot -> uncompress")
 t.eq(em[2].command, pgive.uncompressBlockToIngots("alltheores:lead_block", pgive.idQuad(2, "uncompress")),
   "emitForItems: ingot emits the uncompress-from-block command (derived block + id #2)")
+
+-- ---------------------------------------------------------------------------
+print("chat bridge (in-game command grammar + reply shaping)")
+-- Anonymous fn, not a do-block: the main chunk is at Lua's 200-local cap, and
+-- a function body gets its own fresh local scope.
+;(function()
+  local cb = require("atm10-chatbridge")
+
+  -- parse: only !commands from allowed players become intents
+  t.eq(cb.parse("Zoozorocks", "hello there"), nil, "chatbridge: plain chat is ignored")
+  t.eq(cb.parse("Zoozorocks", "!stock gold").kind, "stock", "chatbridge: !stock parses")
+  t.eq(cb.parse("Zoozorocks", "!stock Gold Ingot").query, "gold ingot", "chatbridge: query lowercased")
+  t.eq(cb.parse("Zoozorocks", "!stock").kind, "help", "chatbridge: bare !stock asks for help")
+  t.eq(cb.parse("Zoozorocks", "!stonk gold").kind, "help", "chatbridge: typo command answers with help")
+  t.eq(cb.parse("griefer", "!status", { players = { "Zoozorocks" } }), nil,
+    "chatbridge: allowlist drops other players' commands")
+
+  -- named prefix mode: only "!<prefix> <cmd>" is ours; bare !cmds are ignored
+  t.eq(cb.parse("Zoozorocks", "!cheme status", { prefix = "cheme" }).kind, "status",
+    "chatbridge: prefixed command parses")
+  t.eq(cb.parse("Zoozorocks", "!CHEME stock gold", { prefix = "cheme" }).query, "gold",
+    "chatbridge: prefix is case-insensitive")
+  t.eq(cb.parse("Zoozorocks", "!status", { prefix = "cheme" }), nil,
+    "chatbridge: bare command ignored when prefix is set")
+  t.eq(cb.parse("Zoozorocks", "!cheme", { prefix = "cheme" }).kind, "help",
+    "chatbridge: bare prefix answers with help")
+  local ph = cb.reply({ kind = "help", prefix = "cheme" }, {})
+  t.check(ph[1]:find("!cheme stock <item>", 1, true) ~= nil,
+    "chatbridge: help text carries the prefix (" .. ph[1] .. ")")
+
+  -- reply: stock lookup prefers label matches over registry-name matches
+  local plans = {
+    { name = "alltheores:gold_tiny_dust", label = "Tiny Gold Dust", amount = 0, target = 10000, action = "UNKNOWN-ID" },
+    { name = "minecraft:gold_ingot", label = "Gold Ingot", amount = 18776, target = 100000, action = "WOULD CRAFT" },
+  }
+  local rs = cb.reply({ kind = "stock", query = "gold ingot" }, { plans = plans })
+  t.eq(#rs, 1, "chatbridge: stock reply is one line")
+  t.check(rs[1]:find("Gold Ingot: 19k of 100k target", 1, true) ~= nil,
+    "chatbridge: stock reply carries count/target (" .. rs[1] .. ")")
+  local rq = cb.reply({ kind = "stock", query = "gold" }, { plans = plans })
+  t.check(rq[1]:find("+1 more match", 1, true) ~= nil, "chatbridge: multi-match is disclosed")
+  local rn = cb.reply({ kind = "stock", query = "unobtanium9" }, { plans = plans })
+  t.check(rn[1]:find("no managed item", 1, true) ~= nil, "chatbridge: no-match says so")
+  local rstat = cb.reply({ kind = "status" }, { mode = "auto", queue = { depth = 2, crafting = 1 }, perMin = 3, summary = "OK" })
+  t.check(rstat[1]:find("mode auto | queue 2 (1 crafting)", 1, true) ~= nil,
+    "chatbridge: status line renders mode+queue (" .. rstat[1] .. ")")
+
+  -- split: every piece under the cap, word boundaries preferred, no loss
+  local long = string.rep("alpha beta gamma ", 30)
+  local pieces = cb.split(long, 50)
+  t.check(#pieces >= 2, "chatbridge: long text splits")
+  local rejoined = table.concat(pieces, " ")
+  for i, p in ipairs(pieces) do
+    t.check(#p <= 50, "chatbridge: piece " .. i .. " under cap (" .. #p .. ")")
+  end
+  t.eq(rejoined:gsub("%s+", " "), long:gsub("%s+", " "):gsub("%s+$", ""), "chatbridge: split loses no words")
+  local giant = string.rep("x", 120)
+  local gp = cb.split(giant, 50)
+  t.check(#gp == 3 and #gp[1] == 50, "chatbridge: single giant word is hard-cut, never sent long")
+
+  -- outbound: tagging, rate cap, order-preserving remainder
+  local sends, rest = cb.outbound({
+    { from = "Claude", text = "first" },
+    { from = "Claude", text = "second" },
+    { from = "Opus", text = "third" },
+    { from = "Opus", text = "fourth" },
+  }, { maxPerTick = 3 })
+  t.eq(#sends, 3, "chatbridge: outbound respects maxPerTick")
+  t.eq(sends[1], "[Claude] first", "chatbridge: outbound tags the sender")
+  t.eq(#rest, 1, "chatbridge: excess stays queued")
+  t.eq(rest[1].text, "fourth", "chatbridge: remainder preserves order")
+
+  -- presence: announce transitions only; a dead heartbeat cannot stay LIVE
+  local seats = { { name = "claude", lastBeatMs = 1000 } }
+  local ann, live = cb.presence(seats, {}, 2000, { staleMs = 5000 })
+  t.eq(#ann, 1, "chatbridge: fresh heartbeat announces LIVE once")
+  t.eq(live.claude, true, "chatbridge: live map records the seat")
+  local ann2, live2 = cb.presence(seats, live, 3000, { staleMs = 5000 })
+  t.eq(#ann2, 0, "chatbridge: steady state announces nothing")
+  local ann3, live3 = cb.presence(seats, live2, 99000, { staleMs = 5000 })
+  t.eq(#ann3, 1, "chatbridge: stale heartbeat announces offline")
+  t.check(ann3[1]:find("queue", 1, true) ~= nil, "chatbridge: offline message promises queueing")
+  t.eq(live3.claude, nil, "chatbridge: stale seat leaves the live map")
+end)()
 
 os.exit(t.summary() and 0 or 1)

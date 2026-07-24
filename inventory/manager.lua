@@ -41,6 +41,10 @@ local FILES = {
   soakRequest = ".atm10-soak-request", -- agent -> manager: run a bounded fail-stop auto soak
   soakState = ".atm10-soakstate",   -- manager-owned while a soak runs; boot treats leftovers as an interrupted soak
   soakReport = ".atm10-soak-report", -- last soak outcome (end OR rejection) for agent polling
+  chatOutbox = ".atm10-chat-outbox", -- agent-dropped outbound chat spool (array of {text, from}); drained per cycle
+  -- Seat heartbeat files are "<seatHeartbeatPrefix><seat>"; the chat bridge reads
+  -- them for presence. A prefix (not one key) because seat names vary at runtime.
+  seatHeartbeatPrefix = ".atm10-seat-heartbeat-",
 }
 local RUNTIME = {
   statusVersion = 2,
@@ -120,6 +124,13 @@ local DEFAULT_CONFIG = {
     maxBridgeRequest = 32,    -- cap per craftItem bridge call (AP/RS-safe batch)
     items = {},
     categories = {},
+  },
+  -- In-game chat bridge (DECISIONS #7): OFF by default so a deploy is inert. When
+  -- enabled, the manager answers !stock/!status/!seat/!help from an attached AP Chat
+  -- Box. players is an optional allowlist (empty = anyone may command).
+  chatBridge = {
+    enabled = false,
+    players = {},
   },
 }
 
@@ -306,6 +317,9 @@ local function normalizeConfig(raw)
   -- clamps it to the cap at use time, so a mis-set value can never exceed maxCraftsPerCycle).
   cfg.stockKeeper.manualReserve = math.max(0, math.floor(tonumber(cfg.stockKeeper.manualReserve) or 1))
   cfg.stockKeeper.maxRequest = tonumber(cfg.stockKeeper.maxRequest) or 65536
+  -- DECISIONS #6: optional drain-aware batch ceiling. nil => base cap only, so
+  -- drain-aware sizing stays opt-in; a per-item maxBatch overrides this global.
+  cfg.stockKeeper.maxBatch = tonumber(cfg.stockKeeper.maxBatch)
   cfg.stockKeeper.maxBridgeRequest = math.max(1, math.floor(tonumber(cfg.stockKeeper.maxBridgeRequest) or 32))
   if type(cfg.stockKeeper.items) ~= "table" then cfg.stockKeeper.items = {} end
   if type(cfg.stockKeeper.categories) ~= "table" then cfg.stockKeeper.categories = {} end
@@ -315,6 +329,13 @@ local function normalizeConfig(raw)
       { label = "Stock Keeper", items = cfg.stockKeeper.items },
     }
   end
+
+  -- Chat bridge (DECISIONS #7): fail-closed defaults so a malformed/absent block
+  -- leaves the feature OFF with an empty (open) allowlist.
+  if type(cfg.chatBridge) ~= "table" then cfg.chatBridge = {} end
+  cfg.chatBridge.enabled = cfg.chatBridge.enabled == true
+  if type(cfg.chatBridge.players) ~= "table" then cfg.chatBridge.players = {} end
+  if type(cfg.chatBridge.prefix) ~= "string" or cfg.chatBridge.prefix == "" then cfg.chatBridge.prefix = nil end
 
   return cfg
 end
@@ -526,6 +547,147 @@ function ui.rsTaskHealth(tasks, now)
   local rs = monlib.rsTasks(tasks, ui.rsTaskHistory, now, {})
   ui.rsTaskHistory = rs.history
   return rs
+end
+
+-- ---------------------------------------------------------------------------
+-- Chat bridge (DECISIONS #7): wire the pure atm10-chatbridge grammar/reply/spool
+-- module into the live manager loop. All state hangs off the ui table (no new
+-- top-level locals; manager is at Lua's 200-local cap). Every path fails open:
+-- the feature is OFF unless config.chatBridge.enabled, and an absent Chat Box
+-- peripheral logs once and the manager runs normally.
+
+-- Defensive require, cached on the ui table (false = tried and unavailable) so a
+-- not-yet-deployed atm10-chatbridge never crash-loops the manager.
+function ui.chatbridge()
+  if ui.chatMod == nil then
+    local ok, mod = pcall(require, "atm10-chatbridge")
+    ui.chatMod = (ok and mod) or false
+  end
+  return ui.chatMod or nil
+end
+
+-- Send ready-to-go pieces to one player, falling back to a broadcast if the build
+-- lacks sendMessageToPlayer. call() pcall-wraps so a peripheral hiccup can't throw.
+function ui.chatSayTo(player, pieces)
+  local box = ui.chatBox
+  if not box then return end
+  for _, piece in ipairs(pieces or {}) do
+    if type(box.sendMessageToPlayer) == "function" then
+      call(box, "sendMessageToPlayer", piece, player)
+    else
+      call(box, "sendMessage", piece)
+    end
+  end
+end
+
+-- Broadcast ready-to-go pieces to the whole server (agent relay + presence).
+function ui.chatBroadcast(pieces)
+  local box = ui.chatBox
+  if not box then return end
+  for _, piece in ipairs(pieces or {}) do call(box, "sendMessage", piece) end
+end
+
+-- Read seat heartbeat files (<prefix><seat>) into presence records. Prefers an
+-- embedded ms stamp (at/beatAt); falls back to file mtime. Returns {} when fs has
+-- no list() (the off-CC test harness) so the reply/presence paths just see no seats.
+function ui.chatReadSeats(now)
+  now = tonumber(now) or nowMs()
+  local seats = {}
+  if type(fs.list) ~= "function" then return seats end
+  local ok, names = pcall(fs.list, "")
+  if not ok or type(names) ~= "table" then return seats end
+  local prefix = FILES.seatHeartbeatPrefix
+  for _, fname in ipairs(names) do
+    local name = tostring(fname)
+    if name:sub(1, #prefix) == prefix and #name > #prefix then
+      local seatName = name:sub(#prefix + 1)
+      local rec = ui.readSerializedFile(name)
+      local beat = nil
+      if type(rec) == "table" then beat = tonumber(rec.at) or tonumber(rec.beatAt) end
+      if not beat and type(fs.attributes) == "function" then
+        local aok, attr = pcall(fs.attributes, name)
+        if aok and type(attr) == "table" then beat = tonumber(attr.modified) end
+      end
+      if beat then
+        seats[#seats + 1] = {
+          name = seatName,
+          lastBeatMs = beat,
+          live = (now - beat) < 180000,
+          ageSec = math.max(0, math.floor((now - beat) / 1000)),
+        }
+      end
+    end
+  end
+  return seats
+end
+
+-- Build the reply snapshot from the SAME state the dashboard renders (last good
+-- scan + live queue/throughput), so a chat answer never disagrees with the screen.
+function ui.chatState(now)
+  local data = lastData or {}
+  local q = ui.queueStatus(data.craftQueue)
+  local mode = ui.baseMode and ui.baseMode() or (config.mode or "manual")
+  if ui.soak then mode = control.MODE_AUTO end
+  return {
+    plans = data.stockPlans,
+    mode = mode,
+    queue = { depth = tonumber(q.depth) or 0, crafting = tonumber(q.crafting) or 0 },
+    perMin = #firedTimes,
+    summary = data.stale and "STALE" or "OK",
+    seats = ui.chatReadSeats(now),
+  }
+end
+
+-- INBOUND: an AP Chat Box fires a "chat" os event (player, message). Parse it to a
+-- command intent, answer from the snapshot, send each piece back to that player.
+-- Runs in the input coroutine, so it stays responsive even mid-scan.
+function ui.handleChatEvent(player, message)
+  local cfg = config.chatBridge or {}
+  if cfg.enabled ~= true or not ui.chatBox then return end
+  local cb = ui.chatbridge()
+  if not cb then return end
+  -- empty allowlist => open (nil), never "allow nobody"
+  local players = (type(cfg.players) == "table" and #cfg.players > 0) and cfg.players or nil
+  local intent = cb.parse(player, message, { players = players, prefix = cfg.prefix })
+  if not intent then return end
+  ui.chatSayTo(player, cb.reply(intent, ui.chatState()))
+end
+
+-- PER-CYCLE service: drain the agent outbound spool (rate-capped) and announce any
+-- seat presence transitions. Called every scan; a no-op unless enabled with a Box.
+function ui.serviceChatBridge(now)
+  now = tonumber(now) or nowMs()
+  local cfg = config.chatBridge or {}
+  if cfg.enabled ~= true then return end
+  local cb = ui.chatbridge()
+  if not cb then return end
+  if not ui.chatBox then
+    if not ui.chatBoxWarned then
+      print("chat bridge: enabled but no Chat Box peripheral attached; running normally")
+      ui.chatBoxWarned = true
+    end
+    return
+  end
+
+  -- Outbound spool: an array of {text, from} the agents drop. Send oldest first up
+  -- to the per-tick cap, then rewrite the file with the remainder (delete when empty).
+  local outbox = ui.readSerializedFile(FILES.chatOutbox)
+  if type(outbox) == "table" and #outbox > 0 then
+    local sends, remaining = cb.outbound(outbox, {})
+    ui.chatBroadcast(sends)
+    if #remaining > 0 then
+      pcall(atomicWrite, FILES.chatOutbox, remaining)
+    else
+      pcall(fs.delete, FILES.chatOutbox)
+    end
+  end
+
+  -- Presence: announce LIVE/offline transitions so a dead agent session can never
+  -- keep an implicit presence claim alive (the presence-contract failure mode).
+  local seats = ui.chatReadSeats(now)
+  local announcements, live = cb.presence(seats, ui.chatPresence or {}, now)
+  ui.chatPresence = live
+  ui.chatBroadcast(announcements)
 end
 
 function ui.writeStatusState(data, now)
@@ -1367,6 +1529,8 @@ local function effectiveStockKeeper()
     -- the craft runner per cycle, not on the plan display.
     maxCraftsPerCycle = math.huge,
     maxRequest = stock.maxRequest,
+    -- Drain-aware batch ceiling (DECISIONS #6): opt-in; nil keeps the base cap.
+    maxBatch = stock.maxBatch,
     categories = categories,
   }
 end
@@ -1403,11 +1567,33 @@ local function planStockActions(items)
   -- is something to plan: an idle keeper must not surface a ledger error.
   local ledger = readLedger()
 
+  -- Drain-aware batch sizing (DECISIONS #6): hand the planner each managed item's
+  -- MEASURED consumption (units/min) so a high-drain metal can be sized to outpace
+  -- its drain instead of a fixed base batch. Only sustained drains qualify --
+  -- monitor.drainRate applies the same thresholds/spike guard as the FALLING-BEHIND
+  -- signal. Absent trend history (smart mode off / fresh boot) => no map => base cap.
+  local drain = nil
+  if next(trendHistory) ~= nil then
+    local okMon, monlib = pcall(require, "atm10-monitor")
+    if okMon and monlib and monlib.drainRate then
+      drain = {}
+      for _, category in ipairs(stock.categories or {}) do
+        for _, target in ipairs(category.items or {}) do
+          if target.name and drain[target.name] == nil then
+            local perMin = monlib.drainRate(trendHistory[target.name])
+            if perMin and perMin > 0 then drain[target.name] = perMin end
+          end
+        end
+      end
+    end
+  end
+
   return stockplan.plan({
     stockKeeper = stock,
     now = nowMs(),
     ledger = ledger,
     ledgerError = ledgerError,
+    drain = drain,
     resolve = function(name)
       local item = findStoredItem(items, name)
       local amount = item and itemAmount(item) or 0
@@ -2177,21 +2363,23 @@ local function scan()
   if not managedStore then managedStore = loadManaged() end
   local managedNames = buildManagedItemNames()
   local listedItems = collectListedItems(items)
+  -- Restore the persisted drain window BEFORE planning: drain-aware batch sizing
+  -- (DECISIONS #6) reads it in planStockActions, and the trend file survives reboot,
+  -- so a rebooted manager should size high-drain batches on its first scan instead
+  -- of waiting a cycle. (Recording new samples still happens below, post-plan.)
+  local smartOn = managed.getSetting(managedStore, "smartMode") == true
+  if smartOn and not trendsLoaded then
+    trendHistory = loadTrends()
+    trendsLoaded = true
+  end
   local stockPlans = planStockActions(items)
   -- append overflow/compress plans so they render + approve like refill rows
   for _, r in ipairs(planOverflowActions(items)) do stockPlans[#stockPlans + 1] = r end
   markPhase("planningMs")
 
   -- smart mode (opt-in): record consumption trends and compute quota suggestions
-  local smartOn = managed.getSetting(managedStore, "smartMode") == true
   local suggestions = {}
   if smartOn then
-    -- lazily restore the persisted drain window the first time smart mode runs, so
-    -- a reboot continues learning instead of starting from zero
-    if not trendsLoaded then
-      trendHistory = loadTrends()
-      trendsLoaded = true
-    end
     if not dismissedLoaded then
       dismissedSuggestions = suggest.pruneDismissed(loadDismissed(), nowMs(), DISMISSED_OPTS)
       dismissedLoaded = true
@@ -3978,6 +4166,14 @@ do
     pcall(fs.delete, FILES.soakState)
   end
   pcall(fs.delete, FILES.soakRequest)
+
+  -- Chat bridge (DECISIONS #7): wrap the optional AP Chat Box once at boot. Wrapping
+  -- is harmless and unconditional; USAGE is gated per-cycle on config.chatBridge.enabled
+  -- (so enabling via a config reload works without needing this detection to re-run).
+  -- A leftover outbox holds stale agent messages of unknown age -- discard it like a
+  -- pre-boot soak request rather than blasting it after a restart.
+  ui.chatBox = findPeripheral({ "chatBox", "chat_box" })
+  pcall(fs.delete, FILES.chatOutbox)
 end
 
 -- TOUCH-DECOUPLE: the heavy RS scan (refreshAndDraw -> bridge.getItems over a huge
@@ -3998,6 +4194,9 @@ parallel.waitForAny(
     while true do
       guard(advancePageIfDue)
       guard({ refreshAndDraw, resetDisplay = true })
+      -- Service the chat bridge each cycle (drain agent spool + presence). Guarded
+      -- and self-gating: a no-op unless config.chatBridge.enabled with a Box attached.
+      guard(ui.serviceChatBridge, nowMs())
       if ui.reloadRequested then return end
       writeHeartbeat(nowMs())
       sleep((config and config.refreshSeconds) or REFRESH_SECONDS)
@@ -4024,6 +4223,10 @@ parallel.waitForAny(
         guard(handleControlMessage, ev[2], ev[3])
       elseif kind == "rs_crafting" then
         guard(ui.handleCraftEvent, ev[2], ev[3], ev[4])
+      elseif kind == "chat" then
+        -- AP Chat Box inbound: ev = { "chat", username, message, uuid, isHidden }.
+        -- Self-gates on config.chatBridge.enabled; guarded so a bad line can't freeze input.
+        guard(ui.handleChatEvent, ev[2], ev[3])
       end
     end
   end

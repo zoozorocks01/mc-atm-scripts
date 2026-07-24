@@ -1,0 +1,19 @@
+modLoader = "lowcodefml"
+loaderVersion = "[1,)"
+license = "MIT"
+
+[[mods]]
+modId = "simpleafkdiagnostics"
+version = "1.0.0"
+displayName = "SimpleAFK AFK-Clear Diagnostics"
+description = '''Temporary logging-only probe for SimpleAFK AFK clear paths. Remove after one bounded reproduction.'''
+
+[[dependencies.simpleafkdiagnostics]]
+modId = "simpleafk"
+type = "required"
+versionRange = "[1.5.2,1.5.3)"
+ordering = "NONE"
+side = "BOTH"
+
+[[mixins]]
+config = "simpleafkdiagnostics.mixins.json"

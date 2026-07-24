@@ -1,0 +1,10 @@
+# Test 2 on the 2026-07-10 board. Run only after both copper patterns are
+# present: dust->ingot in its smelter crafter and block->ingot in the isolated
+# fallback crafter. Each STEP makes exactly one one-ingot request.
+TITLE: Copper ingot preferred route and block fallback acceptance
+HYPOTHESIS: The physical priority ladder chooses copper dust at 20 when available, then the isolated copper-block fallback at 0 when dust is absent.
+STEP zach: Set the dedicated copper dust->ingot smelter crafter to priority 20 and the isolated copper block->ingot fallback crafter to priority 0. Leave any copper essence route absent unless it is intentionally approved at 10. With copper dust and a copper block in RS, request exactly 1 copper ingot and inspect the Autocrafting Monitor. Reply !ok dust only if it chose the dust smelter; otherwise !no <route>.
+CAPTURE: craftstate status audit
+STEP zach: Temporarily withhold all copper dust from RS while leaving one copper block available. Request exactly 1 copper ingot and inspect the Autocrafting Monitor, then restore the withheld dust. Reply !ok fallback only if it chose the isolated block crafter; otherwise !no <route>.
+CAPTURE: craftstate status audit
+CHECK: The first request uses dust and the second uses the isolated block fallback. If either route is unavailable, report the missing pattern or input; do not add, move, or reprioritize patterns during the test.

@@ -95,7 +95,14 @@ local function compressionPairSpecs(stock)
     local source = byName[name]
     local into = source and source.into
     local dense = into and into.name and byName[into.name] or nil
-    if dense then
+    -- A `ceiling` marks a one-way overflow/convert-all row (atm10-balance.lua
+    -- drains surplus above it into `into`; see presets.lua's reserve()) rather
+    -- than a genuine two-way compressible pair (e.g. zinc ingot<->block, both
+    -- independently re-craftable). The dense side of a convert-all row often
+    -- has its own unrelated craft input (essence, not the source dust), so
+    -- treating a momentarily-empty source as "both sides low" wrongly blocks
+    -- that unrelated craft. Only real pairs (no ceiling) get the thrash guard.
+    if dense and source.ceiling == nil then
       specs[#specs + 1] = {
         source = source.name,
         dense = dense.name,
@@ -196,6 +203,7 @@ function stockplan.compactState(plans, opts)
     wouldCraftCount = 0,
     wouldCraftAmount = 0,
     blockedCount = 0,
+    watchCount = 0,
     unknownIdCount = 0,
     rows = {},
   }
@@ -211,6 +219,8 @@ function stockplan.compactState(plans, opts)
       out.unknownIdCount = out.unknownIdCount + 1
     elseif action == "BLOCKED" or action == "NO RECIPE" or action == "RESERVED" then
       out.blockedCount = out.blockedCount + 1
+    elseif action == "WATCH" then
+      out.watchCount = out.watchCount + 1
     end
     if action ~= "OK" then
       if #out.rows < limit then
@@ -226,19 +236,21 @@ end
 
 -- ctx fields:
 --   stockKeeper : {
---     enabled, cooldownSeconds, maxCraftsPerCycle, maxRequest,
+--     enabled, cooldownSeconds, maxCraftsPerCycle, maxRequest, maxBatch,
 --     refillMarginRatio, minRefillMargin,
---     categories = { { label, items = { { name, label, target, craftTo, maxRequest } } } },
+--     categories = { { label, items = { { name, label, target, craftTo, maxRequest, maxBatch } } } },
 --     items = { ... }   -- used only when categories is empty
 --   }
 --   now         : current time in ms (wall clock; the ledger persists it across reboots)
 --   ledger      : { requests = { [name] = { requestedAt = <ms> } } }  (a table when present)
 --   ledgerError : string surfaced when ledger is nil (fail closed: plan nothing)
+--   drain       : { [name] = perMin } measured consumption for drain-aware batch
+--                 sizing (optional; absent => base cap only). See DECISIONS #6.
 --   resolve     : function(name) -> amount (number), craftable (bool), crafting (bool), exists (bool|nil)
 --
 -- Returns an array of plan rows. Each row has an `action`, one of:
 --   OK, NOT CRAFTABLE, ALREADY CRAFTING, ON COOLDOWN, CYCLE CAP, WOULD CRAFT,
---   BLOCKED, RESERVED.
+--   BLOCKED, RESERVED, WATCH (deliberate machine-route rows; never a problem).
 -- Deficit rows carry `priority` (larger = farther below the floor), so the
 -- queue/runner can fire the most-deficient items first under a per-cycle cap.
 function stockplan.plan(ctx)
@@ -260,6 +272,10 @@ function stockplan.plan(ctx)
   local now = tonumber(ctx.now) or 0
   local cooldownMs = (tonumber(stock.cooldownSeconds) or 300) * 1000
   local cycleLimit = tonumber(stock.maxCraftsPerCycle) or 2
+  -- Measured drain per item (units/min), keyed by registry name. Optional: the
+  -- caller derives it from the persisted trend window (monitor.drainRate); absent
+  -- => drain-aware sizing is off and every request uses the base cap. See DECISIONS #6.
+  local drainByName = ctx.drain or {}
   local wouldIndexes = {}
   local amounts, targets = {}, {}
 
@@ -278,6 +294,9 @@ function stockplan.plan(ctx)
       local trigger = tonumber(target.target) or 0
       local craftTo, craftMeta = stockplan.effectiveCraftTo(target, stock)
       local maxRequest = tonumber(target.maxRequest) or tonumber(stock.maxRequest) or 4096
+      -- Drain-aware ceiling: the highest a single turn's request may grow to for a
+      -- high-drain item. Opt-in (per-item, else global); nil => base cap only.
+      local maxBatch = tonumber(target.maxBatch) or tonumber(stock.maxBatch)
       local priority = stockplan.deficitPriority(amount, trigger)
       amounts[target.name] = amount
       targets[target.name] = trigger
@@ -293,7 +312,7 @@ function stockplan.plan(ctx)
         plans[#plans + 1] = copyMeta({ action = "BLOCKED", name = target.name, category = categoryLabel,
           label = label, amount = amount, target = trigger, craftTo = craftTo, priority = priority }, craftMeta)
       elseif isWatchOnly(target) then
-        plans[#plans + 1] = copyMeta({ action = "BLOCKED", name = target.name, category = categoryLabel,
+        plans[#plans + 1] = copyMeta({ action = "WATCH", name = target.name, category = categoryLabel,
           label = label, amount = amount, target = trigger, craftTo = craftTo, priority = priority,
           reason = watchReason(target), craftMode = target.craftMode or "watch" }, craftMeta)
       elseif not craftable then
@@ -319,10 +338,30 @@ function stockplan.plan(ctx)
             secondsLeft = math.ceil((cooldownMs - age) / 1000),
           }, craftMeta)
         else
-          local request = math.max(0, craftTo - amount)
+          local deficit = math.max(0, craftTo - amount)
+
+          -- Per-turn batch cap. The base is maxRequest (unchanged; 4096 default).
+          -- DRAIN-AWARE SIZING (DECISIONS #6): a high-drain item capped at the base
+          -- batch can be consumed faster than one turn replenishes, so its deficit
+          -- never closes (live 2026-07-22: gold 18,776/100,000, 4096/turn lost to a
+          -- Dyson-swarm chain). When a sustained drain is MEASURED and a higher
+          -- maxBatch ceiling is configured, raise THIS turn's cap to cover the drain
+          -- expected before the item can be re-requested (~one cooldown) plus one
+          -- base batch of headway, bounded by maxBatch. The request never exceeds the
+          -- deficit (craftTo ceiling holds) and the input reserve below still clamps
+          -- it; only the ceiling on one turn's ask changes.
+          local cap = maxRequest
+          local perMin = tonumber(drainByName[target.name]) or 0
+          if perMin > 0 and maxBatch and maxBatch > maxRequest then
+            local drainPerCooldown = math.floor(perMin * (cooldownMs / 60000))
+            local drainCap = maxRequest + drainPerCooldown
+            cap = math.max(maxRequest, math.min(maxBatch, drainCap))
+          end
+
+          local request = deficit
           local capped = false
-          if request > maxRequest then
-            request = maxRequest
+          if request > cap then
+            request = cap
             capped = true
           end
 
