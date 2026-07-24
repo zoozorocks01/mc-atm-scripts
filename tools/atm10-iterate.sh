@@ -324,6 +324,7 @@ put lib/atm10-presets.lua atm10-presets.lua
 put lib/atm10-console.lua atm10-console.lua
 put lib/atm10-health.lua atm10-health.lua
 put lib/atm10-monitor.lua atm10-monitor.lua
+put lib/atm10-chatbridge.lua atm10-chatbridge.lua
 put lib/atm10-pattern-give.lua atm10-pattern-give.lua
 put atm10-bridge-probe.lua atm10-bridge-probe
 put atm10-line.lua atm10-line
