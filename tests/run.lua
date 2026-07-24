@@ -933,6 +933,25 @@ do
     }), function(name) return name == "ore:zinc_ingot" and 77 or 205 end, "ore:zinc_block"),
     "compression pair low: Zinc Ingot and Zinc Block",
     "compression pair: runner hold helper returns the same explanatory reason")
+
+  -- BUG (2026-07-24 live, uranium): a `ceiling`-bearing row (atm10-presets.lua's
+  -- reserve() -- one-way "convert-all surplus dust into ingot", owned by the
+  -- overflow balancer in atm10-balance.lua) is NOT a genuine two-way compression
+  -- pair like zinc above. Its dense side (ingot) often crafts from something
+  -- else entirely (essence). A momentarily-empty byproduct reserve must not
+  -- block the ingot's own unrelated craft path.
+  local reserveP = stockplan.plan({ stockKeeper = SK({
+      { name = "alltheores:uranium_dust", label = "Uranium Dust", target = 1, craftTo = 1,
+        ceiling = 5000, into = { name = "alltheores:uranium_ingot", label = "Uranium" }, ratio = 1 },
+      { name = "alltheores:uranium_ingot", label = "Uranium", target = 40000, craftTo = 40000 },
+    }, { maxCraftsPerCycle = 2 }), ledger = emptyLedger,
+    resolve = function(name)
+      if name == "alltheores:uranium_dust" then return 0, true, false end
+      if name == "alltheores:uranium_ingot" then return 1601, true, false end
+      return 0, true, false
+    end })
+  t.eq(reserveP[2].action, "WOULD CRAFT",
+    "convert-all reserve row: empty byproduct dust must not block the ingot's own craft")
 end
 
 do

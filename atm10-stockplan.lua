@@ -95,7 +95,14 @@ local function compressionPairSpecs(stock)
     local source = byName[name]
     local into = source and source.into
     local dense = into and into.name and byName[into.name] or nil
-    if dense then
+    -- A `ceiling` marks a one-way overflow/convert-all row (atm10-balance.lua
+    -- drains surplus above it into `into`; see presets.lua's reserve()) rather
+    -- than a genuine two-way compressible pair (e.g. zinc ingot<->block, both
+    -- independently re-craftable). The dense side of a convert-all row often
+    -- has its own unrelated craft input (essence, not the source dust), so
+    -- treating a momentarily-empty source as "both sides low" wrongly blocks
+    -- that unrelated craft. Only real pairs (no ceiling) get the thrash guard.
+    if dense and source.ceiling == nil then
       specs[#specs + 1] = {
         source = source.name,
         dense = dense.name,
